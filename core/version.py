@@ -8,11 +8,11 @@ whenever redactor_common's code changes, following the same
 uses.
 
 Each project can surface this in its own About/Changelog dialog (e.g.
-"redactor_common 2026-09-04#01") -- useful for spotting at a glance
+"redactor_common 2026-09-04#04") -- useful for spotting at a glance
 that one project is running an older vendored copy than another after
 a git subtree pull was missed somewhere.
 """
 
 from __future__ import annotations
 
-REDACTOR_COMMON_VERSION = "2026-09-04#01"
+REDACTOR_COMMON_VERSION = "2026-09-04#04"
