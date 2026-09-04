@@ -130,3 +130,25 @@ class ChangelogDialog(QDialog):
         buttons.rejected.connect(self.accept)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+
+class CreditsDialog(QDialog):
+    """Third-party libraries, tools, and APIs a project depends on --
+    same bundled-markdown-file pattern as ChangelogDialog, just reading
+    CREDITS.md instead. Link-heavy content (the whole point is pointing
+    people at the projects being credited), so open links externally
+    same as the other two dialogs."""
+
+    def __init__(self, credits_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Credits")
+        self.resize(560, 560)
+
+        layout = QVBoxLayout(self)
+        text = _read_text_file(credits_path)
+        layout.addWidget(_markdown_browser(text), 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.accept)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
