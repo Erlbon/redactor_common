@@ -23,7 +23,7 @@ own version line (via `component_versions`) — that's the one place to
 notice at a glance that a project is running an older vendored copy
 than its siblings.
 
-Currently: `2026-09-04#06`.
+Currently: `2026-09-04#07`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -37,6 +37,7 @@ Currently: `2026-09-04#06`.
 | `save_errors.py` | Windows path-too-long detection & messaging | epub, already generic |
 | `error_summary.py` | Bounded preview string for a list of error messages | epub, already generic |
 | `tool_locator.py` | Three-tier external CLI tool lookup: override → bundled `tools/` dir → PATH | mp3, generalized off its `bundled_tool_path()` to a plain `tools_dir` parameter |
+| `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
 
 Run `python3 tests/test_core.py` from this folder's parent to exercise
 all of the above (no PyQt6 required). All passing as of this build.
@@ -49,7 +50,9 @@ and reviewed only, same caveat the source projects already carried.
 | Module | What it does |
 |---|---|
 | `action_factory.py` | `make_action()` — one QAction, shared between menu + toolbar |
-| `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus` |
+| `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus`. `populate_menu()` (public) fills any QMenu from the same declarative item list — what `context_menu.py`/`column_menu.py` build their right-click menus on |
+| `context_menu.py` | Shared table right-click menu: selection-fix (right-click outside the selection replaces it, matching Explorer) + generic "Open Containing Folder"/"Copy Path", with each project's own actions layered on via `extra_items` | epub, generalized (mp3 and video had no equivalent, or a much thinner one) |
+| `column_menu.py` | Shared column-header right-click menu: inline show/hide checklist + a link to `column_settings_dialog.py` | video, generalized (epub only had a "Hide `<this column>`" quick action; mp3 has no column-visibility system to hang this on yet) |
 | `zoom_toolbar.py` | The +/− table-font-zoom control (epub had it, video didn't — now shared) |
 | `column_settings_dialog.py` | "Add/Remove Columns" dialog, built on `core/table_settings.py` |
 | `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog) |

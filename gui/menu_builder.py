@@ -82,16 +82,39 @@ class Submenu:
     items: list = field(default_factory=list)
 
 
-MenuItems = list  # list[MenuAction | Separator | Submenu]
+MenuItems = list  # list[MenuAction | Separator | Submenu | QAction]
 
 
-def _populate(window: QMainWindow, menu: QMenu, items: MenuItems, actions_out: dict[str, QAction]) -> None:
+def populate_menu(
+    window: QMainWindow, menu: QMenu, items: MenuItems, actions_out: dict[str, QAction] | None = None
+) -> dict[str, QAction]:
+    """Fills an already-created QMenu from a declarative items list --
+    the same MenuAction/Separator/Submenu vocabulary build_menu_bar()
+    uses for the menu bar. Public (not just an internal build_menu_bar
+    helper) so a right-click context menu can be built from the exact
+    same declarative shape -- see redactor_common.gui.context_menu and
+    redactor_common.gui.column_menu.
+
+    `window` is passed through to make_action() as the QAction's parent
+    (needed for shortcuts to fire) -- for a context menu this is still
+    the main window, not the menu itself.
+
+    A raw QAction is also accepted directly (added as-is, not wrapped) --
+    for reusing an action that already exists elsewhere (menu bar,
+    toolbar) in a context menu too, so its enabled/checked state and
+    shortcut stay in sync automatically rather than drifting from a
+    second, separately-built copy.
+    """
+    if actions_out is None:
+        actions_out = {}
     for item in items:
-        if isinstance(item, Separator):
+        if isinstance(item, QAction):
+            menu.addAction(item)
+        elif isinstance(item, Separator):
             menu.addSeparator()
         elif isinstance(item, Submenu):
             sub = menu.addMenu(item.text)
-            _populate(window, sub, item.items, actions_out)
+            populate_menu(window, sub, item.items, actions_out)
         elif isinstance(item, MenuAction):
             act = make_action(
                 window, item.text, item.slot,
@@ -102,6 +125,7 @@ def _populate(window: QMainWindow, menu: QMenu, items: MenuItems, actions_out: d
             actions_out[item.key] = act
         else:
             raise TypeError(f"Unrecognized menu item type: {item!r}")
+    return actions_out
 
 
 def build_menu_bar(
@@ -141,6 +165,6 @@ def build_menu_bar(
         mnemonic_text = STANDARD_MNEMONICS.get(name, f"&{name}")
         menu = menu_bar.addMenu(mnemonic_text)
         items = specs.get(name) if name in specs else extra_by_name.get(name, [])
-        _populate(window, menu, items, actions)
+        populate_menu(window, menu, items, actions)
 
     return actions
