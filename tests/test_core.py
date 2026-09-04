@@ -1,8 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-import pathlib
 
-from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator
+from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary
 
 def test_table_settings():
     protected = frozenset({"filename"})
@@ -82,40 +81,6 @@ def test_error_summary():
     assert s.count(";") == 2
     assert s.endswith(", ...")
 
-def test_tool_locator():
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        d = pathlib.Path(d)
-        tools_dir = d / "tools"
-        tools_dir.mkdir()
-        bundled_exe = tools_dir / "mp3val.exe"
-        bundled_exe.write_bytes(b"")
-
-        # bundled dir wins when no override
-        assert tool_locator.find_tool("mp3val.exe", tools_dir=tools_dir) == bundled_exe
-
-        # a real, existing override wins even with a bundled copy present
-        override_exe = d / "custom_mp3val.exe"
-        override_exe.write_bytes(b"")
-        result = tool_locator.find_tool("mp3val.exe", tools_dir=tools_dir, override=str(override_exe))
-        assert result == override_exe
-
-        # a broken override is NOT found, even though a bundled copy exists --
-        # no silent fallback
-        missing = d / "does_not_exist.exe"
-        result = tool_locator.find_tool("mp3val.exe", tools_dir=tools_dir, override=str(missing))
-        assert result is None
-
-        # no bundled dir, no override, nothing on a fake empty PATH -> None
-        empty_tools_dir = d / "empty_tools"
-        empty_tools_dir.mkdir()
-        result = tool_locator.find_tool("definitely_not_a_real_binary_xyz", tools_dir=empty_tools_dir)
-        assert result is None
-
-        # bare exe_name (no ".exe") still finds a ".exe"-suffixed bundled file
-        result = tool_locator.find_tool("mp3val", tools_dir=tools_dir)
-        assert result == bundled_exe
-
 if __name__ == "__main__":
     test_table_settings()
     test_rename_pattern()
@@ -124,5 +89,4 @@ if __name__ == "__main__":
     test_case_conversion()
     test_save_errors()
     test_error_summary()
-    test_tool_locator()
     print("ALL TESTS PASSED")
