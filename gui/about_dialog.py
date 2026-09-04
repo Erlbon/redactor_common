@@ -14,13 +14,6 @@ fully generic -- only change here is taking app_name/version/
 release_label as constructor parameters instead of importing them from
 a fixed core.version module, so every project (including one with no
 About dialog at all yet, like mp3) can use this directly.
-
-AboutDialog also takes an optional `component_versions` dict, shown
-under the app's own version line -- e.g. {"redactor_common": "..."}.
-redactor_common is versioned independently of any consuming project's
-own APP_VERSION (see core/version.py); this is the one place a person
-can glance and notice a project is running an older vendored copy than
-its siblings, without having to go compare files by hand.
 """
 
 from __future__ import annotations
@@ -57,7 +50,6 @@ class AboutDialog(QDialog):
         release_label: str,
         icon_path: str,
         about_path: str,
-        component_versions: dict[str, str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -75,18 +67,7 @@ class AboutDialog(QDialog):
             logo_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             layout.addWidget(logo_label)
 
-        header_html = f"<h2>{app_name}</h2><p>{release_label}, ver {app_version}</p>"
-        # component_versions surfaces shared-package versions (e.g.
-        # redactor_common) separately from the app's own APP_VERSION --
-        # these are tracked and bumped independently (redactor_common
-        # has its own consumers, on their own update cadence), so
-        # showing them together here is the one place to notice at a
-        # glance that a project is running an older vendored copy than
-        # its siblings.
-        if component_versions:
-            parts = ", ".join(f"{name} {version}" for name, version in component_versions.items())
-            header_html += f'<p style="color: gray; font-size: 11px;">{parts}</p>'
-        header = QLabel(header_html)
+        header = QLabel(f"<h2>{app_name}</h2><p>{release_label}, ver {app_version}</p>")
         header.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         header.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(header)
