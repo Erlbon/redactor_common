@@ -7,23 +7,56 @@ promoting the best-of-breed version of each, generalized to work on
 any item type via accessor callables rather than being tied to one
 project's data model.
 
-Drop this folder as a sibling of `core/`, `gui/`, and `main.py` in a
-project's source tree (that's how it's wired into all three projects
-already). PyInstaller's default static-import analysis picks it up
-automatically — no spec-file changes needed as long as it sits there.
+## Installing (as a consuming project)
+
+A real pip dependency now, not a folder you copy in -- one source of
+truth instead of three vendored copies quietly drifting out of sync
+(which is exactly what happened before this: the same bug sat fixed
+here while three separate hand-copied copies kept shipping it broken).
+In a consuming project's `requirements.txt`:
+
+```
+redactor_common @ git+https://github.com/Erlbon/redactor_common.git@2026-09-04-10
+```
+
+Pin to a tag (see "Releasing a new version" below), not `@main` --
+floating on the branch means one bad push here instantly breaks every
+consuming project's next `pip install -r requirements.txt`, with no
+review step in between. Bumping the pin is a deliberate, visible
+one-line diff in that project's own `requirements.txt` instead.
+
+Import paths are unchanged either way: `from redactor_common.gui.menu_builder
+import ...` etc. still work exactly as they did when this was a
+vendored folder -- pip installs it under the same `redactor_common`
+name, just from site-packages instead of a sibling directory.
+PyInstaller's default static-import analysis picks it up automatically
+there too, same as any other pip dependency (PyQt6 included) -- no
+spec-file changes needed.
+
+## Releasing a new version
+
+```
+python bump_version.py     # keeps core/version.py and pyproject.toml's version in lockstep
+git add -A && git commit -m "..."
+git tag <the version bump.py just printed, e.g. 2026-09-04-10>
+git push origin main --tags
+```
+
+Then in each consuming project that needs the change: bump the tag in
+that project's `requirements.txt`, `pip install -r requirements.txt`,
+run its test suite, commit.
 
 ## Versioning
 
-`redactor_common` is versioned independently of any consuming
-project's own `APP_VERSION` — see `core/version.py`
-(`REDACTOR_COMMON_VERSION`, same `YYYY-MM-DD#NN` convention each
-project's own `bump_version.py` uses). Bump it whenever this package's
-code changes. Every project's `AboutDialog` shows it under the app's
-own version line (via `component_versions`) — that's the one place to
-notice at a glance that a project is running an older vendored copy
-than its siblings.
+`redactor_common` carries two version markers that `bump_version.py`
+keeps in lockstep: `core/version.py`'s `REDACTOR_COMMON_VERSION`
+(`YYYY-MM-DD#NN`, same convention every consuming project's own
+`bump_version.py` uses -- this is what each project's `AboutDialog`
+shows under its own version line, via `component_versions`) and
+`pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
+`YYYY.M.D.NN`).
 
-Currently: `2026-09-04#08`.
+Currently: `2026-09-04#10`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 

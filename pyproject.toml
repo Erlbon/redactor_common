@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redactor_common"
+version = "2026.9.4.10"
+description = "Shared PyQt6 UI + core logic for the Redactor family of tools (epub/video/mp3)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6",
+]
+
+# The package's importable content IS this repo's root (core/, gui/,
+# __init__.py) -- README.md/tests/ aren't declared as packages below so
+# they're not swept in. This maps the repo root to the "redactor_common"
+# import name without moving any files into a nested src/redactor_common/
+# layout, which would've thrown away this repo's existing git history
+# per file for no functional benefit.
+[tool.setuptools]
+packages = ["redactor_common", "redactor_common.core", "redactor_common.gui"]
+
+[tool.setuptools.package-dir]
+redactor_common = "."

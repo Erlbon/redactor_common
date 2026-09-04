@@ -1,5 +1,4 @@
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+import os
 import pathlib
 
 from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator
