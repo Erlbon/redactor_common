@@ -15,5 +15,5 @@ a git subtree pull was missed somewhere.
 
 from __future__ import annotations
 
-REDACTOR_COMMON_VERSION = "2026-09-04#07"
+REDACTOR_COMMON_VERSION = "2026-09-04#08"
 REDACTOR_COMMON_REPO_URL = "https://github.com/erlbon/redactor_common"
