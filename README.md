@@ -23,7 +23,7 @@ own version line (via `component_versions`) — that's the one place to
 notice at a glance that a project is running an older vendored copy
 than its siblings.
 
-Currently: `2026-09-04#04`.
+Currently: `2026-09-04#05`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
