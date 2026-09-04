@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, TypeVar
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QProgressDialog, QWidget
 
 T = TypeVar("T")
@@ -59,7 +60,7 @@ def run_with_progress(
         dialog = QProgressDialog(
             label, "Cancel" if cancellable else None, 0, len(items), parent
         )
-        dialog.setWindowModality(True)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
         dialog.show()
 
