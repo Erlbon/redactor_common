@@ -87,3 +87,21 @@ def fetch_json(
         return json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise error_cls(f"Received an unreadable response from {source_name}.") from exc
+
+
+def fetch_bytes(
+    url: str,
+    fetch: FetchFn,
+    error_cls: Type[LookupError] = LookupError,
+    what: str = "the file",
+) -> bytes:
+    """Runs one GET via `fetch` and returns the raw response bytes
+    (e.g. a cover image) -- same HTTPError/URLError translation as
+    fetch_json(), just without the JSON-parsing step. `what` names the
+    thing being downloaded in the error message (e.g. "cover image")."""
+    try:
+        return fetch(url)
+    except urllib.error.HTTPError as exc:
+        raise error_cls(f"Could not download {what} (HTTP {exc.code}).") from exc
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+        raise error_cls(f"Could not download {what}: {exc}") from exc

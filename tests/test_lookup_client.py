@@ -3,7 +3,7 @@ import urllib.error
 
 import pytest
 
-from redactor_common.core.lookup_client import LookupError, fetch_json, make_default_fetch
+from redactor_common.core.lookup_client import LookupError, fetch_bytes, fetch_json, make_default_fetch
 
 
 class _SourceError(LookupError):
@@ -79,3 +79,23 @@ def test_make_default_fetch_sets_user_agent(monkeypatch):
     assert captured["user_agent"] == "MyApp/1.0"
     assert captured["url"] == "https://example.com/x"
     assert captured["timeout"] == 5.0
+
+
+def test_fetch_bytes_success():
+    assert fetch_bytes("https://x/", fetch=lambda url: b"\xff\xd8\xff") == b"\xff\xd8\xff"
+
+
+def test_fetch_bytes_http_error_names_what_was_being_downloaded():
+    def _raise_404(url):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    with pytest.raises(_SourceError, match="cover image.*HTTP 404"):
+        fetch_bytes("https://x/", fetch=_raise_404, error_cls=_SourceError, what="cover image")
+
+
+def test_fetch_bytes_network_error_translated():
+    def _raise_network_error(url):
+        raise urllib.error.URLError("no route to host")
+
+    with pytest.raises(_SourceError, match="Could not download"):
+        fetch_bytes("https://x/", fetch=_raise_network_error, error_cls=_SourceError, what="cover image")
