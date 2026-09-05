@@ -72,6 +72,7 @@ Currently: `2026-09-04#10`.
 | `tool_locator.py` | Three-tier external CLI tool lookup: override → bundled `tools/` dir → PATH | mp3, generalized off its `bundled_tool_path()` to a plain `tools_dir` parameter |
 | `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
 | `lookup_client.py` | `fetch_json()`/`fetch_bytes()` — injectable-`fetch` HTTP GET (JSON-parsed, or raw for e.g. a cover image) + HTTPError/URLError/decode-error → friendly-message translation, plus `make_default_fetch()` for a fixed-User-Agent fetch callable | cbzredactor, generalized off its Comic Vine/GCD lookup modules (which had independently duplicated the identical translation logic twice each — once for the JSON API calls, once for the cover-image download) |
+| `undo.py` | `UndoManager` — bounded in-memory undo stack (bulk edits, search/replace, case conversion, lookup-apply, ...), generic via caller-supplied `snapshot_fn`/`restore_fn` | epub, generalized off its original version (which snapshotted `EpubBook`/`EpubMetadata` fields directly) once cbzredactor needed the same "last N in-memory edits" undo behavior |
 
 Run `python3 tests/test_core.py` from this folder's parent to exercise
 all of the above (no PyQt6 required). All passing as of this build.

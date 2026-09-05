@@ -16,5 +16,5 @@ than vendoring a copy -- this is the one place that version lives.
 
 from __future__ import annotations
 
-REDACTOR_COMMON_VERSION = "2026-09-05#05"
+REDACTOR_COMMON_VERSION = "2026-09-06#01"
 REDACTOR_COMMON_REPO_URL = "https://github.com/Erlbon/redactor_common"
