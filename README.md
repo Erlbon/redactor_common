@@ -71,6 +71,7 @@ Currently: `2026-09-04#10`.
 | `error_summary.py` | Bounded preview string for a list of error messages | epub, already generic |
 | `tool_locator.py` | Three-tier external CLI tool lookup: override → bundled `tools/` dir → PATH | mp3, generalized off its `bundled_tool_path()` to a plain `tools_dir` parameter |
 | `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
+| `lookup_client.py` | `fetch_json()` — injectable-`fetch` HTTP GET + JSON parse + HTTPError/URLError/decode-error → friendly-message translation, plus `make_default_fetch()` for a fixed-User-Agent fetch callable | cbzredactor, generalized off its Comic Vine/GCD lookup modules (which had independently duplicated the identical translation logic) |
 
 Run `python3 tests/test_core.py` from this folder's parent to exercise
 all of the above (no PyQt6 required). All passing as of this build.
@@ -97,6 +98,7 @@ and reviewed only, same caveat the source projects already carried.
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
+| `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — the "search each item, review a File/Cover/Found/Apply table, Apply the checked rows" dialog shape, parameterized via `item_label`/`search_one` callables | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same ~200-line shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
 
 ## What's wired in so far
 
@@ -128,6 +130,14 @@ and reviewed only, same caveat the source projects already carried.
   `redactor_common.core.tool_locator` — confirmed against its own
   5-test suite (run manually; `pytest` isn't installable in this
   sandbox, no network). `.spec`-based build (`mp3redactor.spec`, new).
+- **cbzredactor** (new project, 2026-09-05): its Comic Vine and GCD
+  lookup modules were the trigger for promoting `lookup_client.py` and
+  `lookup_dialog.py` in the first place -- both `core/comicvine_lookup.py`
+  and `core/gcd_lookup.py` now build on `fetch_json()`/`make_default_fetch()`
+  instead of each keeping its own copy of the HTTPError/URLError
+  translation, and both `gui/comicvine_lookup_dialog.py` and
+  `gui/gcd_lookup_dialog.py` are now thin `LookupDialogBase` subclasses
+  supplying only `search_one()`.
 
 ### The tool_locator promotion, specifically
 
@@ -181,6 +191,13 @@ before).
 
 ## Still open (not yet wired)
 
+- epub's three existing lookup dialogs (`google_books_dialog.py`,
+  `calibre_lookup_dialog.py`, `open_library_dialog.py`) are the exact
+  shape `lookup_dialog.py` was generalized from, but haven't been
+  migrated onto it -- deliberately deferred (per the user's own call
+  when this was scoped) to avoid regression risk in a repo actively
+  developed elsewhere, until cbzredactor's usage has proven the
+  abstraction out. A natural next candidate once that's confirmed.
 - Both epub's and video's `open_search_replace_dialog` /
   `open_case_conversion_dialog` / `open_rename_dialog` /
   `open_filename_parse_dialog` call sites still construct each
