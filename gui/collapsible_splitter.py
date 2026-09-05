@@ -99,6 +99,17 @@ class CollapseToggleButton(QPushButton):
     def __init__(self, width: int = 26, parent=None):
         super().__init__("◀", parent)
         self.setMaximumWidth(width)
+        # setMaximumWidth() alone caps the upper bound but leaves the
+        # LOWER bound at Qt's auto-computed minimumSizeHint (style-
+        # dependent padding around the glyph -- can be well over this
+        # button's actual visual width). A QSplitter clamps setSizes()
+        # against each pane's minimum size, so without this,
+        # SplitterPaneCollapser.toggle()'s target collapsed_width (e.g.
+        # 32) silently gets overridden back up to that larger floor --
+        # the pane visibly shrinks but never reaches collapsed_width,
+        # is_collapsed() then never reports True, and the button gets
+        # stuck unable to toggle back open.
+        self.setMinimumWidth(width)
 
     def set_collapsed(self, collapsed: bool) -> None:
         self.setText("▶" if collapsed else "◀")

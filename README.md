@@ -174,6 +174,32 @@ safe. Added two new tests (`TestBundledToolsDir`) proving the new tier
 genuinely works — found without PATH or an override, using a real
 temp-directory bundled copy, not a mock.
 
+### CollapseToggleButton's missing minimum width (found 2026-09-05)
+
+`CollapseToggleButton.__init__` called `setMaximumWidth(width)` but
+never `setMinimumWidth(width)` -- Qt's auto-computed `minimumSizeHint()`
+for a `QPushButton` is based on style padding around its glyph, which
+on some styles is well over the button's intended ~26px visual width.
+A `QSplitter` clamps `setSizes()` against each pane's minimum size, so
+`SplitterPaneCollapser.toggle()`'s requested `collapsed_width` (e.g.
+32) silently got overridden back up to that larger, invisible floor:
+the pane still visibly shrank (so the bug was easy to miss at a
+glance), but never actually reached `collapsed_width`, so
+`is_collapsed()` never reported `True` and the button got stuck,
+unable to toggle back open.
+
+Found while wiring cbzredactor's own side panel onto this (its cover
+thumbnail's 60px minimum width made the mismatch large enough to
+notice immediately), but the root cause is in this shared button
+itself -- every consuming project's collapse toggle is affected until
+its pin is bumped past this fix. Also worth checking each project's
+own `collapsed_width` constant against whatever its actual panel
+content's true minimum width turns out to be (a panel with a wide
+minimum-width child, like a cover preview, may need a larger
+`collapsed_width` than 32 to actually be reachable -- see cbzredactor's
+own `PANEL_COLLAPSED_WIDTH` for the reasoning) -- fixing this button
+alone doesn't guarantee 32 is achievable for every panel shape.
+
 ## Build scripts
 
 All three projects' `build_exe.bat` now share the same shape: CRLF line
