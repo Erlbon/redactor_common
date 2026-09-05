@@ -98,7 +98,7 @@ and reviewed only, same caveat the source projects already carried.
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
-| `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — the "search each item, review a File/Cover/Found/Apply table, Apply the checked rows" dialog shape, parameterized via `item_label`/`search_one` callables | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same ~200-line shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
+| `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — table (File/Found/Apply) on the left, a detail panel on the right with a large cover preview and an editable per-row query-correction form (`query_fields` + "Search This Item", re-runs just that row with the corrected values) | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
 
 ## What's wired in so far
 
@@ -137,7 +137,15 @@ and reviewed only, same caveat the source projects already carried.
   instead of each keeping its own copy of the HTTPError/URLError
   translation, and both `gui/comicvine_lookup_dialog.py` and
   `gui/gcd_lookup_dialog.py` are now thin `LookupDialogBase` subclasses
-  supplying only `search_one()`.
+  supplying only `search_one()`. Later the same day, real user feedback
+  on cbzredactor ("the image preview needs to be much bigger" / "we
+  need a way to manually correct the data sent through the lookup")
+  drove `lookup_dialog.py`'s bigger redesign: `search_one`'s signature
+  gained a `query_override` parameter and `LookupResult` gained
+  `used_query`, so a subclass can report what it actually searched
+  with and accept a corrected retry for just one row, and the cramped
+  in-table cover icon became a large per-row preview in a proper detail
+  panel alongside the table.
 
 ### The tool_locator promotion, specifically
 
