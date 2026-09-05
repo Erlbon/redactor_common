@@ -98,6 +98,7 @@ and reviewed only, same caveat the source projects already carried.
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
+| `manage_list_dialog.py` | `ManageListDialog` — Add/Remove screen over a hideable-defaults-plus-custom-entries list (Add/Remove Genres, Add/Remove Languages) | epub, already generic (promoted once cbzredactor needed the same pattern) |
 | `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — table (File/Found/Apply) on the left, a detail panel on the right with a large cover preview and an editable per-row query-correction form (`query_fields` + "Search This Item", re-runs just that row with the corrected values) | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
 
 ## What's wired in so far
