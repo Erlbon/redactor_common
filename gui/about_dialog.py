@@ -82,7 +82,8 @@ class AboutDialog(QDialog):
             logo_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             layout.addWidget(logo_label)
 
-        header_html = f"<h2>{app_name}</h2><p>{release_label}, ver {app_version}</p>"
+        version_line = f"{release_label}, ver {app_version}" if release_label else f"ver {app_version}"
+        header_html = f"<h2>{app_name}</h2><p>{version_line}</p>"
         if repo_url:
             header_html += f'<p style="font-size: 11px;"><a href="{repo_url}">{repo_url}</a></p>'
         # component_versions surfaces shared-package versions (e.g.
