@@ -8,12 +8,18 @@ Books/Calibre/Open Library dialogs and cbzredactor's Comic Vine/GCD
 dialogs.
 
 Layout: a File/Found/Apply table on the left, and a detail panel on
-the right showing the selected row's cover (large -- roughly the
-dialog's own height, not a cramped in-table icon) plus an editable
-query-correction form and a readable per-field breakdown of what was
-found. A subclass supplies:
+the right showing the selected row's covers -- its existing/current
+cover side by side with the source's found cover (large -- not a
+cramped in-table icon), so a mismatch (wrong series, wrong issue) is
+obvious at a glance instead of only surfacing after Apply -- plus an
+editable query-correction form and a readable per-field breakdown of
+what was found. A subclass supplies:
 
   - `item_label(item) -> str`: how to label a row.
+  - `get_local_cover(item) -> bytes | None` (optional): the item's own
+    already-loaded cover, for the "Current" side of the comparison.
+    Omit (or return `None` for a given item) and that side just reads
+    "No local cover" -- the "Found" side still works standalone.
   - `search_one(item, query_override) -> LookupResult`: do the actual
     search. `query_override` is a `{field_key: value}` dict -- empty
     the first time (meaning "use your own default query-building
@@ -49,6 +55,7 @@ Usage:
                 item_label=lambda item: item.display_name,
                 search_one=self._search_one,
                 query_fields=[("title", "Title"), ("author", "Author")],
+                get_local_cover=lambda item: item.existing_cover_bytes,
             )
 
         def _search_one(self, item, query_override: dict) -> LookupResult:
@@ -94,7 +101,10 @@ from redactor_common.core.error_summary import summarize_errors
 from redactor_common.gui.image_label import AspectRatioImageLabel
 
 BOOK_COL, FOUND_COL, APPLY_COL = range(3)
-COVER_PREVIEW_MIN_SIZE = (220, 320)
+# Halved from the old single-cover (220, 320) -- two now sit side by
+# side in the same detail panel, and this still reads comfortably at
+# that width (see _build_cover_slot()).
+COVER_PREVIEW_MIN_SIZE = (170, 250)
 
 
 @dataclass
@@ -141,17 +151,19 @@ class LookupDialogBase(QDialog):
         item_label: Callable[[object], str],
         search_one: Callable[[object, dict], LookupResult],
         query_fields: Optional[list[tuple[str, str]]] = None,
+        get_local_cover: Optional[Callable[[object], Optional[bytes]]] = None,
         progress_threshold: int = 3,
     ):
         super().__init__(parent)
         self.setWindowTitle(window_title)
-        self.resize(1020, 600)
+        self.resize(1150, 640)
         self.items = items
         self._item_label = item_label
         self._search_one = search_one
         self._info_text = info_text
         self._search_label = search_label
         self._query_fields = query_fields or []
+        self._get_local_cover = get_local_cover
         self._progress_threshold = progress_threshold
         self._checkboxes: dict[int, QCheckBox] = {}
         self._row_results: dict[int, LookupResult] = {}
@@ -183,7 +195,7 @@ class LookupDialogBase(QDialog):
         splitter.addWidget(self.table)
 
         splitter.addWidget(self._build_detail_panel())
-        splitter.setSizes([520, 460])
+        splitter.setSizes([520, 590])
         outer.addWidget(splitter, 1)
 
         self._btn_row = QHBoxLayout()
@@ -207,20 +219,20 @@ class LookupDialogBase(QDialog):
         outer.addWidget(buttons)
 
     def _build_detail_panel(self) -> QWidget:
-        """The selected row's large cover preview + editable query-
-        correction form + a readable per-field breakdown -- everything
-        the cramped table cells can't show well."""
+        """The selected row's covers -- its existing/current cover next
+        to the source's found cover, side by side (see module docstring
+        for why: a mismatched match is obvious at a glance this way,
+        rather than only surfacing after Apply) -- plus an editable
+        query-correction form and a readable per-field breakdown --
+        everything the cramped table cells can't show well."""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.detail_cover = AspectRatioImageLabel()
-        self.detail_cover.setMinimumSize(*COVER_PREVIEW_MIN_SIZE)
-        self.detail_cover.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.detail_cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_cover.setStyleSheet("background-color: palette(base); border: 1px solid palette(mid);")
-        self.detail_cover.setText("Select a row")
-        layout.addWidget(self.detail_cover, 1)
+        covers_row = QHBoxLayout()
+        self.detail_cover_current = self._build_cover_slot(covers_row, "Current")
+        self.detail_cover_found = self._build_cover_slot(covers_row, "Found")
+        layout.addLayout(covers_row, 1)
 
         if self._query_fields:
             query_box = QGroupBox("Search Query")
@@ -242,6 +254,38 @@ class LookupDialogBase(QDialog):
 
         self._set_detail_enabled(False)
         return panel
+
+    @staticmethod
+    def _build_cover_slot(covers_row: QHBoxLayout, caption: str) -> AspectRatioImageLabel:
+        """One labeled cover preview ("Current" or "Found"), added as
+        its own column in `covers_row`. Returns just the image label --
+        the caption above it is static and never touched again."""
+        column = QVBoxLayout()
+        caption_label = QLabel(caption)
+        caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        caption_label.setStyleSheet("font-weight: bold;")
+        column.addWidget(caption_label)
+
+        image = AspectRatioImageLabel()
+        image.setMinimumSize(*COVER_PREVIEW_MIN_SIZE)
+        image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image.setStyleSheet("background-color: palette(base); border: 1px solid palette(mid);")
+        image.setText("Select a row")
+        column.addWidget(image, 1)
+
+        covers_row.addLayout(column, 1)
+        return image
+
+    @staticmethod
+    def _set_cover(label: AspectRatioImageLabel, cover_bytes: Optional[bytes], empty_text: str) -> None:
+        pixmap = None
+        if cover_bytes:
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(cover_bytes):
+                pixmap = None
+        label.set_original_pixmap(pixmap)
+        label.setText("" if pixmap else empty_text)
 
     def _set_detail_enabled(self, enabled: bool) -> None:
         for edit in self._query_edits.values():
@@ -271,8 +315,9 @@ class LookupDialogBase(QDialog):
         self._query_overrides = {}
         self._current_detail_row = -1
         self._set_detail_enabled(False)
-        self.detail_cover.set_original_pixmap(None)
-        self.detail_cover.setText("Select a row")
+        for label in (self.detail_cover_current, self.detail_cover_found):
+            label.set_original_pixmap(None)
+            label.setText("Select a row")
         self.detail_summary.setText("")
 
         progress = QProgressDialog(self._search_label, "Cancel", 0, len(self.items), self)
@@ -336,8 +381,9 @@ class LookupDialogBase(QDialog):
         if not rows:
             self._current_detail_row = -1
             self._set_detail_enabled(False)
-            self.detail_cover.set_original_pixmap(None)
-            self.detail_cover.setText("Select a row")
+            for label in (self.detail_cover_current, self.detail_cover_found):
+                label.set_original_pixmap(None)
+                label.setText("Select a row")
             self.detail_summary.setText("")
             return
 
@@ -346,13 +392,11 @@ class LookupDialogBase(QDialog):
         self._set_detail_enabled(True)
         result = self._row_results.get(row)
 
-        pixmap = None
-        if result and result.cover_bytes:
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(result.cover_bytes):
-                pixmap = None
-        self.detail_cover.set_original_pixmap(pixmap)
-        self.detail_cover.setText("" if pixmap else "No cover available")
+        local_cover = self._get_local_cover(self.items[row]) if self._get_local_cover else None
+        self._set_cover(self.detail_cover_current, local_cover, "No local cover")
+        self._set_cover(
+            self.detail_cover_found, result.cover_bytes if result else None, "No cover available"
+        )
 
         used_query = (result.used_query if result else None) or self._query_overrides.get(row, {})
         for key, edit in self._query_edits.items():
