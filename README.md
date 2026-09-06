@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-06#03`.
+Currently: `2026-09-06#06`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -85,6 +85,7 @@ and reviewed only, same caveat the source projects already carried.
 | Module | What it does |
 |---|---|
 | `action_factory.py` | `make_action()` — one QAction, shared between menu + toolbar |
+| `colors.py` | Shared color palette (row-tint colors, selection highlight) — standardized on epub's scheme; mp3/video had each independently picked their own | epub |
 | `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus`. `populate_menu()` (public) fills any QMenu from the same declarative item list — what `context_menu.py`/`column_menu.py` build their right-click menus on |
 | `context_menu.py` | Shared table right-click menu: selection-fix (right-click outside the selection replaces it, matching Explorer) + generic "Open Containing Folder"/"Copy Path", with each project's own actions layered on via `extra_items` | epub, generalized (mp3 and video had no equivalent, or a much thinner one) |
 | `column_menu.py` | Shared column-header right-click menu: inline show/hide checklist + a link to `column_settings_dialog.py` | video, generalized (epub only had a "Hide `<this column>`" quick action; mp3 has no column-visibility system to hang this on yet) |
