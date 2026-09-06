@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-06#02`.
+Currently: `2026-09-06#03`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -90,6 +90,7 @@ and reviewed only, same caveat the source projects already carried.
 | `column_menu.py` | Shared column-header right-click menu: inline show/hide checklist + a link to `column_settings_dialog.py` | video, generalized (epub only had a "Hide `<this column>`" quick action; mp3 has no column-visibility system to hang this on yet) |
 | `image_label.py` | `AspectRatioImageLabel` — a QLabel that rescales its pixmap to fit on every resize | epub, already generic |
 | `collapsible_splitter.py` | `SplitterPaneCollapser` (window-side resize/restore logic) + `CollapseToggleButton` (the panel's own "◀"/"▶" button) for a collapsible side-panel splitter | epub, generalized (video had the same 2-pane splitter shape but no collapse mechanism at all; mp3 has no side panel) |
+| `grid_utils.py` | `absorb_extra_row_space()` — stops a fixed-row QGridLayout (the bulk-edit tag panels) from spreading leftover vertical space evenly into every row's gap on resize; collects it as blank space below instead | fixes a bug reported on mp3; epub's identically-structured grid had the same latent issue |
 | `zoom_toolbar.py` | The +/− table-font-zoom control (epub had it, video didn't — now shared) |
 | `column_settings_dialog.py` | "Add/Remove Columns" dialog, built on `core/table_settings.py` |
 | `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog) |
