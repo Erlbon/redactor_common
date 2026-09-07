@@ -79,13 +79,19 @@ all of the above (no PyQt6 required). All passing as of this build.
 
 ## gui/ — PyQt6 widgets/dialogs
 
-Not runtime-tested in this sandbox (no PyQt6 available) — syntax-checked
-and reviewed only, same caveat the source projects already carried.
+PyQt6 is available in this environment (confirmed via real headless
+`QT_QPA_PLATFORM=offscreen` runs) -- the "no PyQt6, syntax-checked
+only" caveat that used to apply here no longer does. `tests/test_theme.py`
+already exercises real `QColor`/`QPalette` objects; nothing technical
+blocks doing the same for the other dialogs here (`lookup_dialog.py`,
+`quick_pick_dialog.py`, `manage_list_dialog.py`, etc.) the way
+cbzredactor already tests its own consumption of them -- just hasn't
+been done yet.
 
 | Module | What it does |
 |---|---|
 | `action_factory.py` | `make_action()` — one QAction, shared between menu + toolbar |
-| `colors.py` | Shared color palette (row-tint colors, selection highlight) — standardized on epub's scheme; mp3/video had each independently picked their own | epub |
+| `colors.py` | Shared row-tint colors (dirty/error/etc) plus a current-cell focus outline for a `QTableWidget` — standardized on epub's scheme; mp3/video had each independently picked their own. Does NOT set selected-row colors (that's `theme.py`'s job now — see its 2026-09-07 fix note) | epub |
 | `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus`. `populate_menu()` (public) fills any QMenu from the same declarative item list — what `context_menu.py`/`column_menu.py` build their right-click menus on |
 | `context_menu.py` | Shared table right-click menu: selection-fix (right-click outside the selection replaces it, matching Explorer) + generic "Open Containing Folder"/"Copy Path", with each project's own actions layered on via `extra_items` | epub, generalized (mp3 and video had no equivalent, or a much thinner one) |
 | `column_menu.py` | Shared column-header right-click menu: inline show/hide checklist + a link to `column_settings_dialog.py` | video, generalized (epub only had a "Hide `<this column>`" quick action; mp3 has no column-visibility system to hang this on yet) |

@@ -18,13 +18,27 @@ DRM_COLOR and SAVE_FAILED_COLOR are epub-specific states with no
 equivalent in mp3/video yet -- import only what a given project
 actually needs.
 
-TABLE_SELECTION_STYLESHEET: strong, theme-independent selection/
-current-cell indicators for a QTableWidget -- otherwise the default
-look can blend into a project's own custom row colors (dirty/status
-highlighting) and make it hard to tell where you clicked. Selection
-color takes priority over a row's dirty/status color while selected;
-the current cell (relevant for typing and Tab/Enter navigation) gets
-its own bright outline so it's visible even within a selected row.
+TABLE_SELECTION_STYLESHEET: a bright, theme-independent outline for
+the current cell (relevant for typing and Tab/Enter navigation), so
+it's visible even within a selected row.
+
+2026-09-07 fix: this used to ALSO hardcode the selected row's own
+background-color/color ("#2f6fed"/white) here. That was a real
+regression once gui/theme.py (apply_theme()) started giving every app
+an explicit, WCAG-contrast-verified light/dark QPalette -- a widget-
+level Qt stylesheet always wins over the application palette for that
+widget, so this stylesheet was silently overriding apply_theme()'s
+carefully different light-vs-dark selection colors with one fixed pair
+that was never verified for both, on every app that called both (epub,
+mp3, video -- cbzredactor never imported this module, so its table
+selection was the only one actually running on apply_theme()'s
+colors). One of video's own commit-time comments even flagged this
+exact risk ("the shared #2f6fed hasn't been re-verified against a dark
+theme here") and it was waved through anyway, before apply_theme()
+existed to give a real, verified answer. Removed the conflicting rule
+-- selection background/text now come from apply_theme()'s palette
+everywhere, uniformly, the way "uniform behaviour across the apps" was
+supposed to work in the first place.
 """
 
 from __future__ import annotations
@@ -37,11 +51,6 @@ SAVE_FAILED_COLOR = QColor("#ffddb3")  # soft orange = failed to SAVE (distinct 
 DRM_COLOR = QColor("#dce6fb")          # soft blue = DRM-protected (not broken, just locked)
 HIGHLIGHT_TEXT_COLOR = QColor("#000000")
 
-SELECTION_BG = "#2f6fed"
-SELECTION_FG = "white"
 FOCUS_BORDER_COLOR = "#ffb400"
 
-TABLE_SELECTION_STYLESHEET = (
-    f"QTableWidget::item:selected {{ background-color: {SELECTION_BG}; color: {SELECTION_FG}; }}"
-    f"QTableWidget::item:focus {{ border: 2px solid {FOCUS_BORDER_COLOR}; }}"
-)
+TABLE_SELECTION_STYLESHEET = f"QTableWidget::item:focus {{ border: 2px solid {FOCUS_BORDER_COLOR}; }}"
