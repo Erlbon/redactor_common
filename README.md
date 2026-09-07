@@ -275,3 +275,28 @@ before).
   and would hit the same "too long to see past it" problem once epub's
   genre list grows enough -- deliberately not migrated yet, same
   regression-risk-in-a-live-repo reasoning as the lookup dialogs above.
+- **Two independent reimplementations of `manage_list_dialog.py`'s job
+  found 2026-09-07**: video has its own `gui/vocabulary_editor_dialog.py`
+  (`VocabularyEditorDialog`) managing its Genre/Language lists, but with
+  a genuinely different, SIMPLER model than `ManageListDialog` -- one
+  flat editable list, no hideable-built-in-defaults-vs-removable-custom
+  split at all. This isn't just a duplicate to swap out; it's two
+  competing designs for the same user-facing feature. Deliberately not
+  consolidated without deciding which shape is actually better first
+  (or offering both as options) -- forcing one onto the other would
+  change working, live UX on someone's say-so rather than a deliberate
+  choice.
+- **Two independent implementations of "hiding a table column also
+  hides its side-panel edit field" found the same day**: cbzredactor's
+  `ComicInfoPanel.set_visible_fields()` (hide/show existing widgets,
+  built for its `QFormLayout`-based single/bulk-edit panel) and video's
+  own equivalent (built for its `QGridLayout`-based bulk-edit grid,
+  predates cbzredactor's by an unknown margin -- comment reference
+  points to "established earlier" but doesn't say where). This project
+  states "promote once a second consumer needs it" as its own policy;
+  that trigger point has technically been reached, but the two panels'
+  underlying widget architectures differ enough (form rows vs. a fixed-
+  row grid with per-field checkboxes) that a clean shared abstraction
+  isn't obviously a simple lift from either existing version -- would
+  need actual design work, not just extraction, before landing in
+  either live app.
