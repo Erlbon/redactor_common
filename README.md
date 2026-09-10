@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-06#06`.
+Currently: `2026-09-10#01`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -107,6 +107,7 @@ been done yet.
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
+| `rename_single_file.py` | `rename_single_file()` — quick, direct rename of one file (QInputDialog prompt, current stem pre-filled, extension kept automatically), for fixing a typo without the batch pattern tool above; wraps `core/rename_pattern.py`'s already-generic `rename_file_on_disk()` | mp3, generalized off its own copy — itself independently re-derived from epub's still-local, not-yet-migrated `gui/main_window.py`/`core/rename_pattern.py` (`rename_book_file`) equivalent; see "Still open" |
 | `manage_list_dialog.py` | `ManageListDialog` — Add/Remove screen over a hideable-defaults-plus-custom-entries list (Add/Remove Genres, Add/Remove Languages) | epub, already generic (promoted once cbzredactor needed the same pattern) |
 | `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — table (File/Found/Apply) on the left, a detail panel on the right with the selected row's existing/"Current" cover shown side by side with the source's "Found" one (`get_local_cover`, optional -- so a mismatch is obvious at a glance instead of only surfacing after Apply) and an editable per-row query-correction form (`query_fields` + "Search This Item", re-runs just that row with the corrected values) | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
 | `quick_pick_dialog.py` | `QuickPickDialog` — a searchable, fixed-size list-picker popup (filter box + internally-scrolling list + OK/Cancel always visible) for a field's "+" quick-pick button; single- or multi-select, with an optional "Add Custom..." callback | cbzredactor, replacing a flat `QMenu` that overflowed the screen once enough custom genres piled up ("the genre list gets too long to see the apply button") -- not yet migrated onto epub's own Genre/Language "+" menus (same flat-`QMenu` shape, same latent issue) -- see "Still open" |
@@ -142,6 +143,11 @@ been done yet.
   `redactor_common.core.tool_locator` — confirmed against its own
   5-test suite (run manually; `pytest` isn't installable in this
   sandbox, no network). `.spec`-based build (`mp3redactor.spec`, new).
+  2026-09-10: adopted `rename_pattern_dialog.py`/`parse_filename_dialog.py`
+  (the one sibling project that hadn't yet), then contributed
+  `rename_single_file.py` back here after independently re-deriving
+  epub's still-local quick-rename feature — see that module's own
+  entry above.
 - **cbzredactor** (new project, 2026-09-05): its Comic Vine and GCD
   lookup modules were the trigger for promoting `lookup_client.py` and
   `lookup_dialog.py` in the first place -- both `core/comicvine_lookup.py`
@@ -264,11 +270,22 @@ before).
   bundled-tools-dir lookup into video (which needed its own copy of
   this to know where to look), not yet consolidated. A natural next
   candidate, same shape as the other promotions here.
-- mp3 has no configurable columns or tag editing yet (deferred per its
-  own roadmap until a bulk-edit panel lands), so `table_settings.py`
-  and the Search/Replace/Rename/Case-Conversion dialogs aren't wired
-  into it — nothing to consolidate there yet, but they're ready and
-  waiting once that panel exists.
+- mp3's bulk-edit panel and `table_settings.py` adoption have since
+  landed (2026-09 deliveries), including `rename_pattern_dialog.py`/
+  `parse_filename_dialog.py` -- it was the one sibling project still
+  missing those. `search_replace_dialog.py`/`case_conversion_dialog.py`
+  remain unwired there (no obvious mp3-tag use case yet, unlike epub/
+  cbz's free-text metadata fields).
+- `rename_single_file.py` (new, see its own table entry above) isn't
+  adopted everywhere yet: epub still has its own local, pre-this-repo
+  copy (`core/rename_pattern.py`'s `rename_book_file` +
+  `gui/main_window.py`'s `rename_single_file` method) rather than the
+  shared version -- same "extracted from epub, epub never migrated"
+  pattern as several entries above, deliberately not touched to avoid
+  regression risk in a repo actively developed elsewhere. cbzredactor
+  and videoredactor don't have the feature (double-click a Filename
+  cell to fix a typo) at all yet -- flagged as pending work in each of
+  those repos.
 - epub's own Genre/Language "+" quick-pick menus (`tag_panel.py`,
   `_populate_genre_menu`/`_populate_language_menu`) are the exact same
   flat-`QMenu` shape `quick_pick_dialog.py` replaced in cbzredactor,

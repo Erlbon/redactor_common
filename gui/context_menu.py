@@ -23,15 +23,20 @@ Handles, generically, for any project:
 Usage:
     from redactor_common.gui.context_menu import show_table_context_menu
     from redactor_common.gui.menu_builder import MenuAction, Separator
+    from redactor_common.gui.rename_single_file import rename_single_file
 
     def _show_table_context_menu(self, pos):
+        def _rename(book):
+            if rename_single_file(self, str(book.path), lambda p: setattr(book, "path", p)):
+                self._refresh_row(book)
+
         show_table_context_menu(
             self, self.table, pos,
             get_selected_items=self._currently_selected_books,
             get_path=lambda book: book.path,
             extra_items=lambda books: [
                 Separator(),
-                MenuAction("rename", "Rename File...", lambda: self.rename_single_file(books[0])),
+                MenuAction("rename", "Rename File...", lambda: _rename(books[0])),
             ] if len(books) == 1 else [],
         )
 """
