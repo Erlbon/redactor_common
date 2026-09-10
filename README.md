@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-10#03`.
+Currently: `2026-09-10#04`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -71,6 +71,7 @@ Currently: `2026-09-10#03`.
 | `error_summary.py` | Bounded preview string for a list of error messages | epub, already generic |
 | `tool_locator.py` | Three-tier external CLI tool lookup: override → bundled `tools/` dir → PATH | mp3, generalized off its `bundled_tool_path()` to a plain `tools_dir` parameter |
 | `auto_number.py` | `generate_auto_number()` / `apply_auto_number_to_text_field()` — sequential-number generation for Auto-Numbering | video, already generic |
+| `series_numbering.py` | `generate_series_numbers()` — decimal-capable (`Decimal`, not `int`) sequential-value generation, for a "start here, +step per row" quick numbering of a single field (a novella slotted in at "3.5", a comic special issue) | epub, already generic |
 | `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
 | `lookup_client.py` | `fetch_json()`/`fetch_bytes()` — injectable-`fetch` HTTP GET (JSON-parsed, or raw for e.g. a cover image) + HTTPError/URLError/decode-error → friendly-message translation, plus `make_default_fetch()` for a fixed-User-Agent fetch callable | cbzredactor, generalized off its Comic Vine/GCD lookup modules (which had independently duplicated the identical translation logic twice each — once for the JSON API calls, once for the cover-image download) |
 | `undo.py` | `UndoManager` — bounded in-memory undo stack (bulk edits, search/replace, case conversion, lookup-apply, ...), generic via caller-supplied `snapshot_fn`/`restore_fn` | epub, generalized off its original version (which snapshotted `EpubBook`/`EpubMetadata` fields directly) once cbzredactor needed the same "last N in-memory edits" undo behavior |
@@ -107,6 +108,7 @@ been done yet.
 | `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once). Gained an optional grouping column (`group_column_label`) and a per-row `default_checked` state via `PreviewRow` (2026-09-10, promoted out of cbzredactor's per-file/per-field overwrite-review dialog) |
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `auto_numbering_dialog.py` | Generalized Auto-Numbering dialog (field picker + start/increment/zero-pad/separator + preview), built on `preview_table.py` | video, generalized (epub's "Number Series" is a narrower, single-field version of the same idea and is unaffected; mp3/cbz had neither) |
+| `quick_series_number.py` | `prompt_and_generate_series_numbers()` — the one-prompt "starting value, +1 per row" quick numbering for a table right-click menu, no field picker/preview (that's what `auto_numbering_dialog.py` is for) | epub, generalized (its `quick_number_series()` right-click handler) |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
 | `rename_single_file.py` | `rename_single_file()` — quick, direct rename of one file (QInputDialog prompt, current stem pre-filled, extension kept automatically), for fixing a typo without the batch pattern tool above; wraps `core/rename_pattern.py`'s already-generic `rename_file_on_disk()` | mp3, generalized off its own copy — itself independently re-derived from epub's still-local, not-yet-migrated `gui/main_window.py`/`core/rename_pattern.py` (`rename_book_file`) equivalent; see "Still open" |

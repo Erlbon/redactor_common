@@ -1,7 +1,8 @@
 import os
 import pathlib
 
-from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator, auto_number
+from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator, auto_number, series_numbering
+from decimal import Decimal
 
 def test_table_settings():
     protected = frozenset({"filename"})
@@ -94,6 +95,30 @@ def test_auto_number():
     assert auto_number.apply_auto_number_to_text_field("", "01", " - ") == "01"
     assert auto_number.apply_auto_number_to_text_field("Pilot", "01", ". ") == "01. Pilot"
 
+def test_series_numbering():
+    assert series_numbering.parse_decimal("5", "1") == Decimal("5")
+    assert series_numbering.parse_decimal("1.5", "1") == Decimal("1.5")
+    assert series_numbering.parse_decimal("", "3") == Decimal("3")
+    assert series_numbering.parse_decimal("not a number", "2") == Decimal("2")
+    assert series_numbering.parse_decimal("-2", "1") == Decimal("-2")
+
+    assert series_numbering.format_series_number(Decimal("1.00")) == "1"
+    assert series_numbering.format_series_number(Decimal("100")) == "100"  # not "1E+2"
+    assert series_numbering.format_series_number(Decimal("1.50")) == "1.5"
+    assert series_numbering.format_series_number(Decimal("-1")) == "-1"
+
+    assert series_numbering.generate_series_numbers(5) == ["1", "2", "3", "4", "5"]
+    assert series_numbering.generate_series_numbers(3, start="10") == ["10", "11", "12"]
+    assert series_numbering.generate_series_numbers(4, start="1", step="2") == ["1", "3", "5", "7"]
+    # the classic float-accumulation trap (1 + 0.5*3 can drift to
+    # 2.4999999999999996 in binary float) -- Decimal must not have it
+    assert series_numbering.generate_series_numbers(5, start="1", step="0.5") == ["1", "1.5", "2", "2.5", "3"]
+    assert series_numbering.generate_series_numbers(0) == []
+    assert series_numbering.generate_series_numbers(-3) == []
+    assert series_numbering.generate_series_numbers(3, start="", step="") == ["1", "2", "3"]
+    assert series_numbering.generate_series_numbers(3, start="abc", step="xyz") == ["1", "2", "3"]
+    assert series_numbering.generate_series_numbers(3, start="0.5", step="1") == ["0.5", "1.5", "2.5"]
+
 def test_tool_locator():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
@@ -137,5 +162,6 @@ if __name__ == "__main__":
     test_save_errors()
     test_error_summary()
     test_auto_number()
+    test_series_numbering()
     test_tool_locator()
     print("ALL TESTS PASSED")
