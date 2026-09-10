@@ -129,7 +129,11 @@ been done yet.
   shared dialogs. `core/external_tools.py` gained the bundled-`tools/`
   lookup tier it never had, via the promoted `tool_locator.py` — see
   below. `build_exe.bat` gained the matching optional `tools\` →
-  `dist\tools` copy step.
+  `dist\tools` copy step. 2026-09-10: adopted `rename_single_file.py`
+  (double-click a Filename cell / right-click > Rename File...) --
+  this project's own `core/filename_pattern.py`/`gui/rename_pattern_dialog.py`
+  (the pattern-based batch tool) are still a local, pre-this-repo
+  implementation, untouched.
 - **mp3**: menu bar rebuilt on the shared shape (Import is present but
   genuinely empty for now — v1 has no external-metadata-source actions
   yet, see the module docstring in its `main_window.py`). Gained
@@ -163,7 +167,12 @@ been done yet.
   `used_query`, so a subclass can report what it actually searched
   with and accept a corrected retry for just one row, and the cramped
   in-table cover icon became a large per-row preview in a proper detail
-  panel alongside the table.
+  panel alongside the table. 2026-09-10: adopted `rename_single_file.py`
+  (double-click a Filename cell / right-click > Rename File...) --
+  gated on `self._selected_rows` directly, not `_target_books()`'s own
+  select-or-fall-back-to-everything-loaded behavior used elsewhere in
+  this project's context menu, so it's only offered for a genuine
+  single selection.
 
 ### The tool_locator promotion, specifically
 
@@ -276,16 +285,14 @@ before).
   missing those. `search_replace_dialog.py`/`case_conversion_dialog.py`
   remain unwired there (no obvious mp3-tag use case yet, unlike epub/
   cbz's free-text metadata fields).
-- `rename_single_file.py` (new, see its own table entry above) isn't
-  adopted everywhere yet: epub still has its own local, pre-this-repo
-  copy (`core/rename_pattern.py`'s `rename_book_file` +
+- `rename_single_file.py`: adopted by cbzredactor and videoredactor
+  (2026-09-10, both same-day as this module). epub is the one holdout
+  -- still has its own local, pre-this-repo copy
+  (`core/rename_pattern.py`'s `rename_book_file` +
   `gui/main_window.py`'s `rename_single_file` method) rather than the
-  shared version -- same "extracted from epub, epub never migrated"
+  shared version, same "extracted from epub, epub never migrated"
   pattern as several entries above, deliberately not touched to avoid
-  regression risk in a repo actively developed elsewhere. cbzredactor
-  and videoredactor don't have the feature (double-click a Filename
-  cell to fix a typo) at all yet -- flagged as pending work in each of
-  those repos.
+  regression risk in a repo actively developed elsewhere.
 - epub's own Genre/Language "+" quick-pick menus (`tag_panel.py`,
   `_populate_genre_menu`/`_populate_language_menu`) are the exact same
   flat-`QMenu` shape `quick_pick_dialog.py` replaced in cbzredactor,
