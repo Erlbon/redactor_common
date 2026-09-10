@@ -324,3 +324,11 @@ before).
   isn't obviously a simple lift from either existing version -- would
   need actual design work, not just extraction, before landing in
   either live app.
+
+## License
+
+Licensed under the [GNU General Public License v3.0 or later](LICENSE).
+This package's `gui/` module depends on PyQt6, which Riverbank
+Computing licenses under GPL v3 (or a paid commercial license) -- this
+project, and every app that consumes it, ships under GPL-compatible
+terms to match.
