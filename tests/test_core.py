@@ -1,7 +1,7 @@
 import os
 import pathlib
 
-from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator
+from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator, auto_number
 
 def test_table_settings():
     protected = frozenset({"filename"})
@@ -81,6 +81,19 @@ def test_error_summary():
     assert s.count(";") == 2
     assert s.endswith(", ...")
 
+def test_auto_number():
+    assert auto_number.generate_auto_number(0, start=1, increment=1, padding=2) == "01"
+    assert auto_number.generate_auto_number(1, start=1, increment=1, padding=2) == "02"
+    assert auto_number.generate_auto_number(9, start=1, increment=1, padding=2) == "10"
+    assert auto_number.generate_auto_number(0, start=5, increment=10, padding=0) == "5"
+    assert auto_number.generate_auto_number(2, start=5, increment=10, padding=0) == "25"
+    assert auto_number.generate_auto_number(0, start=-5, increment=1, padding=3) == "-05"
+    assert auto_number.generate_auto_number(3, start=0, increment=5, padding=0) == "15"
+    assert auto_number.generate_auto_number(0, start=1, increment=1, padding=5) == "00001"
+    assert auto_number.apply_auto_number_to_text_field("Pilot", "01", " - ") == "01 - Pilot"
+    assert auto_number.apply_auto_number_to_text_field("", "01", " - ") == "01"
+    assert auto_number.apply_auto_number_to_text_field("Pilot", "01", ". ") == "01. Pilot"
+
 def test_tool_locator():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
@@ -123,5 +136,6 @@ if __name__ == "__main__":
     test_case_conversion()
     test_save_errors()
     test_error_summary()
+    test_auto_number()
     test_tool_locator()
     print("ALL TESTS PASSED")
