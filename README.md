@@ -103,7 +103,7 @@ been done yet.
 | `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog) |
 | `qmessagebox_style.py` | App-wide `QMessageBox` max-width fix (one call in `main.py`) |
 | `about_dialog.py` | Shared About/Changelog/Credits dialogs (Markdown-rendering, logo, version header with optional `component_versions` + link-back `repo_url`/`component_repo_urls`) — promoted from epub's version |
-| `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once) |
+| `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once). Gained an optional grouping column (`group_column_label`) and a per-row `default_checked` state via `PreviewRow` (2026-09-10, promoted out of cbzredactor's per-file/per-field overwrite-review dialog) |
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |

@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.search_replace import SearchReplaceError, apply_replace
-from redactor_common.gui.preview_table import PreviewTableController
+from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
 
 FILENAME_FIELD_KEY = "__filename__"
 
@@ -131,7 +131,7 @@ class SearchReplaceDialog(QDialog):
         case_sensitive = self.case_sensitive_cb.isChecked()
         use_regex = self.regex_cb.isChecked()
 
-        rows: list[tuple[int, str, str, str]] = []
+        rows: list[PreviewRow] = []
         error_msg = ""
 
         if search:
@@ -145,7 +145,7 @@ class SearchReplaceDialog(QDialog):
                     error_msg = str(exc)
                     break
                 if new_value != old_value:
-                    rows.append((i, self._get_display_name(item), old_value, new_value))
+                    rows.append(PreviewRow(i, self._get_display_name(item), old_value, new_value))
 
         self._preview.set_rows(rows)
 

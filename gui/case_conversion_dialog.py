@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.case_conversion import CASE_CONVERSIONS, apply_case_conversion
-from redactor_common.gui.preview_table import PreviewTableController
+from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
 
 T = TypeVar("T")
 
@@ -87,14 +87,14 @@ class CaseConversionDialog(QDialog):
         field_key = self.result_field_key()
         mode = self.mode_combo.currentText()
 
-        rows: list[tuple[int, str, str, str]] = []
+        rows: list[PreviewRow] = []
         for i, item in enumerate(self.items):
             if self._is_excluded(item):
                 continue
             old_value = self._get_value(item, field_key) or ""
             new_value = apply_case_conversion(old_value, mode)
             if new_value != old_value:
-                rows.append((i, self._get_display_name(item), old_value, new_value))
+                rows.append(PreviewRow(i, self._get_display_name(item), old_value, new_value))
 
         self._preview.set_rows(rows)
 
