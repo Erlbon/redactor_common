@@ -138,7 +138,9 @@ been done yet.
   (double-click a Filename cell / right-click > Rename File...) --
   this project's own `core/filename_pattern.py`/`gui/rename_pattern_dialog.py`
   (the pattern-based batch tool) are still a local, pre-this-repo
-  implementation, untouched.
+  implementation, untouched. 2026-09-12: adopted `sortable_table.py`
+  (click a header to sort) -- `FILE_ROLE` (`Qt.UserRole`)-based row
+  mapping already made this safe to add directly.
 - **mp3**: menu bar rebuilt on the shared shape (Import is present but
   genuinely empty for now — v1 has no external-metadata-source actions
   yet, see the module docstring in its `main_window.py`). Gained
@@ -156,7 +158,9 @@ been done yet.
   (the one sibling project that hadn't yet), then contributed
   `rename_single_file.py` back here after independently re-deriving
   epub's still-local quick-rename feature — see that module's own
-  entry above.
+  entry above. 2026-09-12: adopted `sortable_table.py` (click a header
+  to sort) -- its own module docstring had already anticipated this by
+  building row->file mapping `Qt.UserRole`-based from the start.
 - **cbzredactor** (new project, 2026-09-05): its Comic Vine and GCD
   lookup modules were the trigger for promoting `lookup_client.py` and
   `lookup_dialog.py` in the first place -- both `core/comicvine_lookup.py`
@@ -257,16 +261,16 @@ before).
 
 ## Still open (not yet wired)
 
-- `sortable_table.py` (new): epub's own nine hand-written
+- `sortable_table.py`: adopted by mp3 and video (2026-09-12, both
+  same-day as this module). epub's own nine hand-written
   `was_sorting = table.isSortingEnabled(); ...` blocks aren't migrated
-  onto `suspend_sorting()` yet, same "extracted from epub, epub never
+  onto `suspend_sorting()` -- same "extracted from epub, epub never
   migrated" pattern as several entries below -- deliberately not
   touched to avoid regression risk in a repo actively developed
-  elsewhere. mp3 and video don't have click-to-sort at all yet --
-  tracked as pending work in each. cbzredactor's own equivalent
-  behavior is intentionally NOT migrated onto this: its rows are
-  indexed by list position, which native Qt sorting would silently
-  desync (see the module's own docstring).
+  elsewhere. cbzredactor's own equivalent behavior is intentionally NOT
+  migrated onto this: its rows are indexed by list position, which
+  native Qt sorting would silently desync (see the module's own
+  docstring).
 - epub's three existing lookup dialogs (`google_books_dialog.py`,
   `calibre_lookup_dialog.py`, `open_library_dialog.py`) are the exact
   shape `lookup_dialog.py` was generalized from, but haven't been
