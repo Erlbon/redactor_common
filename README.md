@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-12#01`.
+Currently: `2026-09-12#02`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -75,6 +75,7 @@ Currently: `2026-09-12#01`.
 | `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
 | `lookup_client.py` | `fetch_json()`/`fetch_bytes()` — injectable-`fetch` HTTP GET (JSON-parsed, or raw for e.g. a cover image) + HTTPError/URLError/decode-error → friendly-message translation, plus `make_default_fetch()` for a fixed-User-Agent fetch callable | cbzredactor, generalized off its Comic Vine/GCD lookup modules (which had independently duplicated the identical translation logic twice each — once for the JSON API calls, once for the cover-image download) |
 | `undo.py` | `UndoManager` — bounded in-memory undo stack (bulk edits, search/replace, case conversion, lookup-apply, ...), generic via caller-supplied `snapshot_fn`/`restore_fn` | epub, generalized off its original version (which snapshotted `EpubBook`/`EpubMetadata` fields directly) once cbzredactor needed the same "last N in-memory edits" undo behavior |
+| `folder_refresh.py` | `find_new_files_in_loaded_folders()` — the logic behind "Refresh List" (F5/Ctrl+R): re-scans the folder(s) already-loaded paths live in via a caller-supplied `find_files_in_folder(folder)` (each project's own existing file-discovery function, bound to non-recursive) and reports whichever paths aren't already loaded. Doesn't discover a brand-new folder nothing's been loaded from at all -- only folders already represented get scanned | epub, generalized off its `refresh_list()` -- cbzredactor had independently rewritten the same behavior from scratch rather than sharing code; mp3/video had neither |
 
 Run `python3 tests/test_core.py` from this folder's parent to exercise
 all of the above (no PyQt6 required). All passing as of this build.
@@ -261,6 +262,16 @@ before).
 
 ## Still open (not yet wired)
 
+- `folder_refresh.py` (new): epub's own `refresh_list()` isn't migrated
+  onto it -- same "extracted from epub, epub never migrated" pattern
+  as several entries below, deliberately not touched to avoid
+  regression risk in a repo actively developed elsewhere. cbzredactor's
+  own `refresh_list()` (independently rewritten, same behavior) is
+  also not migrated -- lower priority than epub's own, since it
+  already works and isn't duplicated code drifting between two call
+  sites the way the epub/mp3/video "extracted, never migrated" pattern
+  is. mp3 and video don't have Refresh List at all yet -- tracked as
+  pending work in each.
 - `sortable_table.py`: adopted by mp3 and video (2026-09-12, both
   same-day as this module). epub's own nine hand-written
   `was_sorting = table.isSortingEnabled(); ...` blocks aren't migrated

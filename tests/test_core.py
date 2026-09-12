@@ -1,7 +1,7 @@
 import os
 import pathlib
 
-from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator, auto_number, series_numbering
+from redactor_common.core import table_settings, rename_pattern, filename_parser, search_replace, case_conversion, save_errors, error_summary, tool_locator, auto_number, series_numbering, folder_refresh
 from decimal import Decimal
 
 def test_table_settings():
@@ -153,6 +153,46 @@ def test_tool_locator():
         result = tool_locator.find_tool("mp3val", tools_dir=tools_dir)
         assert result == bundled_exe
 
+def test_folder_refresh():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "a.mp3").write_bytes(b"")
+        (d / "b.mp3").write_bytes(b"")
+        existing = [str(d / "a.mp3")]
+
+        def find_in_folder(folder):
+            return [str(p) for p in pathlib.Path(folder).iterdir() if p.suffix == ".mp3"]
+
+        # b.mp3 is on disk but not yet "loaded" -- reported as new.
+        new = folder_refresh.find_new_files_in_loaded_folders(existing, find_in_folder)
+        assert new == [str(d / "b.mp3")]
+
+        # Nothing new once everything's accounted for.
+        new2 = folder_refresh.find_new_files_in_loaded_folders(
+            [str(d / "a.mp3"), str(d / "b.mp3")], find_in_folder
+        )
+        assert new2 == []
+
+        # A folder nothing has been loaded from at all is never scanned --
+        # only folders already represented in existing_paths are.
+        with tempfile.TemporaryDirectory() as other:
+            (pathlib.Path(other) / "c.mp3").write_bytes(b"")
+            new3 = folder_refresh.find_new_files_in_loaded_folders(existing, find_in_folder)
+            assert str(pathlib.Path(other) / "c.mp3") not in new3
+
+        # Case differences on the same real path don't count as new
+        # (Windows filesystems are case-insensitive) -- a.mp3 must not
+        # reappear just because existing_paths spelled it in a
+        # different case than what's on disk. (Not checking the exact
+        # case of the one genuinely-new result here -- it naturally
+        # inherits whatever case the scanned folder string carried in,
+        # which is fine; only the de-dup guarantee is being tested.)
+        upper_existing = [str(d / "a.mp3").upper()]
+        new4 = folder_refresh.find_new_files_in_loaded_folders(upper_existing, find_in_folder)
+        assert len(new4) == 1
+        assert os.path.normcase(new4[0]) == os.path.normcase(str(d / "b.mp3"))
+
 if __name__ == "__main__":
     test_table_settings()
     test_rename_pattern()
@@ -164,4 +204,5 @@ if __name__ == "__main__":
     test_auto_number()
     test_series_numbering()
     test_tool_locator()
+    test_folder_refresh()
     print("ALL TESTS PASSED")
