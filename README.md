@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-10#04`.
+Currently: `2026-09-12#01`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -112,6 +112,7 @@ been done yet.
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
 | `rename_single_file.py` | `rename_single_file()` — quick, direct rename of one file (QInputDialog prompt, current stem pre-filled, extension kept automatically), for fixing a typo without the batch pattern tool above; wraps `core/rename_pattern.py`'s already-generic `rename_file_on_disk()` | mp3, generalized off its own copy — itself independently re-derived from epub's still-local, not-yet-migrated `gui/main_window.py`/`core/rename_pattern.py` (`rename_book_file`) equivalent; see "Still open" |
+| `sortable_table.py` | `NumericTableWidgetItem` (compares numerically when it can — an optional explicit `sort_value` covers a suffixed display like "128.5 LUFS"/"44100 Hz" whose text alone isn't a bare number — falling back to normal text comparison otherwise) + `suspend_sorting(table)` (a context manager disabling `setSortingEnabled()` for a bulk `setItem()` populate loop, restoring whatever state was in effect before — REQUIRED around one, since Qt re-sorts as items land and can relocate an earlier row's items before a later row is even written) | epub, generalized off nine hand-written copies of the same `was_sorting = table.isSortingEnabled(); ...` block at each of its own bulk-repopulate call sites. Only safe to pair with `Qt.UserRole`-based row→item mapping, NOT list-index-based mapping — see cbzredactor's own deliberate non-native sort implementation, which exists specifically because native sort doesn't fit its architecture |
 | `manage_list_dialog.py` | `ManageListDialog` — Add/Remove screen over a hideable-defaults-plus-custom-entries list (Add/Remove Genres, Add/Remove Languages) | epub, already generic (promoted once cbzredactor needed the same pattern) |
 | `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — table (File/Found/Apply) on the left, a detail panel on the right with the selected row's existing/"Current" cover shown side by side with the source's "Found" one (`get_local_cover`, optional -- so a mismatch is obvious at a glance instead of only surfacing after Apply) and an editable per-row query-correction form (`query_fields` + "Search This Item", re-runs just that row with the corrected values) | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs, which had the same shape as epub's own Google Books/Calibre/Open Library dialogs (not yet migrated onto this -- see "Still open") |
 | `quick_pick_dialog.py` | `QuickPickDialog` — a searchable, fixed-size list-picker popup (filter box + internally-scrolling list + OK/Cancel always visible) for a field's "+" quick-pick button; single- or multi-select, with an optional "Add Custom..." callback | cbzredactor, replacing a flat `QMenu` that overflowed the screen once enough custom genres piled up ("the genre list gets too long to see the apply button") -- not yet migrated onto epub's own Genre/Language "+" menus (same flat-`QMenu` shape, same latent issue) -- see "Still open" |
@@ -256,6 +257,16 @@ before).
 
 ## Still open (not yet wired)
 
+- `sortable_table.py` (new): epub's own nine hand-written
+  `was_sorting = table.isSortingEnabled(); ...` blocks aren't migrated
+  onto `suspend_sorting()` yet, same "extracted from epub, epub never
+  migrated" pattern as several entries below -- deliberately not
+  touched to avoid regression risk in a repo actively developed
+  elsewhere. mp3 and video don't have click-to-sort at all yet --
+  tracked as pending work in each. cbzredactor's own equivalent
+  behavior is intentionally NOT migrated onto this: its rows are
+  indexed by list position, which native Qt sorting would silently
+  desync (see the module's own docstring).
 - epub's three existing lookup dialogs (`google_books_dialog.py`,
   `calibre_lookup_dialog.py`, `open_library_dialog.py`) are the exact
   shape `lookup_dialog.py` was generalized from, but haven't been
