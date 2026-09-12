@@ -141,7 +141,11 @@ been done yet.
   (the pattern-based batch tool) are still a local, pre-this-repo
   implementation, untouched. 2026-09-12: adopted `sortable_table.py`
   (click a header to sort) -- `FILE_ROLE` (`Qt.UserRole`)-based row
-  mapping already made this safe to add directly.
+  mapping already made this safe to add directly. Also adopted
+  `folder_refresh.py` (Refresh List) the same day -- F5 only, not the
+  family's usual F5/Ctrl+R, since Ctrl+R was already bound to this
+  project's own "Remux Selected to MP4..." (caught while verifying,
+  before it shipped as an ambiguous-shortcut bug).
 - **mp3**: menu bar rebuilt on the shared shape (Import is present but
   genuinely empty for now — v1 has no external-metadata-source actions
   yet, see the module docstring in its `main_window.py`). Gained
@@ -161,7 +165,8 @@ been done yet.
   epub's still-local quick-rename feature — see that module's own
   entry above. 2026-09-12: adopted `sortable_table.py` (click a header
   to sort) -- its own module docstring had already anticipated this by
-  building row->file mapping `Qt.UserRole`-based from the start.
+  building row->file mapping `Qt.UserRole`-based from the start. Also
+  adopted `folder_refresh.py` (Refresh List, F5/Ctrl+R) the same day.
 - **cbzredactor** (new project, 2026-09-05): its Comic Vine and GCD
   lookup modules were the trigger for promoting `lookup_client.py` and
   `lookup_dialog.py` in the first place -- both `core/comicvine_lookup.py`
@@ -262,16 +267,17 @@ before).
 
 ## Still open (not yet wired)
 
-- `folder_refresh.py` (new): epub's own `refresh_list()` isn't migrated
-  onto it -- same "extracted from epub, epub never migrated" pattern
-  as several entries below, deliberately not touched to avoid
-  regression risk in a repo actively developed elsewhere. cbzredactor's
-  own `refresh_list()` (independently rewritten, same behavior) is
-  also not migrated -- lower priority than epub's own, since it
-  already works and isn't duplicated code drifting between two call
-  sites the way the epub/mp3/video "extracted, never migrated" pattern
-  is. mp3 and video don't have Refresh List at all yet -- tracked as
-  pending work in each.
+- `folder_refresh.py`: adopted by mp3 and video (2026-09-12, both
+  same-day as this module; video's got F5 only, not F5/Ctrl+R -- Ctrl+R
+  collided with an existing action there). epub's own `refresh_list()`
+  isn't migrated onto it -- same "extracted from epub, epub never
+  migrated" pattern as several entries below, deliberately not touched
+  to avoid regression risk in a repo actively developed elsewhere.
+  cbzredactor's own `refresh_list()` (independently rewritten, same
+  behavior) is also not migrated -- lower priority than epub's own,
+  since it already works and isn't duplicated code drifting between
+  two call sites the way the epub/mp3/video "extracted, never
+  migrated" pattern is.
 - `sortable_table.py`: adopted by mp3 and video (2026-09-12, both
   same-day as this module). epub's own nine hand-written
   `was_sorting = table.isSortingEnabled(); ...` blocks aren't migrated
