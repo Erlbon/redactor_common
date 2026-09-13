@@ -90,3 +90,88 @@ def test_clear_drops_everything():
     manager.clear()
     assert manager.can_undo() is False
     assert manager.peek_label() is None
+
+
+def test_undo_without_snapshot_fn_gives_no_redo():
+    """Backward-compat path: a caller that doesn't pass snapshot_fn to
+    undo() gets the old undo-only behavior, no redo populated."""
+    manager = UndoManager()
+    item = _Item("original")
+    manager.push("Edit", [item], _snapshot)
+    item.value = "changed"
+
+    manager.undo(_restore)
+    assert item.value == "original"
+    assert manager.can_redo() is False
+    assert manager.redo(_restore) == []
+
+
+def test_undo_then_redo_restores_the_undone_value():
+    manager = UndoManager()
+    item = _Item("original")
+    manager.push("Edit", [item], _snapshot)
+    item.value = "changed"
+
+    manager.undo(_restore, _snapshot)
+    assert item.value == "original"
+    assert manager.can_redo() is True
+    assert manager.peek_redo_label() == "Edit"
+
+    affected = manager.redo(_restore, _snapshot)
+    assert affected == [item]
+    assert item.value == "changed"
+    assert manager.can_redo() is False
+    assert manager.can_undo() is True
+
+
+def test_redo_then_undo_round_trips():
+    manager = UndoManager()
+    item = _Item("v0")
+    manager.push("edit", [item], _snapshot)
+    item.value = "v1"
+
+    manager.undo(_restore, _snapshot)
+    manager.redo(_restore, _snapshot)
+    assert item.value == "v1"
+
+    manager.undo(_restore, _snapshot)
+    assert item.value == "v0"
+
+
+def test_new_push_clears_redo_history():
+    manager = UndoManager()
+    item = _Item("v0")
+    manager.push("edit1", [item], _snapshot)
+    item.value = "v1"
+    manager.undo(_restore, _snapshot)
+    assert manager.can_redo() is True
+
+    # A genuinely new edit invalidates the old redo future.
+    manager.push("edit2", [item], _snapshot)
+    assert manager.can_redo() is False
+    assert manager.redo(_restore, _snapshot) == []
+
+
+def test_cannot_redo_empty_stack():
+    manager = UndoManager()
+    assert manager.can_redo() is False
+    assert manager.peek_redo_label() is None
+    assert manager.redo(_restore) == []
+
+
+def test_max_entries_applies_to_redo_stack_too():
+    manager = UndoManager(max_entries=2)
+    item = _Item("v0")
+    for i in range(1, 4):
+        manager.push(f"edit{i}", [item], _snapshot)
+        item.value = f"v{i}"
+    # Undo everything reachable (edit3, edit2 -- edit1 was dropped).
+    manager.undo(_restore, _snapshot)
+    manager.undo(_restore, _snapshot)
+    assert manager.can_undo() is False
+    # Both undos are redoable...
+    manager.redo(_restore, _snapshot)
+    assert manager.can_redo() is True
+    manager.redo(_restore, _snapshot)
+    assert item.value == "v3"
+    assert manager.can_redo() is False
