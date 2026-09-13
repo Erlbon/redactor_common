@@ -42,18 +42,24 @@ REFRESH_LIST = ["F5", "Ctrl+R"]  # QKeySequence::Refresh is F5; Ctrl+R kept as t
 # this should call.
 RENAME_SINGLE_FILE = "F2"
 
-# The pattern-based BATCH rename/export tool (was on F2 in cbz/epub/mp3
-# until this shortcut audit -- F2 is Explorer's rename key and
-# shouldn't be spent on a dialog instead of the direct rename above).
-# videoredactor already used this key for the same shape of feature
-# before this audit; the other three are being aligned onto it.
-RENAME_EXPORT_BY_PATTERN = "Ctrl+Shift+R"
+# The pattern-based BATCH rename/export tool: builds a filename FROM
+# metadata -- "exporting" metadata into a filename, hence the E.
+# Briefly Ctrl+Shift+R right after the 2026-09-13 audit (matching
+# videoredactor's own pre-existing key for this shape of feature), then
+# moved here the same day once the E/I export/import pairing below was
+# requested -- deliberately pairs with PARSE_FILENAME_TO_METADATA's
+# Ctrl+I, not a coincidence.
+RENAME_EXPORT_BY_PATTERN = "Ctrl+E"
 
 # The reverse direction of the above: pulling metadata OUT of a
-# filename instead of building one FROM metadata. Was F3 in cbz/epub/
-# mp3 -- moved because F3 is QKeySequence::FindNext everywhere else
-# and a metadata tool has no business sitting on the search key.
-PARSE_FILENAME_TO_METADATA = "Ctrl+E"
+# filename instead of building one FROM metadata -- "importing"
+# metadata already implicit in the filename, hence the I; pairs with
+# RENAME_EXPORT_BY_PATTERN's Ctrl+E above. Was F3 in cbz/epub/mp3
+# before this audit -- moved because F3 is QKeySequence::FindNext
+# everywhere else and a metadata tool has no business sitting on the
+# search key; briefly Ctrl+E itself before the E/I pairing was
+# requested.
+PARSE_FILENAME_TO_METADATA = "Ctrl+I"
 
 # --- Operations ---
 UNDO = "Ctrl+Z"  # QKeySequence::Undo
