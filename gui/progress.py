@@ -39,6 +39,7 @@ def run_with_progress(
     threshold: int = 3,
     cancellable: bool = True,
     update_every: int = 1,
+    label_for: Callable[[T], str] | None = None,
 ) -> bool:
     """Runs `step(item, index)` for each item in `items`, showing a
     QProgressDialog only if len(items) >= threshold (items is consumed
@@ -53,6 +54,14 @@ def run_with_progress(
     rather than every single one -- cheap per-item operations (e.g.
     populating a table row) shouldn't pay a full event-loop pump each
     time; use a larger value (e.g. 50) for those.
+
+    `label_for`: optional per-item label text (e.g. "Saving: foo.epub")
+    instead of the one static `label` for the whole run -- set on every
+    item regardless of `update_every`, since setLabelText() alone is
+    cheap (no repaint without the processEvents() pump that already
+    follows it). Without this, epub and video had each independently
+    hand-rolled their own near-identical copy of this whole function
+    just to get per-item filenames in the dialog.
     """
     items = list(items)
     dialog = None
@@ -68,6 +77,8 @@ def run_with_progress(
         if dialog is not None and cancellable and dialog.wasCanceled():
             dialog.close()
             return False
+        if dialog is not None and label_for is not None:
+            dialog.setLabelText(label_for(item))
         step(item, index)
         if dialog is not None and (index % update_every == 0 or index == len(items) - 1):
             dialog.setValue(index + 1)

@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-12#02`.
+Currently: `2026-09-13#03`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -103,7 +103,7 @@ been done yet.
 | `grid_utils.py` | `absorb_extra_row_space()` — stops a fixed-row QGridLayout (the bulk-edit tag panels) from spreading leftover vertical space evenly into every row's gap on resize; collects it as blank space below instead | fixes a bug reported on mp3; epub's identically-structured grid had the same latent issue |
 | `zoom_toolbar.py` | The +/− table-font-zoom control (epub had it, video didn't — now shared) |
 | `column_settings_dialog.py` | "Add/Remove Columns" dialog, built on `core/table_settings.py` |
-| `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog) |
+| `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog); optional `label_for` gives each item its own label text (e.g. "Saving: foo.epub"), added so epub/video's own hand-rolled duplicates of this same function (just for that one capability) could be retired |
 | `qmessagebox_style.py` | App-wide `QMessageBox` max-width fix (one call in `main.py`) |
 | `about_dialog.py` | Shared About/Changelog/Credits dialogs (Markdown-rendering, logo, version header with optional `component_versions` + link-back `repo_url`/`component_repo_urls`) — promoted from epub's version |
 | `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once). Gained an optional grouping column (`group_column_label`) and a per-row `default_checked` state via `PreviewRow` (2026-09-10, promoted out of cbzredactor's per-file/per-field overwrite-review dialog) |
