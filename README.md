@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-13#04`.
+Currently: `2026-09-14#01`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -109,6 +109,7 @@ been done yet.
 | `about_dialog.py` | Shared About/Changelog/Credits dialogs (Markdown-rendering, logo, version header with optional `component_versions` + link-back `repo_url`/`component_repo_urls`) — promoted from epub's version |
 | `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once). Gained an optional grouping column (`group_column_label`) and a per-row `default_checked` state via `PreviewRow` (2026-09-10, promoted out of cbzredactor's per-file/per-field overwrite-review dialog) |
 | `search_replace_dialog.py`, `case_conversion_dialog.py` | Generalized dialogs built on `preview_table.py` |
+| `overwrite_review_dialog.py` | `OverwriteReviewDialog` + `build_overwrite_review_rows()` + `resolve_overwrite_conflicts()` — the per-file, per-field "review before overwrite" confirmation, built on `preview_table.py`'s grouping support. `resolve_overwrite_conflicts()` is the one call a consuming project's MainWindow needs: it checks whether a batch of changes would clobber anything, skips the dialog entirely if not, and otherwise shows every touched field with a blank-field-starts-ticked/real-overwrite-starts-unticked default | cbzredactor, promoted with zero code changes (its own version had no project-specific dependencies to begin with — duck-types on `.path`/`.metadata`) |
 | `auto_numbering_dialog.py` | Generalized Auto-Numbering dialog (field picker + start/increment/zero-pad/separator + preview), built on `preview_table.py` | video, generalized (epub's "Number Series" is a narrower, single-field version of the same idea and is unaffected; mp3/cbz had neither) |
 | `quick_series_number.py` | `prompt_and_generate_series_numbers()` — the one-prompt "starting value, +1 per row" quick numbering for a table right-click menu, no field picker/preview (that's what `auto_numbering_dialog.py` is for) | epub, generalized (its `quick_number_series()` right-click handler) |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
@@ -189,7 +190,14 @@ been done yet.
   gated on `self._selected_rows` directly, not `_target_books()`'s own
   select-or-fall-back-to-everything-loaded behavior used elsewhere in
   this project's context menu, so it's only offered for a genuine
-  single selection.
+  single selection. 2026-09-14: its own `gui/overwrite_review_dialog.py`
+  (`OverwriteReviewDialog` + `build_overwrite_review_rows()`) and
+  `MainWindow._resolve_overwrite_conflicts()` were promoted here
+  wholesale as `gui/overwrite_review_dialog.py`'s three exports (the
+  wrapper method became the free function `resolve_overwrite_conflicts()`)
+  -- cbzredactor's local copies were deleted and its `MainWindow` now
+  calls the shared version directly, so there's exactly one
+  implementation again rather than "the original" plus a fork.
 
 ### The tool_locator promotion, specifically
 
