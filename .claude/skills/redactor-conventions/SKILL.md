@@ -1,6 +1,6 @@
 ---
 name: redactor-conventions
-description: Family-wide conventions for the Redactor apps (epubredactor, mp3redactor, videoredactor, cbzredactor) and their shared redactor_common library -- git sync discipline across repos multiple Claude Code sessions edit concurrently, the promote-to-redactor_common-first pattern, the bump_version.py -> CHANGELOG -> release pipeline (including two real bugs already found and fixed in it, worth not reintroducing), keeping the public landing page's feature claims honest, and the Linux/Mac portability goal. Use this whenever working in any Redactor family repo (C:\Dev\redactor_common, epubredactor, mp3redactor, videoredactor, cbzredactor, redactor-build-tools, or the erlbon.github.io landing page) -- before editing code, committing, bumping a version, building a release, or touching the shared build/release scripts -- even if the user doesn't mention these conventions by name.
+description: Family-wide conventions for the Redactor apps (epubredactor, mp3redactor, videoredactor, cbzredactor) and their shared redactor_common library -- git sync discipline across repos multiple Claude Code sessions edit concurrently, the promote-to-redactor_common-first pattern, the mandatory version-bump-at-check-in rule, the mandatory progress-feedback-for-any-per-book-loop rule (run_with_progress()), the bump_version.py -> CHANGELOG -> release pipeline (including two real bugs already found and fixed in it, worth not reintroducing), keeping the public landing page's feature claims honest, and the Linux/Mac portability goal. Use this whenever working in any Redactor family repo (C:\Dev\redactor_common, epubredactor, mp3redactor, videoredactor, cbzredactor, redactor-build-tools, or the erlbon.github.io landing page) -- before editing code, committing, bumping a version, building a release, or touching the shared build/release scripts -- even if the user doesn't mention these conventions by name.
 ---
 
 # Redactor family conventions
@@ -60,6 +60,59 @@ one of these four repos, check: did this batch of commits bump
 `APP_VERSION` and add a `CHANGELOG.md` entry? If not, do it now, as
 its own commit, before considering the work done -- don't defer it to
 "whenever a release happens next."
+
+## Progress feedback is mandatory for any loop over the library
+
+**Any code that loops over more than a handful of books -- scanning to
+build a dialog's preview, applying a batch change, checking each one
+for an issue -- must go through `redactor_common.gui.progress.
+run_with_progress()` (or, if it doesn't fit that shape, some other
+visible progress indicator). Never leave the window looking frozen
+while real work happens underneath it, at any library size.** This
+applies to a dialog's own preview/scan step just as much as the
+"Apply" step that follows it -- a scan that freezes the UI while
+building the list of what WOULD change is exactly as bad as an apply
+that freezes while making the change.
+
+Why this is mandatory: epub shipped with 12 separate dialogs whose
+constructor ran a synchronous per-book loop with zero progress
+feedback -- found only because a user hit an actual freeze running
+Strip HTML from Description (lxml-parsing every book's description,
+genuinely slow at scale) on a 15,000+ book library, then asked
+"was this really checked anywhere else?" Auditing turned up the same
+gap in Case Conversion, Author Sort Conversion, Detect Missing Spaces,
+Rebuild Manifest, Repair Navigation, Compress Images, and Validate/Fix
+Issues -- every one of them silently vulnerable to the exact same
+freeze, just waiting for a large enough library to expose it. Nobody
+had decided any of these were safe to skip; progress feedback was
+simply never part of the checklist when each dialog was built.
+
+**How to apply:**
+- Before considering a new (or edited) batch dialog done, ask: does
+  its constructor, or any handler, loop over `self.books` (or a
+  filtered subset) doing real per-book work -- opening the archive,
+  parsing content, calling out to another process? If yes, wrap that
+  loop in `run_with_progress()`.
+- `cancellable=False` fits a read-only scan/preview step (nothing to
+  interrupt safely -- see `_rebuild_table()`'s own "Updating list"
+  dialog for the precedent); `cancellable=True` fits an apply step
+  that's actually writing/mutating as it goes.
+- **One real exception, not a loophole to lean on:** a preview that
+  re-runs on every keystroke (a live search/replace or rename-pattern
+  field) must NOT gain a progress dialog even if it loops over every
+  book -- popping a modal dialog on every keystroke is worse than the
+  problem it solves. This exception only applies when BOTH are true:
+  the loop re-runs on live text input, AND the per-item work is
+  confirmed cheap (pure string/regex logic, no file I/O -- verify with
+  an actual timing check at a large item count, don't assume). If
+  either doesn't hold, wrap it.
+- A scan whose per-item cost is "just building a few `QTableWidgetItem`s
+  from already-in-memory data" (no archive I/O) is lower-risk, but
+  still wrap it if it runs at dialog-open or after every Apply --
+  cheap today doesn't mean cheap after the next feature adds a costlier
+  per-item check to the same loop, and `run_with_progress()`'s own
+  `threshold` means an already-fast loop never shows a dialog anyway,
+  so wrapping it costs nothing.
 
 ## The promotion pattern
 
