@@ -34,6 +34,33 @@ immediately before every `git push`. Another session may have pushed
 while you were working. If local is now behind, fast-forward merge before
 pushing; if it's genuinely diverged, resolve that first.
 
+## Version bump is mandatory at check-in, not just before release
+
+**Any commit to one of the four apps that changes real code (not a
+docs-only or version-bump-only commit) must bump that app's own
+`APP_VERSION` (`python bump_version.py` in its repo) and add a matching
+`CHANGELOG.md` entry, in the same check-in -- before pushing, every
+time, without being asked.** This is a hard rule, not a reminder to
+consider: treat "I made a real code change" and "I bump the version"
+as one atomic action.
+
+Why this is mandatory rather than just good practice: it was missed
+TWICE on epubredactor within the same few days (2026-09-14, discovered
+only when `release-epubredactor.ps1` hard-errored with "Tag and
+Release both already exist" on a version that had never actually been
+released with those changes in it; 2026-09-17, a second batch of real
+commits landed with no version bump at all, caught only because the
+user noticed and had to ask for it explicitly). Waiting until someone
+runs the release script -- or until the user has to ask -- means the
+version history and `CHANGELOG.md` silently fall behind what's
+actually on `main`, which defeats the entire point of both.
+
+**How to apply:** before ending any turn that committed real code to
+one of these four repos, check: did this batch of commits bump
+`APP_VERSION` and add a `CHANGELOG.md` entry? If not, do it now, as
+its own commit, before considering the work done -- don't defer it to
+"whenever a release happens next."
+
 ## The promotion pattern
 
 If a fix or feature belongs in more than one app, it belongs in
@@ -70,20 +97,14 @@ in one command, skipping any app already released at its current
 version. This tooling is machine-local (`_shared-tools` is
 deliberately not git-tracked), unlike `redactor-build-tools`.
 
-**Bump that app's own `APP_VERSION` (`python bump_version.py` in its
-repo) before running its release script, any time real code changes
-have been committed since the last release** -- not just after a
-`redactor_common` promotion (see step 5 above). `release.ps1` reads
-whatever `core/version.py` currently says; it does NOT bump it for
-you, and it doesn't detect "there are new commits but the version
-string wasn't touched" -- it only compares the version string against
-existing tags/releases. Forgetting this means the script hard-errors
-with "Tag vX and its GitHub Release both already exist" on a version
-that was actually never released with these changes in it (hit for
-real on epubredactor, 2026-09-17: several commits landed, version
-stayed at `2026-09-14#05`, `release-epubredactor.ps1` refused to run
-until `bump_version.py` was run and the bump + a matching
-`CHANGELOG.md` entry were committed and pushed).
+`release.ps1` reads whatever `core/version.py` currently says -- it does
+NOT bump it for you, and it doesn't detect "there are new commits but
+the version string wasn't touched," it only compares the version
+string against existing tags/releases. If the mandatory check-in-time
+bump above is actually being followed, this should never come up in
+practice; it hard-errors with "Tag vX and its GitHub Release both
+already exist" if it does (a version that was never actually released
+with the pending changes in it).
 
 Two real bugs already found and fixed here (2026-09-14) -- worth
 knowing before touching `release.ps1` again, so they don't come back:
