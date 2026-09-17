@@ -70,6 +70,21 @@ in one command, skipping any app already released at its current
 version. This tooling is machine-local (`_shared-tools` is
 deliberately not git-tracked), unlike `redactor-build-tools`.
 
+**Bump that app's own `APP_VERSION` (`python bump_version.py` in its
+repo) before running its release script, any time real code changes
+have been committed since the last release** -- not just after a
+`redactor_common` promotion (see step 5 above). `release.ps1` reads
+whatever `core/version.py` currently says; it does NOT bump it for
+you, and it doesn't detect "there are new commits but the version
+string wasn't touched" -- it only compares the version string against
+existing tags/releases. Forgetting this means the script hard-errors
+with "Tag vX and its GitHub Release both already exist" on a version
+that was actually never released with these changes in it (hit for
+real on epubredactor, 2026-09-17: several commits landed, version
+stayed at `2026-09-14#05`, `release-epubredactor.ps1` refused to run
+until `bump_version.py` was run and the bump + a matching
+`CHANGELOG.md` entry were committed and pushed).
+
 Two real bugs already found and fixed here (2026-09-14) -- worth
 knowing before touching `release.ps1` again, so they don't come back:
 
