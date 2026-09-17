@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-14#01`.
+Currently: `2026-09-17#01`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -128,6 +128,21 @@ been done yet.
   kept as a project-specific extra menu. About/Changelog now use the
   shared `about_dialog.py` (its own local `gui/about_dialog.py` was
   deleted). `.spec`-based build (`epubredactor.spec`, new).
+  2026-09-17: consolidated its remaining 9 hand-rolled `QProgressDialog`
+  blocks (Loading, Updating list, Calibre/Google Books/Open Library
+  lookups, Content Scan, Import to EPUB, Polish Book, Send to Kobo) onto
+  `progress.py`'s `run_with_progress()` -- the last of the four apps
+  still doing this by hand (mp3 already had, see below). Prompted by a
+  real, reported bug: those dialogs' label text varied per item (e.g.
+  "Loading: <filename>"), and a `QProgressDialog` grows to fit the
+  longest label seen but never shrinks back down for a shorter one
+  after, which looked like the dialog jumping around in size through a
+  batch of files with very different name lengths. Fixed at the source
+  instead of per call site: `run_with_progress()` now fixes the dialog
+  width (`PROGRESS_DIALOG_WIDTH`, not just a minimum -- a minimum alone
+  doesn't stop the one-way growth) and elides any `label_for()` text
+  past `_MAX_LABEL_LENGTH` chars, so every consumer of this helper gets
+  a visually steady dialog for free, not just epub.
 - **video**: menu bar rebuilt the same way; gained the +/− zoom toolbar
   control it never had. `core/table_settings.py` is now a thin wrapper
   delegating to `redactor_common.core.table_settings` — confirmed via

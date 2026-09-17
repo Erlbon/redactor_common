@@ -30,6 +30,31 @@ from PyQt6.QtWidgets import QApplication, QProgressDialog, QWidget
 
 T = TypeVar("T")
 
+# Wide enough for a typical "Verb: reasonably-long-filename.ext" label
+# to read comfortably -- paired with _elide_label() below so a per-item
+# label (see `label_for`) never needs more than this to fit. Applied as
+# a FIXED width (see setFixedWidth() below), not just a minimum: a
+# QProgressDialog grows to fit whatever the longest label text seen so
+# far needed, but doesn't shrink back down once a later, shorter label
+# follows -- a minimum alone still lets that one-way growth happen, and
+# looks like the dialog jumping around in size as items with very
+# different filename lengths go by.
+PROGRESS_DIALOG_WIDTH = 420
+_MAX_LABEL_LENGTH = 70
+
+
+def _elide_label(text: str, max_length: int = _MAX_LABEL_LENGTH) -> str:
+    """Pure logic, split out for testability: truncates `text` to at
+    most `max_length` characters, keeping the start and adding a
+    trailing "…" if it was longer. Used on label_for()'s per-item
+    result -- the one static `label` (the whole-run fallback) is never
+    elided, since the caller wrote that one deliberately and it doesn't
+    vary per item."""
+    text = text or ""
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 1].rstrip() + "…"
+
 
 def run_with_progress(
     parent: QWidget,
@@ -71,6 +96,17 @@ def run_with_progress(
         )
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
+        # Fixed, not just minimum -- a QProgressDialog grows to fit
+        # whatever its longest label text so far needed, but doesn't
+        # shrink back down once a later, shorter label follows (Qt only
+        # grows a widget to fit new content, it doesn't proactively
+        # re-shrink it). A minimum-only width still lets that one-way
+        # ratchet happen upward past it; fixing the width outright is
+        # what actually keeps the dialog visually steady for the whole
+        # run. _elide_label() below caps how much text the label ever
+        # has to fit, so eliding to fit this fixed width reads sensibly
+        # rather than getting mid-word cut off.
+        dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
         dialog.show()
 
     for index, item in enumerate(items):
@@ -78,7 +114,7 @@ def run_with_progress(
             dialog.close()
             return False
         if dialog is not None and label_for is not None:
-            dialog.setLabelText(label_for(item))
+            dialog.setLabelText(_elide_label(label_for(item)))
         step(item, index)
         if dialog is not None and (index % update_every == 0 or index == len(items) - 1):
             dialog.setValue(index + 1)
