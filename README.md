@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-17#01`.
+Currently: `2026-09-17#02`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -105,6 +105,7 @@ been done yet.
 | `column_settings_dialog.py` | "Add/Remove Columns" dialog, built on `core/table_settings.py` |
 | `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog); optional `label_for` gives each item its own label text (e.g. "Saving: foo.epub"), added so epub/video's own hand-rolled duplicates of this same function (just for that one capability) could be retired |
 | `async_icon_cache.py` | `AsyncIconCache` — caches a computed `QIcon` per item (invalidated only when its source image bytes actually change) and decodes/scales a cache miss off the main thread via `QThreadPool`, so a table full of these never blocks its own population on image decoding | epub, generalized (its table cover-icon re-decoded from scratch on every single rebuild, even for a cover that hadn't changed) |
+| `async_hash_cache.py` | `AsyncHashCache` — same shape as `async_icon_cache.py` but for a SHA-256 hex digest instead of a `QIcon`; hashes a cache miss off the main thread | epub's Junk Cover column (2026-09-17): identifying a book's cover as junk means hashing the full cover image, once per book, on every table rebuild — real seconds of synchronous hashing for a large library with real cover art, found profiling a reported "Updating list is still slow" regression |
 | `qmessagebox_style.py` | App-wide `QMessageBox` max-width fix (one call in `main.py`) |
 | `about_dialog.py` | Shared About/Changelog/Credits dialogs (Markdown-rendering, logo, version header with optional `component_versions` + link-back `repo_url`/`component_repo_urls`) — promoted from epub's version |
 | `preview_table.py` | Shared "before/after + Apply checkbox" table controller (epub built this pattern twice independently for Search/Replace and Case Conversion — now once). Gained an optional grouping column (`group_column_label`) and a per-row `default_checked` state via `PreviewRow` (2026-09-10, promoted out of cbzredactor's per-file/per-field overwrite-review dialog) |
