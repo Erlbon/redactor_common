@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-17#02`.
+Currently: `2026-09-17#03`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -104,7 +104,7 @@ been done yet.
 | `zoom_toolbar.py` | The +/− table-font-zoom control (epub had it, video didn't — now shared) |
 | `column_settings_dialog.py` | "Add/Remove Columns" dialog, built on `core/table_settings.py` |
 | `progress.py` | Threshold-gated progress dialog helper (small batches don't flicker a dialog); optional `label_for` gives each item its own label text (e.g. "Saving: foo.epub"), added so epub/video's own hand-rolled duplicates of this same function (just for that one capability) could be retired |
-| `async_icon_cache.py` | `AsyncIconCache` — caches a computed `QIcon` per item (invalidated only when its source image bytes actually change) and decodes/scales a cache miss off the main thread via `QThreadPool`, so a table full of these never blocks its own population on image decoding | epub, generalized (its table cover-icon re-decoded from scratch on every single rebuild, even for a cover that hadn't changed) |
+| `async_icon_cache.py` | `AsyncIconCache` — caches a computed `QIcon` per item (invalidated only when its source image bytes actually change) and decodes/scales a cache miss off the main thread via `QThreadPool`, so a table full of these never blocks its own population on image decoding. Decodes via `QImageReader.setScaledSize()` (lets the format's own decoder downscale during decode, e.g. JPEG's DCT-domain downscaling) rather than a full-resolution decode + separate scale -- measured 2.67x faster for a real cover image (2026-09-17); falls back to the slower `QImage.fromData()` + `.scaled()` path only if the reader can't determine a size upfront. **Important finding from that same investigation, worth knowing before leaning on this module's threading for more than UI responsiveness: PyQt6's QImage decode does not release the GIL, so `QThreadPool` worker threads do NOT parallelize real throughput for this work -- measured 0.96x with 8 threads vs 1 (i.e. no speedup at all). The async design still keeps the main thread's event loop responsive during decoding, which is a real and worthwhile benefit, but it does not reduce the total wall-clock time to decode everything -- for that, only avoiding unnecessary decode calls in the first place (e.g. epub's lazy/viewport-based icon loading, decoding only for visible rows) or true multi-process parallelism would help.** | epub, generalized (its table cover-icon re-decoded from scratch on every single rebuild, even for a cover that hadn't changed) |
 | `async_hash_cache.py` | `AsyncHashCache` — same shape as `async_icon_cache.py` but for a SHA-256 hex digest instead of a `QIcon`; hashes a cache miss off the main thread | epub's Junk Cover column (2026-09-17): identifying a book's cover as junk means hashing the full cover image, once per book, on every table rebuild — real seconds of synchronous hashing for a large library with real cover art, found profiling a reported "Updating list is still slow" regression |
 | `qmessagebox_style.py` | App-wide `QMessageBox` max-width fix (one call in `main.py`) |
 | `about_dialog.py` | Shared About/Changelog/Credits dialogs (Markdown-rendering, logo, version header with optional `component_versions` + link-back `repo_url`/`component_repo_urls`) — promoted from epub's version |

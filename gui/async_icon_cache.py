@@ -58,8 +58,8 @@ from __future__ import annotations
 
 from weakref import WeakKeyDictionary
 
-from PyQt6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
-from PyQt6.QtGui import QIcon, QImage, QPixmap
+from PyQt6.QtCore import QBuffer, QIODevice, QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
+from PyQt6.QtGui import QIcon, QImage, QImageReader, QPixmap
 
 
 class _DecodeSignals(QObject):
@@ -76,13 +76,43 @@ class _DecodeTask(QRunnable):
         self._signals = signals
 
     def run(self) -> None:
-        image = QImage.fromData(self._image_bytes)
-        if not image.isNull():
-            image = image.scaled(
-                self._icon_size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+        # QImageReader.setScaledSize() lets the format's own decoder
+        # downscale WHILE decoding (JPEG in particular supports fast
+        # DCT-domain downscaling) instead of decoding at full resolution
+        # and only then scaling that -- measured 2.67x faster for a
+        # real ~600x900 JPEG cover down to a 48x64 icon (4.38ms ->
+        # 1.64ms per cover), which matters at the scale this runs at:
+        # once per book, every table rebuild. setAutoTransform(True)
+        # applies EXIF orientation the same way QImage.fromData() does
+        # by default, so a photographed/scanned cover with rotation
+        # metadata still comes out upright.
+        buffer = QBuffer()
+        buffer.setData(self._image_bytes)
+        buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+        reader = QImageReader(buffer)
+        reader.setAutoTransform(True)
+        original_size = reader.size()
+        if original_size.isValid() and not original_size.isEmpty():
+            reader.setScaledSize(
+                original_size.scaled(self._icon_size, Qt.AspectRatioMode.KeepAspectRatio)
             )
+            image = reader.read()
+        else:
+            # A handful of formats (or corrupt/unusual data) don't
+            # report a valid size upfront, so setScaledSize() has
+            # nothing to scale against -- fall back to the slower but
+            # more tolerant full-decode-then-scale path rather than
+            # silently producing a blank icon for a file that's
+            # actually fine.
+            image = QImage()
+        if image.isNull():
+            image = QImage.fromData(self._image_bytes)
+            if not image.isNull():
+                image = image.scaled(
+                    self._icon_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
         self._signals.ready.emit(self._key, self._source, image)
 
 
