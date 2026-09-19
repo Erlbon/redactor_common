@@ -33,6 +33,18 @@ what was found. A subclass supplies:
     `[("series", "Series"), ("number", "Number")]`. Omit entirely (or
     pass an empty list) for a subclass with nothing worth correcting
     per-item -- the correction form is simply not shown then.
+  - `resolve_alternative(item, data) -> LookupResult` (optional): turns
+    one of a row's `LookupResult.alternatives` back into a full
+    `LookupResult` once the user actually picks it (e.g. fetching that
+    candidate's full credits, the way the initial top match was
+    fetched). Omit entirely for a subclass whose `search_one()` never
+    populates `alternatives` -- the "other matches" list is then simply
+    not built at all, so this is fully backward compatible with an
+    existing subclass. `data` is whatever opaque object the subclass
+    put on the `LookupAlternative` (see below); the base class never
+    looks inside it. A returned result with a blank `used_query`/
+    `alternatives` inherits the row's previous ones, so a subclass only
+    needs to supply `fields`/`cover_bytes`/`error`.
 
 Cover images are shown for confirmation only and are never applied
 automatically -- none of the consuming dialogs today write a fetched
@@ -87,6 +99,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
@@ -108,6 +122,21 @@ COVER_PREVIEW_MIN_SIZE = (170, 250)
 
 
 @dataclass
+class LookupAlternative:
+    """One additional candidate a subclass found for a row, besides the
+    one `search_one()` already resolved into `LookupResult.fields`/
+    `cover_bytes` -- e.g. a source whose search is loose text relevance
+    rather than a strict match can turn up several plausible issues for
+    one query. `label` is shown as-is in the "other matches" list;
+    `data` is an opaque handle the subclass's own
+    `resolve_alternative(item, data)` knows how to turn into a fresh
+    LookupResult -- the base class never looks inside it."""
+
+    label: str
+    data: object = None
+
+
+@dataclass
 class LookupResult:
     """What `search_one(item, query_override)` returns for one row.
 
@@ -124,6 +153,11 @@ class LookupResult:
     guess) -- shown in the correction form so the user can see what
     was searched for and tweak it, not just guess blindly.
 
+    `alternatives`: other candidates besides this one that `search_one`
+    found for the same row (see `LookupAlternative`) -- shown as a
+    pickable list when the dialog was given a `resolve_alternative`
+    callback; ignored (and the list left empty) otherwise.
+
     `error`: collected into the dialog's status-line summary instead of
     (not in addition to) a Found-column entry for this row; the row's
     checkbox is disabled either way (nothing to apply).
@@ -132,6 +166,7 @@ class LookupResult:
     fields: dict = field(default_factory=dict)
     cover_bytes: Optional[bytes] = None
     used_query: dict = field(default_factory=dict)
+    alternatives: list = field(default_factory=list)
     error: Optional[str] = None
 
     @property
@@ -152,6 +187,7 @@ class LookupDialogBase(QDialog):
         search_one: Callable[[object, dict], LookupResult],
         query_fields: Optional[list[tuple[str, str]]] = None,
         get_local_cover: Optional[Callable[[object], Optional[bytes]]] = None,
+        resolve_alternative: Optional[Callable[[object, object], LookupResult]] = None,
         progress_threshold: int = 3,
     ):
         super().__init__(parent)
@@ -164,6 +200,7 @@ class LookupDialogBase(QDialog):
         self._search_label = search_label
         self._query_fields = query_fields or []
         self._get_local_cover = get_local_cover
+        self._resolve_alternative = resolve_alternative
         self._progress_threshold = progress_threshold
         self._checkboxes: dict[int, QCheckBox] = {}
         self._row_results: dict[int, LookupResult] = {}
@@ -234,6 +271,16 @@ class LookupDialogBase(QDialog):
         self.detail_cover_found = self._build_cover_slot(covers_row, "Found")
         layout.addLayout(covers_row, 1)
 
+        self.alt_list = None
+        if self._resolve_alternative is not None:
+            alt_box = QGroupBox("Other Matches Found")
+            alt_layout = QVBoxLayout(alt_box)
+            self.alt_list = QListWidget()
+            self.alt_list.setMaximumHeight(110)
+            self.alt_list.itemSelectionChanged.connect(self._on_alternative_picked)
+            alt_layout.addWidget(self.alt_list)
+            layout.addWidget(alt_box)
+
         if self._query_fields:
             query_box = QGroupBox("Search Query")
             query_form = QFormLayout(query_box)
@@ -292,6 +339,8 @@ class LookupDialogBase(QDialog):
             edit.setEnabled(enabled)
         if hasattr(self, "search_this_btn"):
             self.search_this_btn.setEnabled(enabled)
+        if self.alt_list is not None:
+            self.alt_list.setEnabled(enabled)
 
     def add_toolbar_button(self, button: QPushButton) -> None:
         """Lets a subclass insert its own button (e.g. Comic Vine's
@@ -319,6 +368,8 @@ class LookupDialogBase(QDialog):
             label.set_original_pixmap(None)
             label.setText("Select a row")
         self.detail_summary.setText("")
+        if self.alt_list is not None:
+            self.alt_list.clear()
 
         progress = QProgressDialog(self._search_label, "Cancel", 0, len(self.items), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -343,10 +394,16 @@ class LookupDialogBase(QDialog):
         """Runs search_one() for one row and updates its table cells --
         used both for the initial batch search and for "Search This
         Item" re-running just the selected row."""
-        label = self._item_label(item)
         result = self._search_one(item, query_override)
         self._row_results[row] = result
+        self._update_row_cells(row, item, result)
 
+    def _update_row_cells(self, row: int, item: object, result: LookupResult) -> None:
+        """Refreshes one row's table cells from an already-computed
+        LookupResult -- split out of `_process_row()` so picking an
+        alternative (which resolves a fresh LookupResult without
+        re-running search_one()) can reuse the same cell-update logic."""
+        label = self._item_label(item)
         self.table.setItem(row, BOOK_COL, self._readonly_item(label))
         cb = self._checkboxes.get(row) or QCheckBox()
         cb.setChecked(result.found)
@@ -385,13 +442,22 @@ class LookupDialogBase(QDialog):
                 label.set_original_pixmap(None)
                 label.setText("Select a row")
             self.detail_summary.setText("")
+            if self.alt_list is not None:
+                self.alt_list.clear()
             return
 
         row = rows[0].row()
         self._current_detail_row = row
         self._set_detail_enabled(True)
         result = self._row_results.get(row)
+        self._render_detail(row, result)
+        self._populate_alternatives(result)
 
+    def _render_detail(self, row: int, result: Optional[LookupResult]) -> None:
+        """Refreshes the covers, query-correction fields, and summary
+        text for the given row's (already-resolved) result -- shared by
+        selecting a row and by picking one of its alternatives, which
+        needs the same refresh without touching the alt list itself."""
         local_cover = self._get_local_cover(self.items[row]) if self._get_local_cover else None
         self._set_cover(self.detail_cover_current, local_cover, "No local cover")
         self._set_cover(
@@ -413,6 +479,50 @@ class LookupDialogBase(QDialog):
         else:
             self.detail_summary.setText("(no match)")
             self.detail_summary.setTextFormat(Qt.TextFormat.PlainText)
+
+    def _populate_alternatives(self, result: Optional[LookupResult]) -> None:
+        """Fills the "other matches" list from the selected row's
+        LookupResult.alternatives, if the dialog was given a
+        `resolve_alternative` callback at all -- signals are blocked
+        while rebuilding so this never re-fires `_on_alternative_picked`
+        for whatever happened to already be selected."""
+        if self.alt_list is None:
+            return
+        self.alt_list.blockSignals(True)
+        try:
+            self.alt_list.clear()
+            for alt in (result.alternatives if result else []):
+                list_item = QListWidgetItem(alt.label)
+                list_item.setData(Qt.ItemDataRole.UserRole, alt)
+                self.alt_list.addItem(list_item)
+        finally:
+            self.alt_list.blockSignals(False)
+
+    def _on_alternative_picked(self) -> None:
+        if self._resolve_alternative is None:
+            return
+        row = self._current_detail_row
+        if row < 0:
+            return
+        selected = self.alt_list.selectedItems()
+        if not selected:
+            return
+        alt = selected[0].data(Qt.ItemDataRole.UserRole)
+        previous = self._row_results.get(row)
+
+        new_result = self._resolve_alternative(self.items[row], alt.data)
+        if not new_result.used_query and previous:
+            new_result.used_query = previous.used_query
+        if not new_result.alternatives and previous:
+            new_result.alternatives = previous.alternatives
+
+        self._row_results[row] = new_result
+        self._update_row_cells(row, self.items[row], new_result)
+        self._refresh_status()
+        # Re-sync covers/summary/query fields, without rebuilding (and
+        # re-selecting) the alt list itself -- it already reflects the
+        # right candidates.
+        self._render_detail(row, new_result)
 
     def _search_current_row(self) -> None:
         row = self._current_detail_row
