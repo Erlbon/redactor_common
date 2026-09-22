@@ -17,12 +17,12 @@ import os
 from typing import Callable, TypeVar
 
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox,
-    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog,
+    QDialogButtonBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
-from redactor_common.core.rename_pattern import render_filename, unique_path
+from redactor_common.core.rename_pattern import render_filename, unique_path, zero_pad_numeric_value
 from redactor_common.gui.pattern_field_panel import PatternFieldPanel
 
 T = TypeVar("T")
@@ -40,7 +40,9 @@ class RenamePatternDialog(QDialog):
         title: str = "Rename / Export by Metadata Pattern",
         item_noun: str = "item",
         zero_pad_field: str | None = None,
-        zero_pad_label: str = "Zero-pad number to 2 digits (e.g. 02)",
+        zero_pad_label: str = "Zero-pad number to:",
+        zero_pad_widths: tuple[int, ...] = (2, 3, 4),
+        always_pad_fields: dict[str, int] | None = None,
         parent=None,
     ):
         """
@@ -48,8 +50,14 @@ class RenamePatternDialog(QDialog):
         dict (already reflecting any unsaved in-memory edits).
         `get_current_path(item)` returns the item's current file path.
         `zero_pad_field`, if given, is the placeholder key that gets
-        zero-padding applied when the checkbox is on (e.g. "series_index"
-        or "episode").
+        zero-padding applied -- to whichever of `zero_pad_widths` is
+        picked in the dropdown -- when the checkbox is on (e.g.
+        "series_index" or "episode").
+        `always_pad_fields`, if given, is a field -> width map applied
+        unconditionally, no checkbox involved (e.g. {"month": 2} so a
+        %month% token always renders "02", never "2" -- unlike
+        `zero_pad_field`, this isn't a per-run user choice, it's always
+        correct for that field).
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -58,13 +66,14 @@ class RenamePatternDialog(QDialog):
         self._get_values = get_values
         self._get_current_path = get_current_path
         self._zero_pad_field = zero_pad_field
+        self._always_pad_fields = always_pad_fields or {}
         self.output_folder: str | None = None
 
-        self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label)
+        self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths)
         self._refresh_preview()
 
     def _build_ui(
-        self, placeholders, pattern_history, default_pattern, item_noun, zero_pad_label
+        self, placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths
     ) -> None:
         outer = QHBoxLayout(self)
 
@@ -87,11 +96,21 @@ class RenamePatternDialog(QDialog):
         outer.addWidget(self._panel.placeholder_list, 1)
 
         if self._zero_pad_field:
+            pad_row = QHBoxLayout()
             self.zero_pad_cb = QCheckBox(zero_pad_label)
             self.zero_pad_cb.stateChanged.connect(self._refresh_preview)
-            layout.addWidget(self.zero_pad_cb)
+            pad_row.addWidget(self.zero_pad_cb)
+
+            self.zero_pad_width_combo = QComboBox()
+            for width in zero_pad_widths:
+                self.zero_pad_width_combo.addItem(f"{width} digits (e.g. {str(1).zfill(width)})", width)
+            self.zero_pad_width_combo.currentIndexChanged.connect(self._refresh_preview)
+            pad_row.addWidget(self.zero_pad_width_combo)
+            pad_row.addStretch(1)
+            layout.addLayout(pad_row)
         else:
             self.zero_pad_cb = None
+            self.zero_pad_width_combo = None
 
         mode_box = QGroupBox("Action")
         mode_layout = QVBoxLayout(mode_box)
@@ -154,6 +173,7 @@ class RenamePatternDialog(QDialog):
     def _refresh_preview(self) -> None:
         pattern = self.pattern_edit.text()
         zero_pad = bool(self.zero_pad_cb and self.zero_pad_cb.isChecked())
+        zero_pad_width = self.zero_pad_width_combo.currentData() if self.zero_pad_width_combo else 2
 
         self._planned: list[tuple[T, str, str]] = []  # (item, old_path, new_stem)
         self.preview_table.setRowCount(len(self.items))
@@ -162,8 +182,10 @@ class RenamePatternDialog(QDialog):
         for row, item in enumerate(self.items):
             values = dict(self._get_values(item))
             if zero_pad and self._zero_pad_field and self._zero_pad_field in values:
-                from redactor_common.core.rename_pattern import zero_pad_numeric_value
-                values[self._zero_pad_field] = zero_pad_numeric_value(values[self._zero_pad_field])
+                values[self._zero_pad_field] = zero_pad_numeric_value(values[self._zero_pad_field], zero_pad_width)
+            for field, width in self._always_pad_fields.items():
+                if field in values:
+                    values[field] = zero_pad_numeric_value(values[field], width)
 
             old_path = self._get_current_path(item)
             old_name = os.path.basename(old_path)

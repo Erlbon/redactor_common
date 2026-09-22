@@ -40,21 +40,21 @@ _RESERVED_NAMES = {
 MAX_FILENAME_LENGTH = 150  # stem only, conservative vs. Windows' ~255 path limit
 
 
-def zero_pad_numeric_value(value: str) -> str:
+def zero_pad_numeric_value(value: str, width: int = 2) -> str:
     """Zero-pad a numeric field (e.g. a series index or episode number)
-    to at least 2 digits, correctly handling decimal sub-indices like
-    "5.5" -> "05.5" (only the integer part gets padded; the fractional
-    part is left exactly as typed)."""
+    to at least `width` digits, correctly handling decimal sub-indices
+    like "5.5" -> "05.5" (only the integer part gets padded; the
+    fractional part is left exactly as typed)."""
     value = (value or "").strip()
     if not value:
         return value
     if "." in value:
         int_part, sep, frac_part = value.partition(".")
         if int_part.isdigit():
-            return f"{int_part.zfill(2)}{sep}{frac_part}"
+            return f"{int_part.zfill(width)}{sep}{frac_part}"
         return value
     if value.isdigit():
-        return value.zfill(2)
+        return value.zfill(width)
     return value
 
 

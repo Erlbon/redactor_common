@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-17#03`.
+Currently: `2026-09-22#01`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
