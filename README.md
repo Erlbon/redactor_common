@@ -16,7 +16,7 @@ here while three separate hand-copied copies kept shipping it broken).
 In a consuming project's `requirements.txt`:
 
 ```
-redactor_common @ git+https://github.com/Erlbon/redactor_common.git@2026-09-23-01
+redactor_common @ git+https://github.com/Erlbon/redactor_common.git@2026-09-23-02
 ```
 
 Pin to a tag (see "Releasing a new version" below), not `@main` --
@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-23#01`.
+Currently: `2026-09-23#02`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -104,7 +104,7 @@ past exactly that on 2026-09-23.
 | `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus`. `populate_menu()` (public) fills any QMenu from the same declarative item list — what `context_menu.py`/`column_menu.py` build their right-click menus on |
 | `context_menu.py` | Shared table right-click menu: selection-fix (right-click outside the selection replaces it, matching Explorer) + generic "Open Containing Folder"/"Copy Path", with each project's own actions layered on via `extra_items` | epub, generalized (mp3 and video had no equivalent, or a much thinner one) |
 | `column_menu.py` | Shared column-header right-click menu: inline show/hide checklist + a link to `column_settings_dialog.py` | video, generalized (epub only had a "Hide `<this column>`" quick action; mp3 has no column-visibility system to hang this on yet) |
-| `image_label.py` | `AspectRatioImageLabel` — a QLabel that rescales its pixmap to fit on every resize | epub, already generic |
+| `image_label.py` | `AspectRatioImageLabel` -- a QLabel that rescales its pixmap to fit on every resize. Its size hints ignore the pixmap (2026-09-23), so a pane that scaled an image up can still be dragged smaller again | epub, already generic |
 | `collapsible_splitter.py` | `SplitterPaneCollapser` (window-side resize/restore logic) + `CollapseToggleButton` (the panel's own "◀"/"▶" button) for a collapsible side-panel splitter | epub, generalized (video had the same 2-pane splitter shape but no collapse mechanism at all; mp3 has no side panel) |
 | `grid_utils.py` | `absorb_extra_row_space()` — stops a fixed-row QGridLayout (the bulk-edit tag panels) from spreading leftover vertical space evenly into every row's gap on resize; collects it as blank space below instead | fixes a bug reported on mp3; epub's identically-structured grid had the same latent issue |
 | `zoom_toolbar.py` | The +/− table-font-zoom control (epub had it, video didn't — now shared) |
@@ -128,6 +128,7 @@ past exactly that on 2026-09-23.
 | `quick_pick_dialog.py` | `QuickPickDialog` — a searchable, fixed-size list-picker popup (filter box + internally-scrolling list + OK/Cancel always visible) for a field's "+" quick-pick button; single- or multi-select, with an optional "Add Custom..." callback | cbzredactor, replacing a flat `QMenu` that overflowed the screen once enough custom genres piled up ("the genre list gets too long to see the apply button") -- epub's Genre/Language pickers moved onto it 2026-09-23 |
 | `theme.py` | `apply_theme(app)` — Fusion style + an explicit, WCAG-contrast-verified light/dark QPalette (auto-detected from the OS via `QStyleHints.colorScheme()`), so selection is actually visible in dark mode and looks identical across every app that calls it at startup | cbzredactor ("can't see what is selected in dark mode... want uniform behaviour across the apps") -- wired into epub/mp3/video's own `main.py` too, one line each, since "uniform" was the explicit ask |
 | `standard_shortcuts.py` | Canonical shortcut-string constants (`LOAD_FILES`, `SAVE_AS`, `RENAME_SINGLE_FILE`, `RENAME_EXPORT_BY_PATTERN`, `PARSE_FILENAME_TO_METADATA`, `REDO`, `HELP`, ...) for every action shape all four apps share, matching Qt's own `QKeySequence::StandardKey` Windows bindings where one exists (verified via `QKeySequence.keyBindings()`, not assumed) — a project imports these instead of repeating literal key strings. `RENAME_EXPORT_BY_PATTERN`/`PARSE_FILENAME_TO_METADATA` are a deliberate Ctrl+E/Ctrl+I export/import mnemonic pair (changed same-day from an initial Ctrl+Shift+R/Ctrl+E pairing once that pairing was explicitly requested). See its own module docstring for the full rationale and the 2026-09-13 audit that produced it (mp3 missing Ctrl+O entirely, Parse Filename squatting on F3, three different "Save As" keys, videoredactor's Exit bound to a StandardKey that doesn't work on Windows) | 2026-09-13, consumed by cbz/epub/mp3/video |
+| `image_pane.py` | `ImagePreviewBox` (titled image area that fills and rescales to its space, with room for a caption/buttons) + `ImagePanelSplitter` (fields on top, image below, draggable divider; both panes wrapped so the fields scroll instead of squashing and the group box's title can't block panel collapse) -- the resizable cover/thumbnail area of every side panel | 2026-09-23; epub, video and cbz each had their own copy of the splitter, and mp3's cover started out fixed-height |
 | `app_bootstrap.py` | `run_app(app_name, window_factory, crash_log_path, app_user_model_id, icon_path)` -- the whole startup sequence: crash logging + "Unexpected Error" dialog, Windows taskbar AppUserModelID, QApplication + icon, `apply_theme()`, `apply_message_box_style()` | 2026-09-23; every `main.py` was a variation of this (video had no crash log or icon) |
 | `image_decode.py` | `decode_scaled(bytes, size)` -- decode straight to a target size via `QImageReader.setScaledSize()`, never upscaling; safe on a worker thread | split out of `async_icon_cache.py`, 2026-09-23 |
 | `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there |

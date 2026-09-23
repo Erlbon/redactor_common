@@ -296,3 +296,54 @@ def test_icon_cache_accepts_unhashable_keys_and_drops_dead_ones():
     cache.request(book, "v1", loader=_jpeg)
     assert _pump_until(lambda: ready)
     assert cache.get_cached_icon(book, "v1") is not None
+
+
+# -- image_pane / AspectRatioImageLabel resizing -------------------------------------------------
+
+def test_image_label_can_shrink_after_growing():
+    from PyQt6.QtGui import QPixmap
+
+    from redactor_common.gui.image_label import AspectRatioImageLabel
+
+    label = AspectRatioImageLabel()
+    label.set_original_pixmap(QPixmap.fromImage(QImage.fromData(_jpeg(400, 600))))
+    label.show()  # a hidden widget gets no resize events
+    label.resize(400, 600)
+    _app.processEvents()
+    # A plain QLabel would now report the 400x600 pixmap as its minimum.
+    assert label.minimumSizeHint().height() < 50
+    label.resize(100, 150)
+    _app.processEvents()
+    assert label.pixmap().height() <= 150
+    label.close()
+
+
+def test_image_panel_splitter_lets_the_image_pane_be_resized():
+    from PyQt6.QtWidgets import QLabel
+
+    from redactor_common.gui.image_pane import ImagePanelSplitter, ImagePreviewBox
+
+    box = ImagePreviewBox("A Very Long Group Box Title That Is Wide", placeholder="No cover")
+    assert box.image_label.text() == "No cover"
+    splitter = ImagePanelSplitter(QLabel("fields"), box)
+    splitter.resize(300, 800)
+    splitter.show()
+    _app.processEvents()
+
+    splitter.setSizes([200, 600])
+    _app.processEvents()
+    big = splitter.sizes()[1]
+    splitter.setSizes([700, 100])
+    _app.processEvents()
+    assert splitter.sizes()[1] < big  # the image pane shrinks again after growing
+    # The group box's long title doesn't set the pane's minimum width.
+    assert splitter.image_container.minimumSizeHint().width() < 120
+
+    box.show_image(QImage.fromData(_jpeg()))
+    assert box.has_image()
+    box.show_image(None, "Unreadable")
+    assert not box.has_image() and box.image_label.text() == "Unreadable"
+
+    splitter.set_image_visible(False)
+    assert splitter.image_container.isHidden()
+    splitter.close()
