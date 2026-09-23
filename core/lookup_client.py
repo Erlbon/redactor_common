@@ -23,11 +23,16 @@ from __future__ import annotations
 import json
 import socket
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Callable, Optional, Type
+from typing import Callable, Mapping, Optional, Type, Union
 
 DEFAULT_TIMEOUT = 8.0
-FetchFn = Callable[[str], bytes]
+# A fetch callable takes a plain URL, or a urllib Request when the call
+# needs headers (an API key, a bearer token) or a POST body -- see
+# build_request().
+RequestLike = Union[str, urllib.request.Request]
+FetchFn = Callable[[RequestLike], bytes]
 
 
 class LookupError(Exception):
@@ -42,20 +47,47 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT) -> Fet
     The request-building mechanics are identical across sources; only
     the User-Agent string needs to vary (and, for some APIs, must)."""
 
-    def _fetch(url: str) -> bytes:
-        request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    def _fetch(url: RequestLike) -> bytes:
+        if isinstance(url, urllib.request.Request):
+            request = url
+            if not request.has_header("User-agent"):
+                request.add_header("User-Agent", user_agent)
+        else:
+            request = urllib.request.Request(url, headers={"User-Agent": user_agent})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
 
     return _fetch
 
 
-def fetch_json(
+def build_request(
     url: str,
+    params: Mapping[str, object] | None = None,
+    headers: Mapping[str, str] | None = None,
+    json_body: object = None,
+) -> urllib.request.Request:
+    """A GET (or, with `json_body`, a JSON POST) request with the query
+    string encoded from `params` -- for APIs needing an API-key or
+    bearer-token header (TMDB, TheTVDB, OpenSubtitles)."""
+    if params:
+        url = f"{url}{'&' if '?' in url else '?'}{urllib.parse.urlencode(params)}"
+    all_headers = dict(headers or {})
+    data = None
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        all_headers.setdefault("Content-Type", "application/json")
+    return urllib.request.Request(
+        url, data=data, headers=all_headers, method="POST" if data is not None else "GET"
+    )
+
+
+def fetch_json(
+    url: RequestLike,
     fetch: FetchFn,
-    error_cls: Type[LookupError] = LookupError,
+    error_cls: Type[Exception] = LookupError,
     source_name: str = "the lookup service",
     ignore_404: bool = False,
+    status_messages: Mapping[int, str] | None = None,
 ) -> Optional[dict]:
     """Runs one GET via `fetch`, parses the JSON body, and translates
     every way that can fail into `error_cls` with a friendly message --
@@ -73,12 +105,19 @@ def fetch_json(
     body itself (e.g. Comic Vine's own status_code field) -- that
     convention varies too much per source to generalize; the caller
     checks its own response shape after this returns.
+
+    `status_messages`: a friendlier message for specific HTTP codes,
+    e.g. {401: "TMDB rejected the API key (401 Unauthorized)."}.
+    `error_cls` may be any Exception subclass taking a message, so a
+    project can keep an existing error type that predates this module.
     """
     try:
         raw = fetch(url)
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and ignore_404:
             return None
+        if status_messages and exc.code in status_messages:
+            raise error_cls(status_messages[exc.code]) from exc
         raise error_cls(f"{source_name} returned an error (HTTP {exc.code}): {exc.reason}") from exc
     except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
         raise error_cls(f"Could not reach {source_name}: {exc}") from exc
@@ -90,18 +129,27 @@ def fetch_json(
 
 
 def fetch_bytes(
-    url: str,
+    url: RequestLike,
     fetch: FetchFn,
-    error_cls: Type[LookupError] = LookupError,
+    error_cls: Type[Exception] = LookupError,
     what: str = "the file",
+    status_messages: Mapping[int, str] | None = None,
+    require_data: bool = False,
 ) -> bytes:
     """Runs one GET via `fetch` and returns the raw response bytes
     (e.g. a cover image) -- same HTTPError/URLError translation as
     fetch_json(), just without the JSON-parsing step. `what` names the
-    thing being downloaded in the error message (e.g. "cover image")."""
+    thing being downloaded in the error message (e.g. "cover image").
+    `status_messages` overrides the message for specific HTTP codes;
+    `require_data` treats an empty response body as a failure too."""
     try:
-        return fetch(url)
+        data = fetch(url)
     except urllib.error.HTTPError as exc:
-        raise error_cls(f"Could not download {what} (HTTP {exc.code}).") from exc
+        if status_messages and exc.code in status_messages:
+            raise error_cls(status_messages[exc.code]) from exc
+        raise error_cls(f"Could not download {what} (HTTP {exc.code}): {exc.reason}") from exc
     except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
         raise error_cls(f"Could not download {what}: {exc}") from exc
+    if require_data and not data:
+        raise error_cls(f"Downloading {what} returned no data.")
+    return data

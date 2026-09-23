@@ -56,6 +56,29 @@ def _elide_label(text: str, max_length: int = _MAX_LABEL_LENGTH) -> str:
     return text[: max_length - 1].rstrip() + "…"
 
 
+def _make_dialog(
+    parent: QWidget, label: str, total: int, cancellable: bool, title: str | None = None
+) -> QProgressDialog:
+    dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, total, parent)
+    dialog.setWindowModality(Qt.WindowModality.WindowModal)
+    dialog.setMinimumDuration(0)
+    if title:
+        dialog.setWindowTitle(title)
+    # Fixed, not just minimum -- a QProgressDialog grows to fit
+    # whatever its longest label text so far needed, but doesn't
+    # shrink back down once a later, shorter label follows (Qt only
+    # grows a widget to fit new content, it doesn't proactively
+    # re-shrink it). A minimum-only width still lets that one-way
+    # ratchet happen upward past it; fixing the width outright is
+    # what actually keeps the dialog visually steady for the whole
+    # run. _elide_label() caps how much text the label ever has to
+    # fit, so eliding to fit this fixed width reads sensibly rather
+    # than getting mid-word cut off.
+    dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
+    dialog.show()
+    return dialog
+
+
 def run_with_progress(
     parent: QWidget,
     items: Iterable[T],
@@ -91,23 +114,7 @@ def run_with_progress(
     items = list(items)
     dialog = None
     if len(items) >= threshold:
-        dialog = QProgressDialog(
-            label, "Cancel" if cancellable else None, 0, len(items), parent
-        )
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.setMinimumDuration(0)
-        # Fixed, not just minimum -- a QProgressDialog grows to fit
-        # whatever its longest label text so far needed, but doesn't
-        # shrink back down once a later, shorter label follows (Qt only
-        # grows a widget to fit new content, it doesn't proactively
-        # re-shrink it). A minimum-only width still lets that one-way
-        # ratchet happen upward past it; fixing the width outright is
-        # what actually keeps the dialog visually steady for the whole
-        # run. _elide_label() below caps how much text the label ever
-        # has to fit, so eliding to fit this fixed width reads sensibly
-        # rather than getting mid-word cut off.
-        dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
-        dialog.show()
+        dialog = _make_dialog(parent, label, len(items), cancellable)
 
     for index, item in enumerate(items):
         if dialog is not None and cancellable and dialog.wasCanceled():
@@ -123,3 +130,84 @@ def run_with_progress(
     if dialog is not None:
         dialog.close()
     return True
+
+
+class ProgressReporter:
+    """The same threshold-gated, fixed-width, label-eliding dialog as
+    run_with_progress(), for work that drives its own loop instead of
+    handing this module one item at a time:
+
+    - a core function taking `progress(done, total)`/`should_cancel()`
+      callbacks (mp3's scan_service thread pools, its import
+      conversion) -- pass `reporter.on_progress` and
+      `reporter.should_cancel` straight through;
+    - a QThread worker whose signals report per-file progress (video's
+      transcodes) -- call set_label()/set_value() from the slots, and
+      connect_cancel() to tell the worker to stop.
+
+    mp3 and video had each hand-rolled these dialogs five times between
+    them, missing the fixed width (so they jittered with per-file
+    labels). Use as a context manager so the dialog always closes:
+
+        with ProgressReporter(self, len(targets), "Checking...") as reporter:
+            scan_fn(targets, progress=reporter.on_progress,
+                    should_cancel=reporter.should_cancel)
+    """
+
+    def __init__(
+        self,
+        parent: QWidget,
+        total: int,
+        label: str,
+        threshold: int = 3,
+        cancellable: bool = True,
+        title: str | None = None,
+    ):
+        self.total = total
+        self._dialog: QProgressDialog | None = None
+        if total >= threshold:
+            self._dialog = _make_dialog(parent, label, total, cancellable, title)
+
+    @property
+    def dialog(self) -> QProgressDialog | None:
+        """The underlying dialog, or None below the threshold."""
+        return self._dialog
+
+    def set_value(self, done: int, pump: bool = True) -> None:
+        if self._dialog is not None:
+            self._dialog.setValue(min(done, self.total))
+            if pump:
+                QApplication.processEvents()
+
+    def set_label(self, text: str) -> None:
+        if self._dialog is not None:
+            self._dialog.setLabelText(_elide_label(text))
+
+    def on_progress(self, done: int, _total: int | None = None) -> None:
+        """A `progress(done, total)` callback for core functions."""
+        self.set_value(done)
+
+    def should_cancel(self) -> bool:
+        """A `should_cancel()` callback for core functions."""
+        return self._dialog is not None and self._dialog.wasCanceled()
+
+    def was_canceled(self) -> bool:
+        return self.should_cancel()
+
+    def connect_cancel(self, slot: Callable[[], None]) -> None:
+        """Runs `slot` when Cancel is clicked (e.g. to set a worker's
+        cancel event). No-op below the threshold."""
+        if self._dialog is not None:
+            self._dialog.canceled.connect(slot)
+
+    def close(self) -> None:
+        if self._dialog is not None:
+            self._dialog.setValue(self.total)
+            self._dialog.close()
+            self._dialog = None
+
+    def __enter__(self) -> "ProgressReporter":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()

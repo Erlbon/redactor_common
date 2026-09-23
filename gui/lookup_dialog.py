@@ -89,7 +89,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -101,7 +100,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -113,6 +111,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.error_summary import summarize_errors
 from redactor_common.gui.image_label import AspectRatioImageLabel
+from redactor_common.gui.progress import ProgressReporter
 
 BOOK_COL, FOUND_COL, APPLY_COL = range(3)
 # Halved from the old single-cover (220, 320) -- two now sit side by
@@ -189,7 +188,11 @@ class LookupDialogBase(QDialog):
         get_local_cover: Optional[Callable[[object], Optional[bytes]]] = None,
         resolve_alternative: Optional[Callable[[object, object], LookupResult]] = None,
         progress_threshold: int = 3,
+        auto_search: bool = True,
     ):
+        """`auto_search=False` builds the dialog without searching yet,
+        for a subclass with a setup step first (e.g. locating an external
+        tool, confirming a large batch); it calls run_search() itself."""
         super().__init__(parent)
         self.setWindowTitle(window_title)
         self.resize(1150, 640)
@@ -209,6 +212,12 @@ class LookupDialogBase(QDialog):
         self._current_detail_row = -1
 
         self._build_ui()
+        if auto_search:
+            self._run_search()
+
+    def run_search(self) -> None:
+        """(Re)run the search for every item -- public for subclasses
+        built with auto_search=False."""
         self._run_search()
 
     # ------------------------------------------------------------------
@@ -371,20 +380,20 @@ class LookupDialogBase(QDialog):
         if self.alt_list is not None:
             self.alt_list.clear()
 
-        progress = QProgressDialog(self._search_label, "Cancel", 0, len(self.items), self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        # The shared progress dialog (fixed width, elided per-item label
+        # -- this used to be a hand-rolled QProgressDialog that grew with
+        # each long filename, and ignored progress_threshold).
+        with ProgressReporter(
+            self, len(self.items), self._search_label, threshold=self._progress_threshold,
+        ) as reporter:
+            for row, item in enumerate(self.items):
+                if reporter.was_canceled():
+                    self.table.setRowCount(row)
+                    break
+                reporter.set_label(f"Searching: {self._item_label(item)}")
+                reporter.set_value(row)
+                self._process_row(row, item, {})
 
-        for row, item in enumerate(self.items):
-            if progress.wasCanceled():
-                self.table.setRowCount(row)
-                break
-            progress.setValue(row)
-            progress.setLabelText(f"Searching: {self._item_label(item)}")
-            QApplication.processEvents()
-            self._process_row(row, item, {})
-
-        progress.setValue(len(self.items))
         self.table.resizeColumnsToContents()
         self._refresh_status()
         if self.table.rowCount() > 0:
@@ -536,6 +545,16 @@ class LookupDialogBase(QDialog):
 
     # ------------------------------------------------------------------
     # Result accessor, read by the caller after exec() returns Accepted
+
+    def accepted_rows(self) -> dict[int, LookupResult]:
+        """item index -> the full LookupResult, for every checked row that
+        found something -- for a subclass that applies more than
+        `fields` (e.g. epub applying the found cover too)."""
+        return {
+            row: result
+            for row, cb in self._checkboxes.items()
+            if cb.isChecked() and cb.isEnabled() and (result := self._row_results.get(row)) and result.found
+        }
 
     def accepted_metadata(self) -> dict[int, dict]:
         """item index -> {field_key: value}, for every checked row that

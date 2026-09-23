@@ -9,11 +9,17 @@ logic, no GUI dependencies.
 from __future__ import annotations
 
 # Small English "connector" words conventionally left lowercase in title
-# case, except when they're the first or last word.
+# case, except as the first or last word, or right after a colon/dash
+# (the union of epub's and video's original lists).
 _MINOR_WORDS = {
-    "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of",
-    "on", "or", "so", "the", "to", "up", "yet",
+    "a", "an", "and", "as", "at", "but", "by", "for", "if", "in", "into",
+    "nor", "of", "off", "on", "onto", "or", "so", "the", "to", "up",
+    "via", "vs", "yet",
 }
+
+# A word ending in one of these starts a new clause, so the next word
+# capitalizes even if it's a minor word: "Star Wars: A New Hope".
+_CLAUSE_ENDINGS = (":", "-", "–", "—")
 
 
 def to_upper(text: str) -> str:
@@ -24,23 +30,38 @@ def to_lower(text: str) -> str:
     return text.lower()
 
 
+def _capitalize_first_letter(word: str) -> str:
+    """Capitalizes the first ALPHABETIC character and lowercases the
+    rest: "(the" -> "(The", "don't" -> "Don't" (not str.title()'s
+    "Don'T"). "O'Brien" -> "O'brien" is an accepted tradeoff, same as
+    mp3tag's own case conversion."""
+    for i, ch in enumerate(word):
+        if ch.isalpha():
+            return word[:i] + ch.upper() + word[i + 1:].lower()
+    return word  # no letters at all ("123", "--")
+
+
 def to_title_case(text: str) -> str:
     """Capitalizes each word, leaving minor connector words lowercase
-    unless they're the first or last word -- matches how book titles are
-    conventionally capitalized. Uses word.capitalize() rather than
-    str.title(), since str.title() mangles apostrophes (turns "don't"
-    into "Don'T")."""
+    unless they're the first or last word, or follow a colon/dash --
+    "the lord of the rings" -> "The Lord of the Rings", "star wars: a
+    new hope" -> "Star Wars: A New Hope". Consecutive spaces are kept.
+    Merged from video's text_transforms (clause boundaries, first-letter
+    capitalization) into epub's original."""
     words = text.split(" ")
     last_index = len(words) - 1
     result = []
+    force_capitalize_next = False
     for i, word in enumerate(words):
         if not word:
             result.append(word)
             continue
-        if 0 < i < last_index and word.lower() in _MINOR_WORDS:
+        is_boundary = i == 0 or i == last_index or force_capitalize_next
+        if not is_boundary and word.lower() in _MINOR_WORDS:
             result.append(word.lower())
         else:
-            result.append(word[:1].upper() + word[1:].lower())
+            result.append(_capitalize_first_letter(word))
+        force_capitalize_next = word.endswith(_CLAUSE_ENDINGS)
     return " ".join(result)
 
 
@@ -68,5 +89,14 @@ def apply_case_conversion(text: str, mode: str) -> str:
     this is always driven by a fixed dropdown in the GUI, so an unknown
     mode should never actually happen, but a silent no-op is a safer
     failure than a crash."""
-    fn = CASE_CONVERSIONS.get(mode)
+    fn = CASE_CONVERSIONS.get(mode) or CASE_CONVERSIONS.get(_MODE_ALIASES.get(mode, ""))
     return fn(text) if fn else text
+
+
+# video's original short mode keys, accepted too.
+_MODE_ALIASES = {
+    "upper": "UPPERCASE",
+    "lower": "lowercase",
+    "title": "Title Case",
+    "sentence": "Sentence case",
+}

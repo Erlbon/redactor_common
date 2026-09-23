@@ -43,6 +43,8 @@ class ParseFilenameDialog(QDialog):
         strip_leading_zeros_fields: set[str] = frozenset(),
         title: str = "Parse Filename \u2192 Metadata",
         item_noun: str = "item",
+        field_patterns: dict[str, str] | None = None,
+        normalizers: dict[str, Callable[[str], str]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -54,6 +56,10 @@ class ParseFilenameDialog(QDialog):
         self._numeric_fields = numeric_fields
         self._isbn_like_fields = isbn_like_fields
         self._strip_leading_zeros_fields = strip_leading_zeros_fields
+        # Per-field regex shapes and value clean-up (see
+        # core/filename_parser.py) -- e.g. epub's series-index ranges
+        # and month names.
+        self._parse_kwargs = {"field_patterns": field_patterns, "normalizers": normalizers}
         self._stems = [os.path.splitext(os.path.basename(get_current_path(item)))[0] for item in items]
         self._checkboxes: dict[int, QCheckBox] = {}
         self._parsed: dict[int, dict[str, str]] = {}
@@ -76,6 +82,7 @@ class ParseFilenameDialog(QDialog):
         detected = best_matching_pattern(
             self._stems, pattern_history, self._valid_field_keys,
             self._numeric_fields, self._isbn_like_fields,
+            field_patterns=self._parse_kwargs["field_patterns"],
         )
         if detected:
             starting_pattern, _count = detected
@@ -124,6 +131,7 @@ class ParseFilenameDialog(QDialog):
             parsed = parse_filename(
                 stem, pattern, self._valid_field_keys, self._numeric_fields,
                 self._isbn_like_fields, self._strip_leading_zeros_fields,
+                **self._parse_kwargs,
             )
             if parsed:
                 rows.append((i, stem, parsed))

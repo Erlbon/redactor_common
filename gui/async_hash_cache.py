@@ -2,7 +2,7 @@
 redactor_common/gui/async_hash_cache.py
 
 Caches a computed SHA-256 hex digest per item (keyed by the item
-itself, via a WeakKeyDictionary -- entries drop automatically once an
+itself, by identity (IdentityWeakDict) -- entries drop automatically once an
 item is no longer referenced elsewhere, no manual cleanup needed), and
 hashes a cache MISS off the main thread via QThreadPool, so a table
 full of these never blocks on cryptographic hashing: a row shows up
@@ -57,7 +57,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-from weakref import WeakKeyDictionary
+from redactor_common.gui.async_icon_cache import IdentityWeakDict
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
@@ -92,7 +92,7 @@ class AsyncHashCache(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._cache: WeakKeyDictionary = WeakKeyDictionary()
+        self._cache = IdentityWeakDict()
         self._signals = _HashSignals()
         self._signals.ready.connect(self._on_hashed)
 

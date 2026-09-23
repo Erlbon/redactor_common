@@ -40,6 +40,14 @@ _RESERVED_NAMES = {
 MAX_FILENAME_LENGTH = 150  # stem only, conservative vs. Windows' ~255 path limit
 
 
+def is_reserved_name(stem: str) -> bool:
+    """True for a Windows device name, including with a further dotted
+    part -- "CON", but also "con.mp4" or "NUL.part1", since Windows
+    checks only the text before the first dot (caught by videoredactor's
+    original validator, which the shared one had missed)."""
+    return stem.split(".")[0].strip().upper() in _RESERVED_NAMES
+
+
 def zero_pad_numeric_value(value: str, width: int = 2) -> str:
     """Zero-pad a numeric field (e.g. a series index or episode number)
     to at least `width` digits, correctly handling decimal sub-indices
@@ -72,11 +80,48 @@ def sanitize_filename(name: str) -> str:
 
 _TOKEN_RE = re.compile(r"%(\w+)%")
 
+# A (...)/[...]/{...} group containing at least one %field% token is
+# optional: dropped entirely (wrapper characters included) when every
+# field inside is empty, so "%author% [%series% %series_index%] - %title%"
+# doesn't leave a stray "[ ]" for a standalone book. A group with no
+# tokens inside is ordinary literal text. From epub's original engine.
+OPTIONAL_GROUP_RE = re.compile(r"\[([^\[\]]*)\]|\(([^()]*)\)|\{([^{}]*)\}")
+
+
+def resolve_optional_groups(pattern: str, values: dict[str, str]) -> str:
+    """Substitutes the tokens inside each optional group, or drops the
+    group entirely if all of its fields are empty. Tokens outside any
+    group are left for render_filename() to substitute."""
+    def _replace(m: re.Match) -> str:
+        open_ch, close_ch = m.group(0)[0], m.group(0)[-1]
+        inner = next(g for g in m.groups() if g is not None)
+        tokens = _TOKEN_RE.findall(inner)
+        if not tokens:
+            return m.group(0)
+        any_value = any(values.get(key) for key in tokens)
+        if not any_value:
+            return ""
+        substituted = _TOKEN_RE.sub(lambda t: values.get(t.group(1), "") or "", inner)
+        # strip(): one empty field inside a non-empty group shouldn't
+        # leave a dangling space next to the wrapper ("[Saga ]").
+        return f"{open_ch}{substituted.strip()}{close_ch}"
+    return OPTIONAL_GROUP_RE.sub(_replace, pattern)
+
+
+def apply_aliases(pattern: str, aliases: dict[str, str]) -> str:
+    """Rewrites legacy %old% tokens to their current %new% names, so a
+    pattern saved before a placeholder was renamed still works."""
+    if not aliases:
+        return pattern
+    return _TOKEN_RE.sub(lambda m: f"%{aliases.get(m.group(1), m.group(1))}%", pattern)
+
 
 def render_filename(
     values: dict[str, str],
     pattern: str,
     fallback: str = "untitled",
+    optional_groups: bool = True,
+    aliases: dict[str, str] | None = None,
 ) -> str:
     """Render a filename stem (no extension) from `pattern`, substituting
     each %field% token with values.get(field, ""). A token for a field
@@ -87,7 +132,13 @@ def render_filename(
 
     Falls back to `fallback` if the pattern produces nothing usable (e.g.
     every referenced field was empty).
+
+    `optional_groups`: see resolve_optional_groups(). `aliases`: legacy
+    token names mapped to current ones (see apply_aliases()).
     """
+    pattern = apply_aliases(pattern, aliases or {})
+    if optional_groups:
+        pattern = resolve_optional_groups(pattern, values)
     result = _TOKEN_RE.sub(lambda m: values.get(m.group(1), "") or "", pattern)
 
     result = sanitize_filename(result)
@@ -95,7 +146,7 @@ def render_filename(
     if not result:
         result = fallback
 
-    if result.upper() in _RESERVED_NAMES:
+    if is_reserved_name(result):
         result = f"_{result}"
 
     if len(result) > MAX_FILENAME_LENGTH:
@@ -145,7 +196,7 @@ def validate_filename_stem(name: str) -> str:
         return "A filename can't end with a space."
     if name.rstrip(".") != name:
         return "A filename can't end with a dot."
-    if name.upper() in _RESERVED_NAMES:
+    if is_reserved_name(name):
         return f'"{name}" is a reserved name on Windows and can\'t be used.'
     if len(name) > MAX_FILENAME_LENGTH:
         return f"That name is too long (max {MAX_FILENAME_LENGTH} characters)."

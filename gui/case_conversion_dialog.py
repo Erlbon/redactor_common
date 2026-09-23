@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.case_conversion import CASE_CONVERSIONS, apply_case_conversion
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
+from redactor_common.gui.progress import run_with_progress
 
 T = TypeVar("T")
 
@@ -88,13 +89,23 @@ class CaseConversionDialog(QDialog):
         mode = self.mode_combo.currentText()
 
         rows: list[PreviewRow] = []
-        for i, item in enumerate(self.items):
+
+        def _step(item: T, i: int) -> None:
             if self._is_excluded(item):
-                continue
+                return
             old_value = self._get_value(item, field_key) or ""
             new_value = apply_case_conversion(old_value, mode)
             if new_value != old_value:
                 rows.append(PreviewRow(i, self._get_display_name(item), old_value, new_value))
+
+        # Re-runs on a dropdown change (not live typing), so the family's
+        # progress rule applies: a 15,000-book library must never look
+        # frozen here. Below the threshold no dialog appears at all.
+        # (epub's original dialog had this; the shared one had lost it.)
+        run_with_progress(
+            self, self.items, _step, "Scanning…", threshold=500,
+            cancellable=False, update_every=25,
+        )
 
         self._preview.set_rows(rows)
 
