@@ -154,8 +154,8 @@ version bump. Beyond that:
 | `quick_pick_dialog` | ✓ | ✓ | ✓ | — |
 | `lookup_client` | ✓ | ✓ | — | ✓ |
 | `lookup_dialog` | ✓ | ✓ | — | own search/episode pickers |
-| Table covers (`visible_rows` + `async_icon_cache`) | ✓ | ✓ | — | — |
-| Panel preview (`async_preview`) | ✓ | — | — | ✓ |
+| Table covers (`visible_rows` + `async_icon_cache`) | ✓ | ✓ | ✓ | — |
+| Panel preview (`async_preview`) | ✓ | — | ✓ | ✓ |
 
 History of how the earlier promotions landed is in each app's own
 CHANGELOG.md; the two write-ups below are kept for the reasoning they
@@ -258,8 +258,7 @@ each is a design decision rather than a copy to delete:
   form-layout panel, video's grid panel) with different widget
   architectures; sharing it needs design work first.
 - **mp3** has no Search/Replace or Case Conversion (no obvious tag use
-  case yet) and no cover art -- cover art is next on its roadmap, and
-  `visible_rows` + `async_icon_cache` + `async_preview` are ready for it.
+  case yet).
 
 ## License
 
