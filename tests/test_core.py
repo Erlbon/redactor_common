@@ -209,3 +209,22 @@ if __name__ == "__main__":
     test_tool_locator()
     test_folder_refresh()
     print("ALL TESTS PASSED")
+
+
+def test_find_tool_matches_a_windows_name_to_the_plain_linux_one():
+    """mp3redactor asks for "ffmpeg.exe"; on Linux PATH has "ffmpeg"."""
+    from redactor_common.core import tool_locator
+
+    on_path = {"ffmpeg": "/usr/bin/ffmpeg"}
+    assert str(tool_locator.find_tool("ffmpeg.exe", which=on_path.get)).replace("\\", "/") == "/usr/bin/ffmpeg"
+    # As named still comes first (Windows: which() finds "ffmpeg.exe" itself).
+    both = {"ffmpeg.exe": "C:/tools/ffmpeg.exe", "ffmpeg": "/usr/bin/ffmpeg"}
+    assert str(tool_locator.find_tool("ffmpeg.exe", which=both.get)).replace("\\", "/") == "C:/tools/ffmpeg.exe"
+    assert tool_locator.find_tool("mp3val.exe", which={}.get) is None
+
+
+def test_find_tool_bundled_plain_name_for_a_windows_name(tmp_path):
+    from redactor_common.core import tool_locator
+
+    (tmp_path / "keyfinder-cli").write_bytes(b"")
+    assert tool_locator.find_tool("keyfinder-cli.exe", tools_dir=tmp_path, which={}.get) == tmp_path / "keyfinder-cli"

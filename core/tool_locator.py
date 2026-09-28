@@ -66,18 +66,26 @@ def find_tool(
         overridden = Path(override)
         return overridden if overridden.exists() else None
 
-    candidates = [exe_name]
-    if not exe_name.lower().endswith(".exe"):
-        candidates.append(exe_name + ".exe")
+    # Apps name their tools the Windows way ("ffmpeg.exe"); on Linux/Mac
+    # the same tool is plain "ffmpeg", which PATH lookup must also try
+    # (shutil.which doesn't strip ".exe" there -- a Linux build found
+    # none of mp3redactor's tools until this). Order: as named first.
+    if exe_name.lower().endswith(".exe"):
+        candidates = [exe_name, exe_name[:-4]]
+    else:
+        candidates = [exe_name, exe_name + ".exe"]
 
     if tools_dir is not None:
         found = _first_existing(Path(tools_dir), candidates)
         if found is not None:
             return found
 
-    on_path = (which or shutil.which)(exe_name)
-    if on_path:
-        return Path(on_path)
+    # PATH: a plain name needs no ".exe" retry (Windows' which() adds it).
+    path_names = candidates if exe_name.lower().endswith(".exe") else [exe_name]
+    for candidate in path_names:
+        on_path = (which or shutil.which)(candidate)
+        if on_path:
+            return Path(on_path)
 
     for install_dir in install_dirs:
         if not install_dir:
