@@ -150,6 +150,9 @@ The module tables in the README, along with its adoption matrix
 7. **PowerShell 5.1 release-script pitfalls.** Redirect only stdout
    when checking a native command's exit code, and treat "tag exists,
    release doesn't" as a resumable state.
+8. **Merge straight to main.** One developer, no reviewer: finished,
+   tested work is merged into `main` and pushed, never left waiting on a
+   branch or PR.
 
 ## Release process
 

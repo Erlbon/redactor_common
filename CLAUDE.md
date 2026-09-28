@@ -20,6 +20,8 @@ The project skill in `.claude/skills/redactor-conventions/SKILL.md` holds the fu
 6. **Cross-platform goal.** A Linux/Mac port is planned. Avoid new unguarded Windows-only code (registry, hardcoded `C:\` paths, Windows APIs without a `sys.platform` guard). Follow the existing patterns: PATH-based tool lookup (`redactor_common/core/tool_locator.py`), `QSettings` with `IniFormat` and an explicit path, `sys.platform == "win32"` guards.
 7. **PowerShell 5.1 pitfall in release scripts.** Under `$ErrorActionPreference = "Stop"`, a native command's stderr becomes a terminating error. Redirect only stdout (`cmd | Out-Null`), never `2>&1`, and reset `$LASTEXITCODE` after reading it. Also, the release script tags and pushes before `gh release create`, so "tag exists, release doesn't" is a resumable state; check with `gh release view <tag>`.
 
+8. **Merge straight to main.** One developer, no reviewer (Erlend, 2026-09-28). Finished work that passes its tests is merged into `main` and pushed, not left waiting on a branch or in a PR. If a PR was opened, merge it once CI is green and delete the branch.
+
 Full text of these rules: `.claude/skills/redactor-conventions/SKILL.md` in redactor_common.
 
 ## Machine-local, not in git

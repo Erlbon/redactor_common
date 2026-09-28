@@ -34,6 +34,17 @@ immediately before every `git push`. Another session may have pushed
 while you were working. If local is now behind, fast-forward merge before
 pushing; if it's genuinely diverged, resolve that first.
 
+## Merge straight to main (one developer)
+
+There is one developer on these repos and no reviewer (Erlend,
+2026-09-28: "auto-merge the redactor branches. We are only one
+developer."). Finished work that passes its tests goes into `main` and
+is pushed, not left on a branch or in a PR waiting for review. Work on
+`main` directly, or fast-forward a feature branch into it; if a PR was
+opened, merge it as soon as CI is green and delete the branch. Then
+check the Windows CI run on `main`. Everything else here still applies
+(sync first, version bump and changelog, tests).
+
 ## Version bump is mandatory at check-in, not just before release
 
 **Any commit to one of the four apps that changes real code (not a
