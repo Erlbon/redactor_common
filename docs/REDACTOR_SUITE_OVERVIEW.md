@@ -209,8 +209,6 @@ Everything else passes:
 - mp3 has no Search/Replace or Case Conversion yet.
 - Embedding a large cover image into many MP3s isn't downscaled; an
   optional resize on import would help.
-- The erlbon.github.io mp3 section should gain a cover-art line once
-  that version is released.
 - videoredactor has no README.md (it has ABOUT.md and BUILD.md).
 - redactor-build-tools' Linux build hasn't been verified end to end.
 
