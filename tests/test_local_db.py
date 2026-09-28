@@ -117,3 +117,20 @@ def test_settings_dialog_check_and_save(db_path):
     assert not ok and "not found" in message
     dialog.accept()
     assert saved == ["C:/does/not/exist.db"]
+
+
+def test_forget_cached_closes_and_reopens(tmp_path):
+    from redactor_common.core.local_db import forget_cached
+
+    path = tmp_path / "f.db"
+    con = sqlite3.connect(path)
+    con.execute("create table t (x)")
+    con.commit()
+    con.close()
+    first = open_cached(str(path), LocalDatabase)
+    forget_cached(str(path))
+    with pytest.raises(sqlite3.ProgrammingError):
+        first._con.execute("select 1")  # closed
+    assert open_cached(str(path), LocalDatabase) is not first
+    forget_cached(str(path))
+    forget_cached("")  # nothing cached: no-op

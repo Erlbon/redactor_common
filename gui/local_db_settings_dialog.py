@@ -18,11 +18,17 @@ Usage (cbzredactor's GCD dump):
         save=app_settings.save_gcd_local_database,
         parent=self,
     ).exec()
+
+`build` (optional): adds a button (`build_label`) beside Check File for
+a database the user makes rather than downloads -- e.g. cbzredactor's
+"Build from ComicRack Library...", which converts a ComicDb.xml with
+core/dump_import.py. It's called with the dialog as parent and returns
+the new file's path (filled in, not yet saved) or None if abandoned.
 """
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -52,6 +58,8 @@ class LocalDatabaseSettingsDialog(QDialog):
         save: Callable[[str], None],
         error_types: tuple[type[BaseException], ...] = (LocalDatabaseError,),
         file_filter: str = "SQLite database (*.db *.sqlite *.sqlite3);;All files (*)",
+        build: Optional[Callable[[QDialog], Optional[str]]] = None,
+        build_label: str = "Build from Dump…",
         parent=None,
     ):
         super().__init__(parent)
@@ -78,9 +86,18 @@ class LocalDatabaseSettingsDialog(QDialog):
         row.addWidget(browse)
         outer.addLayout(row)
 
+        actions = QHBoxLayout()
         check_button = QPushButton("Check File")
         check_button.clicked.connect(self._run_check)
-        outer.addWidget(check_button)
+        actions.addWidget(check_button)
+        self._build = build
+        self.build_button: Optional[QPushButton] = None
+        if build is not None:
+            self.build_button = QPushButton(build_label)
+            self.build_button.clicked.connect(self._run_build)
+            actions.addWidget(self.build_button)
+        actions.addStretch(1)
+        outer.addLayout(actions)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -89,6 +106,11 @@ class LocalDatabaseSettingsDialog(QDialog):
 
     def _browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose the database", self.path_edit.text(), self._file_filter)
+        if path:
+            self.path_edit.setText(path)
+
+    def _run_build(self) -> None:
+        path = self._build(self)
         if path:
             self.path_edit.setText(path)
 

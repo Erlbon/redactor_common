@@ -186,3 +186,13 @@ def open_cached(path: str, factory: Callable[[str], D]) -> D:
             db = factory(path)
             _open[key] = db
         return db
+
+
+def forget_cached(path: str) -> None:
+    """Closes and forgets every open_cached() database for `path` -- before
+    the file is rebuilt or replaced (Windows won't replace an open file),
+    and so the next lookup opens the new one."""
+    wanted = os.path.normcase(os.path.abspath(path)) if path else ""
+    with _open_lock:
+        for key in [k for k in _open if k[1] == wanted]:
+            _open.pop(key).close()
