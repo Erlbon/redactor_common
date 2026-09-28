@@ -36,10 +36,12 @@ DEFAULT_TIMEOUT_SECONDS = 120
 def no_window_kwargs() -> dict:
     """Extra kwargs to splat into subprocess.run()/Popen() so a launched
     console program doesn't pop up its own window. Empty dict on
-    non-Windows platforms."""
-    if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}
-    return {}
+    non-Windows platforms, and whenever the flag doesn't exist (it's only
+    defined by a Windows build of Python -- read with getattr so a
+    platform check that's patched or wrong degrades to {} instead of an
+    AttributeError)."""
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    return {"creationflags": flag} if flag else {}
 
 
 def decode_output(data: bytes | str | None) -> str:
