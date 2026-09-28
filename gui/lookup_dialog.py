@@ -110,6 +110,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.error_summary import summarize_errors
+from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
 from redactor_common.gui.image_label import AspectRatioImageLabel
 from redactor_common.gui.progress import ProgressReporter
 
@@ -380,32 +381,65 @@ class LookupDialogBase(QDialog):
         if self.alt_list is not None:
             self.alt_list.clear()
 
-        # The shared progress dialog (fixed width, elided per-item label
-        # -- this used to be a hand-rolled QProgressDialog that grew with
-        # each long filename, and ignored progress_threshold).
-        with ProgressReporter(
-            self, len(self.items), self._search_label, threshold=self._progress_threshold,
-        ) as reporter:
+        # The shared progress dialog (fixed width, elided per-item label).
+        # Each search runs on a worker thread (see _call_off_gui_thread),
+        # so the window keeps painting and Cancel responds at once --
+        # before 2026-09-28 every request (seconds each against a slow
+        # source) froze the whole app. Always shown now, even for one
+        # item: a single request can take several seconds.
+        with ProgressReporter(self, len(self.items), self._search_label, threshold=1) as reporter:
+            self._make_app_modal(reporter)
             for row, item in enumerate(self.items):
                 if reporter.was_canceled():
                     self.table.setRowCount(row)
                     break
                 reporter.set_label(f"Searching: {self._item_label(item)}")
                 reporter.set_value(row)
-                self._process_row(row, item, {})
+                try:
+                    self._process_row(row, item, {}, cancel_signal=self._cancel_signal(reporter))
+                except BackgroundCancelled:
+                    self.table.setRowCount(row)
+                    break
 
         self.table.resizeColumnsToContents()
         self._refresh_status()
         if self.table.rowCount() > 0:
             self.table.selectRow(0)
 
-    def _process_row(self, row: int, item: object, query_override: dict) -> None:
-        """Runs search_one() for one row and updates its table cells --
-        used both for the initial batch search and for "Search This
-        Item" re-running just the selected row."""
-        result = self._search_one(item, query_override)
+    def _process_row(self, row: int, item: object, query_override: dict, cancel_signal=None) -> None:
+        """Runs search_one() for one row (on a worker thread) and
+        updates its table cells -- used both for the initial batch
+        search and for "Search This Item" re-running just the selected
+        row. Raises BackgroundCancelled if `cancel_signal` fires first."""
+        result = call_in_background(self._search_one, item, query_override, cancel_signal=cancel_signal)
         self._row_results[row] = result
         self._update_row_cells(row, item, result)
+
+    @staticmethod
+    def _make_app_modal(reporter: ProgressReporter) -> None:
+        """While a search waits on its worker thread the event loop keeps
+        running, so the whole app -- not just this (possibly not yet
+        shown) dialog -- must be blocked, or the user could change the
+        very items being searched."""
+        dialog = reporter.dialog
+        if dialog is not None:
+            dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+
+    @staticmethod
+    def _cancel_signal(reporter: ProgressReporter):
+        dialog = reporter.dialog
+        return dialog.canceled if dialog is not None else None
+
+    def _run_single(self, label: str, fn, *args):
+        """One background call for the already-open dialog ("Search This
+        Item", picking an alternative), behind a small cancellable
+        progress dialog. Returns fn's result, or None if cancelled."""
+        with ProgressReporter(self, 1, label, threshold=1) as reporter:
+            self._make_app_modal(reporter)
+            try:
+                return call_in_background(fn, *args, cancel_signal=self._cancel_signal(reporter))
+            except BackgroundCancelled:
+                return None
 
     def _update_row_cells(self, row: int, item: object, result: LookupResult) -> None:
         """Refreshes one row's table cells from an already-computed
@@ -519,7 +553,9 @@ class LookupDialogBase(QDialog):
         alt = selected[0].data(Qt.ItemDataRole.UserRole)
         previous = self._row_results.get(row)
 
-        new_result = self._resolve_alternative(self.items[row], alt.data)
+        new_result = self._run_single("Fetching the selected match…", self._resolve_alternative, self.items[row], alt.data)
+        if new_result is None:
+            return  # cancelled -- the row keeps its previous result
         if not new_result.used_query and previous:
             new_result.used_query = previous.used_query
         if not new_result.alternatives and previous:
@@ -539,7 +575,11 @@ class LookupDialogBase(QDialog):
             return
         override = {key: edit.text().strip() for key, edit in self._query_edits.items() if edit.text().strip()}
         self._query_overrides[row] = override
-        self._process_row(row, self.items[row], override)
+        result = self._run_single(self._search_label, self._search_one, self.items[row], override)
+        if result is None:
+            return  # cancelled -- the row keeps its previous result
+        self._row_results[row] = result
+        self._update_row_cells(row, self.items[row], result)
         self._refresh_status()
         self._on_row_selected()  # re-sync the detail panel to the fresh result
 
