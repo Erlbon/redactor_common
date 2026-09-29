@@ -347,3 +347,56 @@ def test_image_panel_splitter_lets_the_image_pane_be_resized():
     splitter.set_image_visible(False)
     assert splitter.image_container.isHidden()
     splitter.close()
+
+
+def test_message_box_width_rule_leaves_the_icon_alone():
+    """Only the text labels are capped: capping the icon's label too
+    pushed the text away from the icon when buttons were wide."""
+    from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
+
+    from redactor_common.gui.qmessagebox_style import apply_message_box_style
+
+    app = QApplication.instance()
+    saved = app.styleSheet()
+    try:
+        app.setStyleSheet("")
+        apply_message_box_style(app)
+        box = QMessageBox(QMessageBox.Icon.Warning, "T", "Some text")
+        for name in ("Open a Very Long Download Page", "Another Wide Button", "Locate Manually..."):
+            box.addButton(name, QMessageBox.ButtonRole.ActionRole)
+        box.setInformativeText(
+            "You can still use features that don't need them, but anything relying on a missing tool "
+            "will fail until it's installed."
+        )
+        box.show()
+        for _ in range(5):  # the filter finishes the layout on the next event-loop turn
+            app.processEvents()
+        text = box.findChild(QLabel, "qt_msgbox_label")
+        info = box.findChild(QLabel, "qt_msgbox_informativelabel")
+        # Nothing clipped: each label is tall enough for its wrapped text.
+        assert info.height() >= info.heightForWidth(info.width())
+        icon = box.findChild(QLabel, "qt_msgboxex_icon_label")
+        assert "qt_msgbox_label" in app.styleSheet() and "QMessageBox QLabel {" not in app.styleSheet()
+        assert text.geometry().left() - icon.geometry().right() < 60  # text right next to the icon
+        box.close()
+    finally:
+        app.setStyleSheet(saved)
+
+
+def test_lookup_dialog_names_its_rows(tmp_path):
+    """A row can be a folder (mp3redactor: one album per folder), not a file."""
+    from redactor_common.gui.lookup_dialog import LookupDialogBase, LookupResult
+
+    def build(**extra):
+        return LookupDialogBase(
+            ["a", "b"], None, window_title="T", info_text="i", search_label="s", item_label=str,
+            search_one=lambda item, _q: LookupResult(fields={"x": item}) if item == "a" else LookupResult(),
+            **extra,
+        )
+
+    default = build()
+    assert default.table.horizontalHeaderItem(0).text() == "File"
+    assert "1 of 2 file(s)" in default.status_label.text()
+    folders = build(item_noun="folder")
+    assert folders.table.horizontalHeaderItem(0).text() == "Folder"
+    assert "1 of 2 folder(s)" in folders.status_label.text()

@@ -190,15 +190,20 @@ class LookupDialogBase(QDialog):
         resolve_alternative: Optional[Callable[[object, object], LookupResult]] = None,
         progress_threshold: int = 3,
         auto_search: bool = True,
+        item_noun: str = "file",
     ):
         """`auto_search=False` builds the dialog without searching yet,
         for a subclass with a setup step first (e.g. locating an external
-        tool, confirming a large batch); it calls run_search() itself."""
+        tool, confirming a large batch); it calls run_search() itself.
+        `item_noun`: what a row is ("file", or "folder" when each row is
+        an album folder) -- the first column's header and the status line
+        ("Found something for 2 of 5 folder(s).")."""
         super().__init__(parent)
         self.setWindowTitle(window_title)
         self.resize(1150, 640)
         self.items = items
         self._item_label = item_label
+        self._item_noun = item_noun
         self._search_one = search_one
         self._info_text = info_text
         self._search_label = search_label
@@ -234,7 +239,7 @@ class LookupDialogBase(QDialog):
 
         self.table = QTableWidget()
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["File", "Found", "Apply"])
+        self.table.setHorizontalHeaderLabels([self._item_noun.capitalize(), "Found", "Apply"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(FOUND_COL, QHeaderView.ResizeMode.Stretch)
@@ -468,7 +473,7 @@ class LookupDialogBase(QDialog):
             for row, result in self._row_results.items()
             if result.error
         ]
-        msg = f"Found something for {found_count} of {len(self.items)} file(s)."
+        msg = f"Found something for {found_count} of {len(self.items)} {self._item_noun}(s)."
         if errors:
             msg += f" {len(errors)} error(s): {summarize_errors(errors)}"
         self.status_label.setText(msg)
