@@ -43,6 +43,8 @@ class RenamePatternDialog(QDialog):
         zero_pad_label: str = "Zero-pad number to:",
         zero_pad_widths: tuple[int, ...] = (2, 3, 4),
         always_pad_fields: dict[str, int] | None = None,
+        ascii_only: bool = False,
+        on_ascii_only_changed: Callable[[bool], None] | None = None,
         parent=None,
     ):
         """
@@ -58,6 +60,9 @@ class RenamePatternDialog(QDialog):
         %month% token always renders "02", never "2" -- unlike
         `zero_pad_field`, this isn't a per-run user choice, it's always
         correct for that field).
+        `ascii_only` / `on_ascii_only_changed`: the "ASCII-safe filenames"
+        checkbox (rename_pattern.to_ascii) -- its starting state, and a
+        callback the app uses to remember the choice in its settings.
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -67,6 +72,8 @@ class RenamePatternDialog(QDialog):
         self._get_current_path = get_current_path
         self._zero_pad_field = zero_pad_field
         self._always_pad_fields = always_pad_fields or {}
+        self._initial_ascii_only = ascii_only
+        self._on_ascii_only_changed = on_ascii_only_changed
         self.output_folder: str | None = None
 
         self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths)
@@ -111,6 +118,15 @@ class RenamePatternDialog(QDialog):
         else:
             self.zero_pad_cb = None
             self.zero_pad_width_combo = None
+
+        self.ascii_cb = QCheckBox("ASCII-safe filenames (é → e, æ → ae, ø → o; other symbols dropped)")
+        self.ascii_cb.setToolTip(
+            "Only plain ASCII letters, digits and punctuation in the new names -- for old file "
+            "systems, network shares, e-readers, car stereos and sync tools that mangle anything else."
+        )
+        self.ascii_cb.setChecked(self._initial_ascii_only)
+        self.ascii_cb.toggled.connect(self._on_ascii_toggled)
+        layout.addWidget(self.ascii_cb)
 
         mode_box = QGroupBox("Action")
         mode_layout = QVBoxLayout(mode_box)
@@ -159,6 +175,14 @@ class RenamePatternDialog(QDialog):
         layout.addWidget(buttons)
         self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
 
+    def _on_ascii_toggled(self, checked: bool) -> None:
+        if self._on_ascii_only_changed is not None:
+            self._on_ascii_only_changed(checked)
+        self._refresh_preview()
+
+    def ascii_only(self) -> bool:
+        return self.ascii_cb.isChecked()
+
     def _on_mode_toggled(self) -> None:
         self.choose_folder_btn.setEnabled(self.export_radio.isChecked())
         self._refresh_preview()
@@ -189,7 +213,7 @@ class RenamePatternDialog(QDialog):
 
             old_path = self._get_current_path(item)
             old_name = os.path.basename(old_path)
-            new_stem = render_filename(values, pattern)
+            new_stem = render_filename(values, pattern, ascii_only=self.ascii_cb.isChecked())
             ext = os.path.splitext(old_path)[1]
 
             directory = self.output_folder if self.export_radio.isChecked() else os.path.dirname(old_path)

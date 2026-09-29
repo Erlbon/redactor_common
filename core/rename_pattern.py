@@ -66,6 +66,31 @@ def zero_pad_numeric_value(value: str, width: int = 2) -> str:
     return value
 
 
+# Letters that don't decompose into an ASCII base letter plus accents
+# (unicodedata's NFKD handles é, ü, å, ñ, ... on its own).
+_ASCII_REPLACEMENTS = {
+    "æ": "ae", "Æ": "AE", "ø": "o", "Ø": "O", "œ": "oe", "Œ": "OE", "ß": "ss", "ẞ": "SS",
+    "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th", "ł": "l", "Ł": "L", "ı": "i",
+    "‘": "'", "’": "'", "‚": "'", "‹": "'", "›": "'", "“": '"', "”": '"', "„": '"', "«": '"', "»": '"',
+    "–": "-", "—": "-", "‐": "-", "‑": "-", "−": "-", "…": "...", "×": "x", "·": "-",
+    " ": " ",
+}
+
+
+def to_ascii(text: str) -> str:
+    """ASCII-only version of `text` for filenames that must survive any
+    filesystem, device or tool (old FAT/SMB shares, e-readers, car
+    stereos, sync tools): accents removed ("Pokémon" -> "Pokemon",
+    "Tromsø" -> "Tromso", "Æsop" -> "AEsop"), typographic quotes and
+    dashes made plain, and anything without an ASCII equivalent (CJK,
+    emoji, symbols) dropped."""
+    import unicodedata
+
+    text = "".join(_ASCII_REPLACEMENTS.get(char, char) for char in text)
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in text if ord(char) < 128 and not unicodedata.combining(char))
+
+
 def sanitize_filename(name: str) -> str:
     """Strip characters Windows forbids in filenames and tidy whitespace."""
     name = _ILLEGAL_CHARS_RE.sub("", name)
@@ -122,6 +147,7 @@ def render_filename(
     fallback: str = "untitled",
     optional_groups: bool = True,
     aliases: dict[str, str] | None = None,
+    ascii_only: bool = False,
 ) -> str:
     """Render a filename stem (no extension) from `pattern`, substituting
     each %field% token with values.get(field, ""). A token for a field
@@ -135,12 +161,17 @@ def render_filename(
 
     `optional_groups`: see resolve_optional_groups(). `aliases`: legacy
     token names mapped to current ones (see apply_aliases()).
+    `ascii_only`: pass the result through to_ascii() (the "ASCII-safe
+    filenames" option) -- before sanitizing, so a dropped character
+    can't leave doubled spaces or dangling separators behind.
     """
     pattern = apply_aliases(pattern, aliases or {})
     if optional_groups:
         pattern = resolve_optional_groups(pattern, values)
     result = _TOKEN_RE.sub(lambda m: values.get(m.group(1), "") or "", pattern)
 
+    if ascii_only:
+        result = to_ascii(result)
     result = sanitize_filename(result)
 
     if not result:
