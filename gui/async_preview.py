@@ -19,6 +19,8 @@ image file.
   after the selection has already moved on is dropped, never shown.
 - Decoding goes through image_decode.decode_scaled(), so a huge image
   is downscaled while decoding rather than after.
+- Deleting the owner (closing the window, quitting the app) while a load
+  is still running never hangs; see _POOLS below.
 
 Usage:
     self._preview = AsyncPreviewLoader(QSize(600, 900), parent=self)
@@ -32,16 +34,57 @@ Usage:
 
 from __future__ import annotations
 
+import atexit
+import weakref
 from pathlib import Path
 from typing import Callable, Union
 
 from PyQt6.QtCore import QObject, QRunnable, QSize, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage
+from PyQt6 import sip
 
 from redactor_common.gui.image_decode import decode_scaled
 
 PreviewSource = Union[bytes, str, Path, None]
 PreviewLoader = Callable[[], PreviewSource]
+
+
+# The worker pools, deliberately NOT Qt children of their loader
+# (2026-09-29). ~QThreadPool() blocks in waitForDone(), and a loader is
+# destroyed with its parent -- from Python (the window's refcount hitting
+# zero, or gc) with the GIL held. A load still running at that moment is
+# Python code that needs the GIL to finish, so the two waited on each
+# other forever: the app hung on exit if a thumbnail was still loading
+# when the user quit, and pytest hung at exit after failing tests kept
+# windows alive until its final gc. Pools live here instead and are only
+# ever waited on from waitForDone() calls PyQt makes with the GIL
+# released: shutdown(), and _drain_pools() at interpreter exit.
+# Each pool is kept with a weak reference to its loader, so a pool whose
+# loader is gone can be dropped once it's idle (destroying an idle pool
+# doesn't wait on anything) -- and with the loader's _Signals, so the
+# last reference to that main-thread QObject is never dropped by a
+# finishing task on the worker thread.
+_POOLS: list[tuple[QThreadPool, "_Signals", weakref.ref]] = []
+
+
+def _register(loader: "AsyncPreviewLoader") -> tuple[QThreadPool, "_Signals"]:
+    def in_use(pool: QThreadPool, owner: weakref.ref) -> bool:
+        alive = owner()
+        return (alive is not None and not sip.isdeleted(alive)) or pool.activeThreadCount() > 0
+
+    _POOLS[:] = [entry for entry in _POOLS if in_use(entry[0], entry[2])]
+    pool, signals = QThreadPool(), _Signals()
+    _POOLS.append((pool, signals, weakref.ref(loader)))
+    return pool, signals
+
+
+def _drain_pools() -> None:
+    for pool, _signals, _owner in _POOLS:
+        pool.clear()
+        pool.waitForDone()
+
+
+atexit.register(_drain_pools)
 
 
 class _Signals(QObject):
@@ -85,9 +128,8 @@ class AsyncPreviewLoader(QObject):
         self._target_size = target_size
         self._generation = 0
         self._pending: tuple[object, PreviewLoader, QSize | None] | None = None
-        self._pool = QThreadPool(self)
+        self._pool, self._signals = _register(self)
         self._pool.setMaxThreadCount(max_threads)
-        self._signals = _Signals()
         self._signals.done.connect(self._on_done)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -108,6 +150,15 @@ class AsyncPreviewLoader(QObject):
         self._generation += 1
         self._pending = None
         self._timer.stop()
+
+    def shutdown(self, msecs: int = -1) -> bool:
+        """Cancels (see cancel()), drops loads not yet started, and waits
+        for the one already running. Never needed for correctness --
+        a loader can be deleted at any time -- but lets a window or a
+        test fixture finish its background work at a known point."""
+        self.cancel()
+        self._pool.clear()
+        return self._pool.waitForDone(msecs)
 
     def wait_for_done(self, msecs: int = 5000) -> bool:
         """For tests: start any debounced request now and block until

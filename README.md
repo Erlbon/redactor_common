@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-23#02`.
+Currently: `2026-09-29#04`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -131,7 +131,7 @@ past exactly that on 2026-09-23.
 | `image_pane.py` | `ImagePreviewBox` (titled image area that fills and rescales to its space, with room for a caption/buttons) + `ImagePanelSplitter` (fields on top, image below, draggable divider; both panes wrapped so the fields scroll instead of squashing and the group box's title can't block panel collapse) -- the resizable cover/thumbnail area of every side panel | 2026-09-23; epub, video and cbz each had their own copy of the splitter, and mp3's cover started out fixed-height |
 | `app_bootstrap.py` | `run_app(app_name, window_factory, crash_log_path, app_user_model_id, icon_path)` -- the whole startup sequence: crash logging + "Unexpected Error" dialog, Windows taskbar AppUserModelID, QApplication + icon, `apply_theme()`, `apply_message_box_style()` | 2026-09-23; every `main.py` was a variation of this (video had no crash log or icon) |
 | `image_decode.py` | `decode_scaled(bytes, size)` -- decode straight to a target size via `QImageReader.setScaledSize()`, never upscaling; safe on a worker thread | split out of `async_icon_cache.py`, 2026-09-23 |
-| `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there |
+| `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there. 2026-09-29#04: deleting the owner window mid-load (quitting the app, or pytest's final gc after failing tests) deadlocked on the GIL -- pools are no longer Qt children; `shutdown()` added |
 | `visible_rows.py` | `VisibleRowsWatcher` -- reports the on-screen rows (+ buffer), debounced, on scroll/resize/sort/row changes: the lazy half of epub's lazy cover loading (~126s → ~2.6s for a 15k-book rebuild) | epub, 2026-09-23; now also cbz's table covers |
 
 ## Adoption (as of 2026-09-23)

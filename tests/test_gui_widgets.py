@@ -151,6 +151,81 @@ def test_preview_loader_failure_emits_null_image():
     assert results[0].isNull()
 
 
+# Deleting a loader's owner while a load runs used to deadlock:
+# ~QThreadPool() waited for the load with the GIL held, and the load
+# (Python code) needed the GIL to finish. The app hung on quit if a
+# thumbnail was still loading; pytest hung at exit once failing tests
+# kept windows alive until its final gc. Run in a child process, since
+# the failure is a hang, not an exception.
+_DELETE_WHILE_LOADING = """
+import gc, sys, time
+from PyQt6.QtCore import QObject
+from PyQt6.QtWidgets import QApplication
+from redactor_common.gui.async_preview import AsyncPreviewLoader
+
+app = QApplication([])
+started = []
+
+def slow():
+    started.append(1)
+    time.sleep(0.3)  # drops the GIL; returning needs it back
+    return None
+
+for how in ("refcount", "gc", "exit"):
+    started.clear()
+    owner = QObject()
+    owner.loader = AsyncPreviewLoader(debounce_ms=0, parent=owner)
+    owner.loader.request(how, slow)
+    owner.loader.wait_for_done(0)  # starts it without waiting
+    while not started:
+        time.sleep(0.01)
+    if how == "exit":
+        break  # the app quitting with the load still running
+    if how == "gc":
+        owner.cycle = owner
+    del owner
+    gc.collect()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:  # the late result reaches a deleted loader
+        app.processEvents()
+print("ok", flush=True)
+"""
+
+
+def test_preview_loader_owner_deleted_while_loading_does_not_hang():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import redactor_common
+
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    # The child must import the same redactor_common as this process.
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(Path(redactor_common.__file__).parent.parent), env.get("PYTHONPATH")) if p)
+    result = subprocess.run([sys.executable, "-c", _DELETE_WHILE_LOADING], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_preview_loader_shutdown_drops_pending_and_waits_for_running():
+    loader = AsyncPreviewLoader(debounce_ms=0)
+    finished, results = [], []
+    loader.image_ready.connect(lambda token, image: results.append(token))
+
+    def slow():
+        time.sleep(0.2)
+        finished.append(1)
+
+    loader.request("running", slow)
+    loader.wait_for_done(0)
+    loader.request("pending", slow)  # debounced, not started yet
+    assert loader.shutdown()
+    assert finished == [1]  # the running load finished before shutdown() returned
+    _pump_until(lambda: False, timeout=0.3)
+    assert results == []  # and neither result is delivered
+
 # -- VisibleRowsWatcher ------------------------------------------------------------------
 
 def test_visible_rows_watcher_reports_viewport_plus_buffer():
