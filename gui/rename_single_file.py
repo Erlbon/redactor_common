@@ -46,6 +46,7 @@ def rename_single_file(
     current_path: str,
     set_path: Callable[[str], None],
     title: str = "Rename File",
+    log=None,
 ) -> bool:
     """Prompts for a new filename (current stem pre-filled, extension
     kept automatically), renames the file at `current_path` on disk
@@ -64,7 +65,8 @@ def rename_single_file(
     A physical file operation -- callers should NOT push this onto
     their own undo stack, same "in-memory edits only" line every
     Redactor project already draws for Save/Fix Integrity/Rename-
-    Export's own "rename in place" mode.
+    Export's own "rename in place" mode. Instead, `log` (a
+    core.rename_log.RenameLog) records it for File > Undo Last Rename.
     """
     current_stem = os.path.splitext(os.path.basename(current_path))[0]
     new_stem, ok = QInputDialog.getText(
@@ -86,4 +88,6 @@ def rename_single_file(
         return False
 
     set_path(new_path)
+    if log is not None:
+        log.record("Rename File", [(current_path, new_path)])
     return True
