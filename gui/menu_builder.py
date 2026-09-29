@@ -152,6 +152,15 @@ def build_menu_bar(
             f"build_menu_bar requires all five standard menus; missing: {missing}"
         )
 
+    # Any other key used to be silently dropped -- cbzredactor's whole
+    # "Collection" menu shipped invisible that way (2026-09-29).
+    unknown = [name for name in specs if name not in STANDARD_MENU_ORDER]
+    if unknown:
+        raise ValueError(
+            f"build_menu_bar only builds the five standard menus from specs; "
+            f"pass {unknown} via extra_menus instead"
+        )
+
     menu_bar = window.menuBar()
     actions: dict[str, QAction] = {}
 

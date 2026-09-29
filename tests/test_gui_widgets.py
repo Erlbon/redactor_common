@@ -475,3 +475,38 @@ def test_lookup_dialog_names_its_rows(tmp_path):
     folders = build(item_noun="folder")
     assert folders.table.horizontalHeaderItem(0).text() == "Folder"
     assert "1 of 2 folder(s)" in folders.status_label.text()
+
+
+# -- build_menu_bar ----------------------------------------------------------------------
+
+def _menu_specs():
+    from redactor_common.gui.menu_builder import MenuAction
+    specs = {name: [] for name in ("File", "Import", "Operations", "Settings", "Help")}
+    specs["File"] = [MenuAction("load", "&Load...", lambda: None)]
+    return specs
+
+
+def test_build_menu_bar_places_extra_menus():
+    from PyQt6.QtWidgets import QMainWindow
+
+    from redactor_common.gui.menu_builder import MenuAction, build_menu_bar
+
+    window = QMainWindow()
+    actions = build_menu_bar(window, _menu_specs(),
+                             extra_menus=[("Collection", 3, [MenuAction("scan", "&Scan...", lambda: None)])])
+    assert [a.text() for a in window.menuBar().actions()] == [
+        "&File", "&Import", "&Operations", "&Collection", "&Settings", "&Help"]
+    assert set(actions) == {"load", "scan"}
+
+
+def test_build_menu_bar_rejects_an_unknown_menu_key():
+    # cbzredactor's Collection menu was a specs key and silently never appeared.
+    import pytest
+    from PyQt6.QtWidgets import QMainWindow
+
+    from redactor_common.gui.menu_builder import build_menu_bar
+
+    specs = _menu_specs()
+    specs["Collection"] = []
+    with pytest.raises(ValueError, match="extra_menus"):
+        build_menu_bar(QMainWindow(), specs)
