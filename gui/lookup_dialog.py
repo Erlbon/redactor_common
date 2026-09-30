@@ -82,6 +82,8 @@ Usage:
 
 from __future__ import annotations
 
+import html
+
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -518,7 +520,9 @@ class LookupDialogBase(QDialog):
 
         if result and result.found:
             self.detail_summary.setText(
-                "\n".join(f"<b>{k}:</b> {v}" for k, v in result.fields.items())
+                # Field values come from remote APIs: escape them, and join with
+                # <br> (a newline collapses to a space in rich text).
+                "<br>".join(f"<b>{html.escape(str(k))}:</b> {html.escape(str(v))}" for k, v in result.fields.items())
             )
             self.detail_summary.setTextFormat(Qt.TextFormat.RichText)
         elif result and result.error:

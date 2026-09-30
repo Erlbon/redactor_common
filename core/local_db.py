@@ -42,6 +42,8 @@ import os
 import re
 import sqlite3
 import threading
+import unicodedata
+from pathlib import Path
 from typing import Callable, Iterable, Optional, Type, TypeVar
 
 SQLITE_VARIABLE_CHUNK = 5000  # well under SQLite's bound-variable limit (32766)
@@ -54,11 +56,18 @@ class LocalDatabaseError(Exception):
 
 
 def normalize_words(name: str) -> str:
-    """Lower-case letters and digits only, words separated by single
-    spaces; "&" counts as "and". "G.I. Joe - A Real American Hero" and
+    """Lower-case letters and digits only (any script; accents dropped),
+    words separated by single spaces; "&" counts as "and". "G.I. Joe - A Real American Hero" and
     "G.I. Joe: A Real American Hero" normalize alike."""
     text = (name or "").casefold().replace("&", " and ")
-    return re.sub(r"[^0-9a-z]+", " ", text).strip()
+    # Drop accents from Latin letters only ("Amélie" -> "amelie"): NFKD on
+    # Cyrillic "й" or Hangul would change the letter itself.
+    text = "".join(
+        "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+        if "LATIN" in unicodedata.name(ch, "") else ch
+        for ch in text
+    )
+    return re.sub(r"[\W_]+", " ", text).strip()  # \W is Unicode-aware: CJK/Cyrillic words survive
 
 
 def year_gap(a, b) -> int:
@@ -87,7 +96,7 @@ class NameIndex:
         words = self._normalize(text).split()
         if not words:
             return []
-        query = " ".join(f'"{word}"' for word in words)
+        query = " ".join('"' + word.replace('"', '""') + '"' for word in words)
         return [row[0] for row in self._con.execute("select key from names where names match ?", (query,))]
 
     def close(self) -> None:
@@ -116,11 +125,18 @@ class LocalDatabase:
         if not path or not os.path.isfile(path):
             raise error_cls(f"Database file not found: {path or '(not set)'}")
         self.path = path
+        # as_uri() percent-encodes the path; a raw f"file:{path}" breaks
+        # on "#" (starts a fragment) and "%" (an escape) in folder names.
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        con = None
         try:
-            self._con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-            tables = {r[0] for r in self._con.execute("select name from sqlite_master where type='table'")}
+            con = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
         except sqlite3.DatabaseError as exc:
+            if con is not None:
+                con.close()  # else Windows keeps the file open
             raise error_cls(f"Not a readable SQLite database: {exc}") from exc
+        self._con = con
         missing = set(required_tables) - tables
         if missing:
             self._con.close()

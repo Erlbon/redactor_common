@@ -53,12 +53,34 @@ def make_crash_dialog(log_path: str | Path) -> crash_log.ExceptionCallback:
     nothing if no QApplication exists yet (a crash during the earliest
     startup is still logged either way)."""
 
-    def _show(exc_type, exc_value, exc_tb) -> None:
-        from PyQt6.QtWidgets import QApplication, QMessageBox
+    relay = None
 
-        if QApplication.instance() is None:
+    def _show(exc_type, exc_value, exc_tb) -> None:
+        nonlocal relay
+        from PyQt6.QtCore import QObject, QThread, pyqtSignal
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
             return
         summary = "".join(traceback.format_exception_only(exc_type, exc_value)).strip()
+        if QThread.currentThread() is app.thread():
+            _display(summary)
+            return
+        # A widget can only be made on the GUI thread: hand the message
+        # over through a signal (queued across threads) instead.
+        if relay is None:
+            class _Relay(QObject):
+                show_message = pyqtSignal(str)
+
+            relay = _Relay()
+            relay.moveToThread(app.thread())
+            relay.show_message.connect(_display)
+        relay.show_message.emit(summary)
+
+    def _display(summary: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
         QMessageBox.critical(
             None,
             "Unexpected Error",

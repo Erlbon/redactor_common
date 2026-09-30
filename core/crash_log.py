@@ -25,6 +25,7 @@ import datetime
 import faulthandler
 import os
 import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Callable
@@ -124,3 +125,13 @@ def install(
         previous_hook(exc_type, exc_value, exc_tb)
 
     sys.excepthook = _hook
+
+    # sys.excepthook never sees an exception raised in a plain
+    # threading.Thread (the default hook prints to a stderr a windowed
+    # build doesn't have), so route those through the same path.
+    def _thread_hook(args):
+        if args.exc_type is SystemExit:
+            return
+        _hook(args.exc_type, args.exc_value, args.exc_traceback)
+
+    threading.excepthook = _thread_hook

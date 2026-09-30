@@ -24,6 +24,8 @@ import os
 import re
 from typing import Callable
 
+from redactor_common.core.os_utils import rename_no_clobber
+
 # Characters Windows forbids in filenames, plus control characters.
 _ILLEGAL_CHARS_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _MULTI_SPACE_RE = re.compile(r"[ \t]+")
@@ -99,7 +101,7 @@ def sanitize_filename(name: str) -> str:
     # (e.g. no series -> " - Title"); collapse those down.
     name = _REPEATED_SEPARATOR_RE.sub(" - ", name)
     name = _TRIM_SEPARATORS_RE.sub("", name)
-    name = name.strip().strip(".")  # trailing dots/spaces are invalid on Windows
+    name = name.strip(" .")  # trailing dots/spaces are invalid on Windows (" . " needs both stripped together)
     return name
 
 
@@ -181,29 +183,47 @@ def render_filename(
         result = f"_{result}"
 
     if len(result) > MAX_FILENAME_LENGTH:
-        result = result[:MAX_FILENAME_LENGTH].rstrip()
+        # Re-sanitize after cutting: the cut can land right after a dot or
+        # a " - " separator, and Windows rejects names ending in either.
+        result = sanitize_filename(result[:MAX_FILENAME_LENGTH]) or fallback
+        if is_reserved_name(result):
+            result = f"_{result}"
 
     return result
 
 
-def unique_path(directory: str, stem: str, ext: str, taken: set[str]) -> str:
+def unique_path(directory: str, stem: str, ext: str, taken: set[str], own_path: str | None = None) -> str:
     """Return a filesystem path for `stem+ext` inside `directory` that
     doesn't collide with anything already on disk or already claimed in
     this batch (`taken`, a set of absolute paths already assigned during
     the current rename/export run -- normalized case-insensitively since
     Windows filesystems are case-insensitive by default).
+
+    `own_path`: the file being renamed, when this is an in-place rename.
+    Its own current path is not a collision -- without this, re-running a
+    rename over files that already match the pattern would number every
+    one of them ("Name (2).ext"), and a case-only change ("a.cbz" ->
+    "A.cbz") would too, since on Windows the file "exists" already.
     """
     def norm(p: str) -> str:
         return os.path.normcase(os.path.abspath(p))
 
+    own = norm(own_path) if own_path else None
+
+    def free(candidate: str) -> bool:
+        key = norm(candidate)
+        if key in taken:
+            return False
+        return key == own or not os.path.exists(candidate)
+
     candidate = os.path.join(directory, f"{stem}{ext}")
-    if not os.path.exists(candidate) and norm(candidate) not in taken:
+    if free(candidate):
         return candidate
 
     n = 2
     while True:
         candidate = os.path.join(directory, f"{stem} ({n}){ext}")
-        if not os.path.exists(candidate) and norm(candidate) not in taken:
+        if free(candidate):
             return candidate
         n += 1
 
@@ -258,13 +278,20 @@ def rename_file_on_disk(path: str, new_stem: str) -> str:
     ext = os.path.splitext(path)[1]
     new_path = os.path.join(directory, new_stem + ext)
 
-    if os.path.normcase(os.path.abspath(new_path)) == os.path.normcase(os.path.abspath(path)):
+    if new_path == path:
         return path
 
-    if os.path.exists(new_path):
+    # Same file under a case-insensitive filesystem ("a.cbz" -> "A.cbz"):
+    # a real rename, not a collision.
+    same_file = os.path.normcase(os.path.abspath(new_path)) == os.path.normcase(os.path.abspath(path))
+    if same_file:
+        os.rename(path, new_path)
+        return new_path
+
+    try:
+        rename_no_clobber(path, new_path)
+    except FileExistsError:
         raise FileExistsError(
             f'A file named "{os.path.basename(new_path)}" already exists in this folder.'
-        )
-
-    os.rename(path, new_path)
+        ) from None
     return new_path

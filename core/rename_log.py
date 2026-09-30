@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from redactor_common.core.os_utils import rename_no_clobber
+
 MAX_BATCHES = 50
 
 
@@ -83,9 +85,9 @@ class RenameLog:
             pass  # best effort, like the apps' other settings: the rename itself already happened
 
     def record(self, label: str, renames: list[tuple[str, str]]) -> None:
-        """One rename action. Pairs whose old and new path are the same
-        (nothing renamed) are left out; an empty batch isn't recorded."""
-        pairs = [(str(old), str(new)) for old, new in renames if os.path.normcase(str(old)) != os.path.normcase(str(new))]
+        """One rename action. Pairs whose old and new path are identical
+        (nothing renamed; a case-only change still counts) are left out; an empty batch isn't recorded."""
+        pairs = [(str(old), str(new)) for old, new in renames if str(old) != str(new)]
         if not pairs:
             return
         batches = self._read()
@@ -116,7 +118,10 @@ class RenameLog:
                 result.problems.append(f"{name}: its old name {os.path.basename(old)} is taken again")
                 continue
             try:
-                os.rename(new, old)
+                if os.path.normcase(os.path.abspath(old)) == os.path.normcase(os.path.abspath(new)):
+                    os.rename(new, old)  # case-only rename: the same file, not a collision
+                else:
+                    rename_no_clobber(new, old)
             except OSError as exc:
                 result.problems.append(f"{name}: {exc}")
                 continue

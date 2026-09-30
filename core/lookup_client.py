@@ -20,6 +20,7 @@ caller already wanted to raise anyway.
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.error
@@ -28,6 +29,13 @@ import urllib.request
 from typing import Callable, Mapping, Optional, Type, Union
 
 DEFAULT_TIMEOUT = 8.0
+# Bigger than any cover image or metadata JSON; stops a misbehaving
+# server streaming until memory runs out.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+_ALLOWED_SCHEMES = ("http", "https")
+# Everything a fetch can raise that fetch_json/fetch_bytes turn into error_cls:
+# ValueError covers a malformed URL, HTTPException a truncated/garbled response.
+_FETCH_ERRORS = (urllib.error.URLError, socket.timeout, TimeoutError, OSError, http.client.HTTPException, ValueError)
 # A fetch callable takes a plain URL, or a urllib Request when the call
 # needs headers (an API key, a bearer token) or a POST body -- see
 # build_request().
@@ -54,8 +62,15 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT) -> Fet
                 request.add_header("User-Agent", user_agent)
         else:
             request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+        # urlopen would also follow file: and ftp: URLs; a cover URL taken
+        # from an API response must never be able to read a local file.
+        if urllib.parse.urlsplit(request.full_url).scheme.lower() not in _ALLOWED_SCHEMES:
+            raise ValueError(f"Only http and https URLs are allowed: {request.full_url}")
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+            data = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(data) > MAX_RESPONSE_BYTES:
+            raise OSError("the response was too large")
+        return data
 
     return _fetch
 
@@ -119,7 +134,7 @@ def fetch_json(
         if status_messages and exc.code in status_messages:
             raise error_cls(status_messages[exc.code]) from exc
         raise error_cls(f"{source_name} returned an error (HTTP {exc.code}): {exc.reason}") from exc
-    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+    except _FETCH_ERRORS as exc:
         raise error_cls(f"Could not reach {source_name}: {exc}") from exc
 
     try:
@@ -148,7 +163,7 @@ def fetch_bytes(
         if status_messages and exc.code in status_messages:
             raise error_cls(status_messages[exc.code]) from exc
         raise error_cls(f"Could not download {what} (HTTP {exc.code}): {exc.reason}") from exc
-    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+    except _FETCH_ERRORS as exc:
         raise error_cls(f"Could not download {what}: {exc}") from exc
     if require_data and not data:
         raise error_cls(f"Downloading {what} returned no data.")

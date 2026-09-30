@@ -116,20 +116,22 @@ def run_with_progress(
     if len(items) >= threshold:
         dialog = _make_dialog(parent, label, len(items), cancellable)
 
-    for index, item in enumerate(items):
-        if dialog is not None and cancellable and dialog.wasCanceled():
+    try:
+        for index, item in enumerate(items):
+            if dialog is not None and cancellable and dialog.wasCanceled():
+                return False
+            if dialog is not None and label_for is not None:
+                dialog.setLabelText(_elide_label(label_for(item)))
+            step(item, index)
+            if dialog is not None and (index % update_every == 0 or index == len(items) - 1):
+                dialog.setValue(index + 1)
+                QApplication.processEvents()
+        return True
+    finally:
+        # Also on an exception from step(): a window-modal dialog left
+        # open would block the whole window behind the crash message.
+        if dialog is not None:
             dialog.close()
-            return False
-        if dialog is not None and label_for is not None:
-            dialog.setLabelText(_elide_label(label_for(item)))
-        step(item, index)
-        if dialog is not None and (index % update_every == 0 or index == len(items) - 1):
-            dialog.setValue(index + 1)
-            QApplication.processEvents()
-
-    if dialog is not None:
-        dialog.close()
-    return True
 
 
 class ProgressReporter:

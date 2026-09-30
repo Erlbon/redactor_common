@@ -241,7 +241,8 @@ class RenamePatternDialog(QDialog):
             ext = os.path.splitext(old_path)[1]
 
             directory = self.output_folder if self.export_radio.isChecked() else os.path.dirname(old_path)
-            new_path = unique_path(directory, new_stem, ext, taken) if directory else os.path.join("", new_stem + ext)
+            own = None if self.export_radio.isChecked() else old_path
+            new_path = unique_path(directory, new_stem, ext, taken, own) if directory else os.path.join("", new_stem + ext)
             taken.add(os.path.normcase(os.path.abspath(new_path)) if directory else new_path)
             new_name = os.path.basename(new_path)
 

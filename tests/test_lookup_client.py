@@ -61,7 +61,7 @@ def test_make_default_fetch_sets_user_agent(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b"ok"
 
     def _fake_urlopen(request, timeout):

@@ -14,6 +14,28 @@ import subprocess
 import sys
 
 
+def rename_no_clobber(src: str, dst: str) -> None:
+    """os.rename() that never replaces an existing `dst`: raises
+    FileExistsError instead. Windows' os.rename already behaves this way;
+    POSIX's silently overwrites, so there a hard link (which fails
+    atomically if `dst` exists) followed by removing `src` is used,
+    falling back to a plain exists-check when the filesystem has no
+    hard links."""
+    if sys.platform == "win32":
+        os.rename(src, dst)
+        return
+    try:
+        os.link(src, dst)
+    except FileExistsError:
+        raise
+    except OSError:
+        if os.path.exists(dst):
+            raise FileExistsError(dst) from None
+        os.rename(src, dst)
+        return
+    os.unlink(src)
+
+
 def reveal_in_file_manager(path: str) -> None:
     """Opens the system file manager showing (ideally selecting) path.
     Best-effort -- silently does nothing if the platform call fails,
