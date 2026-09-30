@@ -15,6 +15,7 @@ from typing import Callable
 
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from redactor_common.core.move_plan import prune_empty_dirs
 from redactor_common.core.rename_log import RenameLog
 
 TITLE = "Undo Last Rename"
@@ -49,4 +50,12 @@ def undo_last_rename(parent: QWidget, log: RenameLog, on_restored: Callable[[str
             parent, TITLE,
             f"Renamed {len(result.restored)} of {len(batch.renames)} file(s) back. Not undone:\n\n{details}",
         )
+    if result.created_dirs:
+        tidy = QMessageBox.question(
+            parent, TITLE,
+            f"The move created {len(result.created_dirs)} folder(s). Remove those that are now empty?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes,
+        )
+        if tidy == QMessageBox.StandardButton.Yes:
+            prune_empty_dirs(result.created_dirs, stop_at_root=result.root or None, climb=False)
     return len(result.restored)

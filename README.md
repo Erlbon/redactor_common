@@ -56,7 +56,34 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#08`.
+Currently: `2026-09-30#09`.
+
+## "Move into folders" (third mode of the Rename/Export dialog)
+
+Next to Rename and Export, `RenamePatternDialog` has a third radio that moves files into a
+folder tree under a library root. The pattern may contain `/` or `\`:
+`%author%/%series%/%title%`, `%albumartist%/%album%/%track% - %title%`,
+`%series%/Season %season%/%title%`. Separators are split off *before* tokens are substituted, so a
+`/` inside a value never makes a folder; empty folder parts are dropped; `..`, reserved names and
+over-long paths are neutralized; a destination that resolves outside the root (symlink/junction) is
+blocking and disables Apply. Rename and Export keep stripping separators as before.
+
+```python
+dlg = RenamePatternDialog(items, placeholders, get_values, get_path, history, default,
+                          library_root=settings.value("move/root", ""),
+                          on_library_root_changed=lambda p: settings.setValue("move/root", p),
+                          parent=self)
+if dlg.exec() and dlg.is_move_mode():
+    summary = run_planned_moves(self, dlg.planned_moves(), copy=False,
+                                rename_log=self.rename_log, label="Move into folders")
+    for item, old, new in summary.done:
+        item.path = new          # point the app's own items at the new paths
+```
+
+Cross-volume moves copy, verify (size + content fingerprint) and only then send the original to the
+Recycle Bin (`send2trash` must be in the app's requirements); if that fails the original is kept.
+Undo Last Rename moves files back and offers to remove the folders the move created; a cross-volume
+move whose original is in the Bin is reported rather than undone.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -64,6 +91,7 @@ Currently: `2026-09-30#08`.
 |---|---|---|
 | `table_settings.py` | Field-name-based column visibility/order persistence | video (more robust than epub's index-based original) |
 | `rename_pattern.py` | `%field%` pattern → filename. Optional `(...)`/`[...]`/`{...}` groups (dropped when every field inside is empty), legacy token `aliases`, reserved device names checked before the first dot (`CON.mp4`), 150-char cap, `unique_path()`, `rename_file_on_disk()` | epub, generalized off `EpubMetadata` to a plain `dict[str, str]`; optional groups + aliases merged back from epub 2026-09-23, dotted reserved-name check from video |
+| `move_plan.py` | "Move into folders" engine: `render_relative_path()` (pattern split on `/` and `\` *before* substitution, each segment sanitized, `..` impossible), `plan_moves()` → `PlannedMove` (collision numbering, folders to create, blocking warning if the destination resolves outside the root or the path is too long), `execute_move()` (same-volume rename; cross-volume verified copy then original to the Recycle Bin; never overwrites), `prune_empty_dirs()` | 2026-09-30 |
 | `filename_parser.py` | filename → `%field%` values (reverse of the above). Per-field regex shapes (`field_patterns`: `SERIES_INDEX_FIELD_PATTERN` with ranges/ordinals, `MONTH_FIELD_PATTERN` with month names, `YEAR_FIELD_PATTERN`, ...), per-field `normalizers`, optional groups, `field_value_counts()`. Whitespace is matched strictly first and only loosened if nothing matches -- the loose rule alone split "Jean-Paul Sartre - Nausea" on the inner hyphen | epub, same generalization; epub's later additions merged back 2026-09-23 |
 | `search_replace.py` | plain/regex search & replace | epub, already generic |
 | `case_conversion.py` | UPPER/lower/Title/Sentence case. Title case capitalizes after a colon/dash ("Star Wars: A New Hope") and the first letter rather than first character ("(The End)"); video's short mode names accepted too | epub; video's clause rules merged 2026-09-23 |
@@ -123,6 +151,7 @@ past exactly that on 2026-09-23.
 | `quick_series_number.py` | `prompt_and_generate_series_numbers()` — the one-prompt "starting value, +1 per row" quick numbering for a table right-click menu, no field picker/preview (that's what `auto_numbering_dialog.py` is for) | epub, generalized (its `quick_number_series()` right-click handler) |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
 | `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
+| `move_runner.py` | `run_planned_moves(parent, planned, copy, rename_log, label)` — executes the Rename dialog's "Move into folders" plan under a cancellable progress dialog (per-file error isolation, `summarize_errors`), records one `RenameLog` batch (so Undo Last Rename restores the moves and offers to remove the folders the move created), then asks once whether to remove the now-empty source folders | 2026-09-30 |
 | `rename_single_file.py` | `rename_single_file()` — quick, direct rename of one file (QInputDialog prompt, current stem pre-filled, extension kept automatically), for fixing a typo without the batch pattern tool above; wraps `core/rename_pattern.py`'s already-generic `rename_file_on_disk()` | mp3, generalized off its own copy — itself independently re-derived from epub's original, which now uses this too (2026-09-23) |
 | `sortable_table.py` | `NumericTableWidgetItem` (compares numerically when it can — an optional explicit `sort_value` covers a suffixed display like "128.5 LUFS"/"44100 Hz" whose text alone isn't a bare number — falling back to normal text comparison otherwise) + `suspend_sorting(table)` (a context manager disabling `setSortingEnabled()` for a bulk `setItem()` populate loop, restoring whatever state was in effect before — REQUIRED around one, since Qt re-sorts as items land and can relocate an earlier row's items before a later row is even written) | epub, generalized off nine hand-written copies of the same `was_sorting = table.isSortingEnabled(); ...` block at each of its own bulk-repopulate call sites. Only safe to pair with `Qt.UserRole`-based row→item mapping, NOT list-index-based mapping — see cbzredactor's own deliberate non-native sort implementation, which exists specifically because native sort doesn't fit its architecture |
 | `manage_list_dialog.py` | `ManageListDialog` — Add/Remove screen over a hideable-defaults-plus-custom-entries list (Add/Remove Genres, Add/Remove Languages) | epub, already generic (promoted once cbzredactor needed the same pattern) |

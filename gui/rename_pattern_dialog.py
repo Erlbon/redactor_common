@@ -5,7 +5,8 @@ The "Tag -> Filename" dialog, mp3tag's Convert feature: build a
 filename pattern from metadata placeholders, preview the result for
 every item being processed, then either rename the files in place or
 export copies with the new names into a chosen folder, leaving the
-originals untouched.
+originals untouched -- or move them into a folder tree under a library
+root (the pattern may then contain "/", see core/move_plan.py).
 
 Generalized from the epub project's RenameDialog to work on any item
 type via accessor callables, so it isn't tied to EpubBook.
@@ -22,6 +23,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from redactor_common.core.error_summary import summarize_errors
+from redactor_common.core.move_plan import PlannedMove, plan_moves
 from redactor_common.core.rename_pattern import render_filename, unique_path, zero_pad_numeric_value
 from redactor_common.gui.pattern_field_panel import PatternFieldPanel
 
@@ -47,6 +50,8 @@ class RenamePatternDialog(QDialog):
         on_ascii_only_changed: Callable[[bool], None] | None = None,
         zero_pad_initial: tuple[bool, int] | None = None,
         on_zero_pad_changed: Callable[[bool, int], None] | None = None,
+        library_root: str = "",
+        on_library_root_changed: Callable[[str], None] | None = None,
         parent=None,
     ):
         """
@@ -70,6 +75,12 @@ class RenamePatternDialog(QDialog):
         remember-last-choice pair for the zero-pad checkbox and width
         -- `(enabled, width)` in, `callback(enabled, width)` on every
         change. Ignored without `zero_pad_field`.
+
+        `library_root` / `on_library_root_changed`: the "Move into
+        folders" mode's root folder -- its starting value and a callback
+        (`callback(path)`) the app uses to remember the choice, like the
+        ASCII checkbox. In that mode the pattern may contain "/" or "\\"
+        to make sub-folders (`%author%/%series%/%title%`).
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -84,6 +95,9 @@ class RenamePatternDialog(QDialog):
         self._zero_pad_initial = zero_pad_initial
         self._on_zero_pad_changed = on_zero_pad_changed
         self.output_folder: str | None = None
+        self._library_root = library_root or ""
+        self._on_library_root_changed = on_library_root_changed
+        self._moves: list[PlannedMove] = []
 
         self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths)
         self._refresh_preview()
@@ -153,6 +167,8 @@ class RenamePatternDialog(QDialog):
         group = QButtonGroup(self)
         group.addButton(self.rename_radio)
         group.addButton(self.export_radio)
+        self.move_radio = QRadioButton("Move into folders under a library root (pattern may contain /)")
+        group.addButton(self.move_radio)
         mode_layout.addWidget(self.rename_radio)
 
         export_row = QHBoxLayout()
@@ -167,8 +183,21 @@ class RenamePatternDialog(QDialog):
         self.folder_label.setStyleSheet("color: gray; font-size: 11px;")
         mode_layout.addWidget(self.folder_label)
 
+        move_row = QHBoxLayout()
+        move_row.addWidget(self.move_radio)
+        self.choose_root_btn = QPushButton("Library Root…")
+        self.choose_root_btn.clicked.connect(self._choose_root)
+        self.choose_root_btn.setEnabled(False)
+        move_row.addWidget(self.choose_root_btn)
+        mode_layout.addLayout(move_row)
+
+        self.root_label = QLabel(self._library_root or "(no library root chosen)")
+        self.root_label.setStyleSheet("color: gray; font-size: 11px;")
+        mode_layout.addWidget(self.root_label)
+
         self.rename_radio.toggled.connect(self._on_mode_toggled)
         self.export_radio.toggled.connect(self._on_mode_toggled)
+        self.move_radio.toggled.connect(self._on_mode_toggled)
         layout.addWidget(mode_box)
 
         self.preview_table = QTableWidget()
@@ -209,7 +238,20 @@ class RenamePatternDialog(QDialog):
 
     def _on_mode_toggled(self) -> None:
         self.choose_folder_btn.setEnabled(self.export_radio.isChecked())
+        self.choose_root_btn.setEnabled(self.move_radio.isChecked())
+        self.preview_table.setHorizontalHeaderLabels(
+            ["Current filename", "New path (relative to library root)" if self.move_radio.isChecked() else "New filename"]
+        )
         self._refresh_preview()
+
+    def _choose_root(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose Library Root Folder", self._library_root)
+        if folder:
+            self._library_root = folder
+            self.root_label.setText(folder)
+            if self._on_library_root_changed is not None:
+                self._on_library_root_changed(folder)
+            self._refresh_preview()
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose Export Folder")
@@ -218,7 +260,44 @@ class RenamePatternDialog(QDialog):
             self.folder_label.setText(folder)
             self._refresh_preview()
 
+    def _refresh_move_preview(self) -> None:
+        zero_pad = bool(self.zero_pad_cb and self.zero_pad_cb.isChecked())
+        zero_pad_width = self.zero_pad_width_combo.currentData() if self.zero_pad_width_combo else 2
+
+        def padded_values(item) -> dict[str, str]:
+            values = dict(self._get_values(item))
+            if zero_pad and self._zero_pad_field and self._zero_pad_field in values:
+                values[self._zero_pad_field] = zero_pad_numeric_value(values[self._zero_pad_field], zero_pad_width)
+            for field, width in self._always_pad_fields.items():
+                if field in values:
+                    values[field] = zero_pad_numeric_value(values[field], width)
+            return values
+
+        self._moves = plan_moves(
+            self.items, self._library_root, self.pattern_edit.text(), padded_values,
+            self._get_current_path, ascii_only=self.ascii_cb.isChecked(),
+        )
+        self._planned = [(m.item, m.old_path, m.new_path) for m in self._moves]
+        self.preview_table.setRowCount(len(self._moves))
+        for row, move in enumerate(self._moves):
+            shown = move.relative_path() if not (move.blocking and not self._library_root) else ""
+            self.preview_table.setItem(row, 0, QTableWidgetItem(os.path.basename(move.old_path)))
+            self.preview_table.setItem(row, 1, QTableWidgetItem(shown))
+
+        if not self._library_root:
+            self.warning_label.setText("Choose a library root folder before applying.")
+            self._ok_button.setEnabled(False)
+            return
+        blocking = [f"{os.path.basename(m.old_path)}: {m.warning}" for m in self._moves if m.blocking]
+        notes = [f"{os.path.basename(m.old_path)}: {m.warning}" for m in self._moves if m.warning and not m.blocking]
+        self.warning_label.setText(summarize_errors(blocking or notes))
+        self._ok_button.setEnabled(bool(self.items) and not blocking)
+
     def _refresh_preview(self) -> None:
+        if self.move_radio.isChecked():
+            self._refresh_move_preview()
+            return
+        self._moves = []
         pattern = self.pattern_edit.text()
         zero_pad = bool(self.zero_pad_cb and self.zero_pad_cb.isChecked())
         zero_pad_width = self.zero_pad_width_combo.currentData() if self.zero_pad_width_combo else 2
@@ -270,3 +349,15 @@ class RenamePatternDialog(QDialog):
 
     def is_export_mode(self) -> bool:
         return self.export_radio.isChecked()
+
+    def is_move_mode(self) -> bool:
+        return self.move_radio.isChecked()
+
+    def library_root(self) -> str:
+        return self._library_root
+
+    def planned_moves(self) -> list[PlannedMove]:
+        """The richer plan of "Move into folders" mode (folders to create,
+        warnings); empty in the other modes. Hand it to
+        gui.move_runner.run_planned_moves()."""
+        return self._moves if self.move_radio.isChecked() else []

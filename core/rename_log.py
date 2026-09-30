@@ -16,6 +16,15 @@ or whose old name is taken again, is skipped and reported. The batch
 leaves the log once undone (the skipped files with it -- they can't be
 undone later either, and would only block the next undo).
 
+"Move into folders" batches (core/move_plan.py) also remember the folders
+they created (`created_dirs`, so undo can offer to tidy them away), the
+library `root`, and which moves were cross-volume copies whose original
+went to the Recycle Bin (`trashed`): those can't be moved back by a
+rename, so undo leaves the file at its new path and says how to get the
+original back. Undo also re-creates a source folder that has been
+removed since (the tidy-up after a move), so the file has a place to
+return to.
+
 Pure logic, no Qt: see gui/rename_undo.py for the menu action's dialog.
 """
 
@@ -37,6 +46,9 @@ class RenameBatch:
     label: str
     when: float  # time.time()
     renames: list[tuple[str, str]]  # (old path, new path), in the order they happened
+    created_dirs: list[str] = field(default_factory=list)  # folders a move batch made, outermost first
+    trashed: list[tuple[str, str]] = field(default_factory=list)  # (old, new) moves whose original is in the Recycle Bin
+    root: str = ""  # library root of a move batch
 
     def describe(self) -> str:
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(self.when))
@@ -47,6 +59,8 @@ class RenameBatch:
 class UndoResult:
     restored: list[tuple[str, str]] = field(default_factory=list)  # (new path it had, old path it's back at)
     problems: list[str] = field(default_factory=list)
+    created_dirs: list[str] = field(default_factory=list)  # the undone batch's folders that still exist, deepest first (offer to prune)
+    root: str = ""
 
 
 class RenameLog:
@@ -66,32 +80,63 @@ class RenameLog:
                 batches.append(RenameBatch(
                     label=str(entry["label"]), when=float(entry["when"]),
                     renames=[(str(old), str(new)) for old, new in entry["renames"]],
+                    created_dirs=[str(d) for d in entry.get("created_dirs", [])],
+                    trashed=[(str(old), str(new)) for old, new in entry.get("trashed", [])],
+                    root=str(entry.get("root", "")),
                 ))
             except (KeyError, TypeError, ValueError):
                 continue
         return batches
 
     def _write(self, batches: list[RenameBatch]) -> None:
-        data = [{"label": b.label, "when": b.when, "renames": [list(pair) for pair in b.renames]}
-                for b in batches[-self.max_batches:]]
+        data = []
+        for b in batches[-self.max_batches:]:
+            entry: dict = {"label": b.label, "when": b.when, "renames": [list(pair) for pair in b.renames]}
+            if b.created_dirs:
+                entry["created_dirs"] = b.created_dirs
+            if b.trashed:
+                entry["trashed"] = [list(pair) for pair in b.trashed]
+            if b.root:
+                entry["root"] = b.root
+            data.append(entry)
         folder = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(folder, exist_ok=True)
         tmp = self.path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False, indent=1)
-            os.replace(tmp, self.path)
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    # Windows: a virus scanner or indexer can briefly hold the file
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
         except OSError:
-            pass  # best effort, like the apps' other settings: the rename itself already happened
+            # best effort, like the apps' other settings: the rename itself already happened
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
-    def record(self, label: str, renames: list[tuple[str, str]]) -> None:
+    def record(
+        self, label: str, renames: list[tuple[str, str]],
+        created_dirs: list[str] | None = None, trashed: list[tuple[str, str]] | None = None, root: str = "",
+    ) -> None:
         """One rename action. Pairs whose old and new path are identical
-        (nothing renamed; a case-only change still counts) are left out; an empty batch isn't recorded."""
+        (nothing renamed; a case-only change still counts) are left out; an empty batch isn't recorded.
+        `created_dirs`, `trashed`, `root`: see the module docstring (move batches)."""
         pairs = [(str(old), str(new)) for old, new in renames if str(old) != str(new)]
         if not pairs:
             return
         batches = self._read()
-        batches.append(RenameBatch(label=label, when=time.time(), renames=pairs))
+        batches.append(RenameBatch(
+            label=label, when=time.time(), renames=pairs,
+            created_dirs=[str(d) for d in created_dirs or []],
+            trashed=[(str(old), str(new)) for old, new in trashed or []], root=root,
+        ))
         self._write(batches)
 
     def last_batch(self) -> Optional[RenameBatch]:
@@ -108,9 +153,17 @@ class RenameLog:
         if not batches:
             return None
         batch = batches.pop()
-        result = UndoResult()
+        result = UndoResult(root=batch.root)
+        trashed = {(_key(old), _key(new)) for old, new in batch.trashed}
         for old, new in reversed(batch.renames):
             name = os.path.basename(new)
+            if (_key(old), _key(new)) in trashed:
+                result.problems.append(
+                    f"{name}: was copied across drives and its original is in the Recycle Bin, so it "
+                    f"can't be moved back -- it stays at {new}; restore the original from the Recycle "
+                    "Bin and delete the copy to undo this one"
+                )
+                continue
             if not os.path.exists(new):
                 result.problems.append(f"{name}: no longer there (moved or deleted since)")
                 continue
@@ -118,6 +171,9 @@ class RenameLog:
                 result.problems.append(f"{name}: its old name {os.path.basename(old)} is taken again")
                 continue
             try:
+                old_dir = os.path.dirname(old)
+                if old_dir and not os.path.isdir(old_dir):
+                    os.makedirs(old_dir, exist_ok=True)  # the source folder was tidied away after the move
                 if os.path.normcase(os.path.abspath(old)) == os.path.normcase(os.path.abspath(new)):
                     os.rename(new, old)  # case-only rename: the same file, not a collision
                 else:
@@ -127,7 +183,12 @@ class RenameLog:
                 continue
             result.restored.append((new, old))
         self._write(batches)
+        result.created_dirs = [d for d in reversed(batch.created_dirs) if os.path.isdir(d)]
         return result
+
+
+def _key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
 
 
 def rename_log_path(app_slug: str, dev_root) -> str:
