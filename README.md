@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#10`.
+Currently: `2026-09-30#11`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -85,6 +85,52 @@ Recycle Bin (`send2trash` must be in the app's requirements); if that fails the 
 Undo Last Rename moves files back and offers to remove the folders the move created; a cross-volume
 move whose original is in the Bin is reported rather than undone.
 
+## Parse metadata from the folder path
+
+The mirror of "Move into folders": `ParseFilenameDialog` and `core/path_parser.py` read metadata back
+out of a file's *folders*. A pattern containing `/` or `\` is a path pattern:
+`%genre%/%author%/%series%/%title%`, `%albumartist%/%album%/%track% - %title%`,
+`%series%/Season %season%/%title%`. The last segment matches the file stem, earlier ones the parent
+folders. Matching runs right to left: a pattern with fewer segments than the path ignores the outer
+folders; with more, the outermost pattern segments are reported in `missing_segments` and their
+fields stay empty. Each segment uses the normal filename machinery (optional groups, `field_patterns`,
+several fields per segment). Patterns without a separator behave exactly as before.
+
+```python
+dlg = ParseFilenameDialog(items, placeholders, get_path, history, default, valid_fields,
+                          library_root=settings.value("parse/root", ""),
+                          on_library_root_changed=lambda p: settings.setValue("parse/root", p),
+                          normalizers={"author": author_sort_to_display},   # optional
+                          parent=self)
+if dlg.exec():
+    changes = dlg.accepted_changes()          # {item index: {field: value}}, unchanged contract
+    if dlg.is_path_mode():
+        conf = {i: r.confidence for i, r in dlg.parse_results().items()}
+
+# headless, e.g. a Redact step:
+from redactor_common.core.path_parser import parse_path_detailed, HIGH_CONFIDENCE
+r = parse_path_detailed(path, "%genre%/%author%/%title%", library_root, valid_fields,
+                        corroborate=lambda field, value: counts.get((field, value.casefold()), 0))
+if r.matched and r.confidence >= HIGH_CONFIDENCE:
+    apply(r.values)
+```
+
+Values stay raw (`Tolkien, J.R.R.` stays as is); an app that wants display names plugs an
+author-sort normalizer into `normalizers`. If the path is not under the library root, the last
+*n* segments (n = pattern length) are used, never the drive or share name.
+
+Confidence is 0..1: the mean over the pattern's segments, each 1.0 when matched and 0.0 when missing
+or non-matching. A folder segment that is only a bare `%field%` (matches any name) scores 0.75; a
+segment needing the optional-whitespace retry is scaled by 0.9; `corroborate(field, value)` (how many
+items in the batch share that folder value) lifts a folder segment by 0.2 when two or more agree. A
+Redact step should auto-apply only results at or above `HIGH_CONFIDENCE` (0.9); the dialog ticks rows
+from 0.5 and shows the confidence and matched segments. `parse_path()` returns just the values (None
+when the file stem does not match); `parse_path_detailed()` returns a `PathParseResult(values,
+confidence, matched_segments, missing_segments, notes)`.
+
+History: path patterns share the pattern history with filename patterns; tell them apart with
+`is_path_pattern(pattern)` or `split_pattern_history(history)`.
+
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
 | Module | What it does | Source |
@@ -93,6 +139,7 @@ move whose original is in the Bin is reported rather than undone.
 | `rename_pattern.py` | `%field%` pattern → filename. Optional `(...)`/`[...]`/`{...}` groups (dropped when every field inside is empty), legacy token `aliases`, reserved device names checked before the first dot (`CON.mp4`), 150-char cap, `unique_path()`, `rename_file_on_disk()` | epub, generalized off `EpubMetadata` to a plain `dict[str, str]`; optional groups + aliases merged back from epub 2026-09-23, dotted reserved-name check from video |
 | `move_plan.py` | "Move into folders" engine: `render_relative_path()` (pattern split on `/` and `\` *before* substitution, each segment sanitized, `..` impossible), `plan_moves()` → `PlannedMove` (collision numbering, folders to create, blocking warning if the destination resolves outside the root or the path is too long), `execute_move()` (same-volume rename; cross-volume verified copy then original to the Recycle Bin; never overwrites), `prune_empty_dirs()` | 2026-09-30 |
 | `filename_parser.py` | filename → `%field%` values (reverse of the above). Per-field regex shapes (`field_patterns`: `SERIES_INDEX_FIELD_PATTERN` with ranges/ordinals, `MONTH_FIELD_PATTERN` with month names, `YEAR_FIELD_PATTERN`, ...), per-field `normalizers`, optional groups, `field_value_counts()`. Whitespace is matched strictly first and only loosened if nothing matches -- the loose rule alone split "Jean-Paul Sartre - Nausea" on the inner hyphen | epub, same generalization; epub's later additions merged back 2026-09-23 |
+| `path_parser.py` | folder-path parsing, the mirror of `move_plan`: `split_path_pattern()`, `relative_segments()`, `parse_path()` / `parse_path_detailed()` → `PathParseResult` (right-to-left segment matching, confidence, optional corroboration callback), `is_path_pattern()`, `split_pattern_history()`. See "Parse metadata from the folder path" | 2026-09-30 |
 | `search_replace.py` | plain/regex search & replace | epub, already generic |
 | `case_conversion.py` | UPPER/lower/Title/Sentence case. Title case capitalizes after a colon/dash ("Star Wars: A New Hope") and the first letter rather than first character ("(The End)"); video's short mode names accepted too | epub; video's clause rules merged 2026-09-23 |
 | `save_errors.py` | Windows path-too-long detection & messaging | epub, already generic |
