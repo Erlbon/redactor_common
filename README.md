@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#07`.
+Currently: `2026-09-30#08`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -84,6 +84,7 @@ Currently: `2026-09-30#07`.
 | `version_bump.py` | The `YYYY-MM-DD#NN` bump (`bump_version_file()`, `pep440_from()`, `main()`), called by every repo's own few-line `bump_version.py` | 2026-09-23; five copies before |
 | `languages.py` | One ISO 639 table (639-1, 639-2/T, 639-2/B, English name): `convert()`, `name_for()`, `language_pairs(codes, style)` for each app's quick-pick list in its format's code style (EPUB/ComicInfo 2-letter, ID3 3-letter, Matroska bibliographic "ger") | 2026-09-23 |
 | `secret_store.py` | `get_secret()`/`set_secret()`/`delete_secret()`/`secret_source()`/`keyring_available()` + `migrate_legacy_secret()` -- API keys and passwords in the OS credential store (via optional `keyring`), never scrambled; see "Secrets" below | 2026-09-30; cbz kept Comic Vine/GCD credentials in its ini (password XOR-"scrambled"), video kept TMDB/TVDB/OpenSubtitles keys in plaintext |
+| `settings_bundle.py` | Export/Import Settings file: `SettingsAdapter`, `build_bundle()`/`parse_bundle()`/`diff_bundle()`/`apply_bundle()`, secret-key guard; see "Export/Import Settings" below | 2026-09-30; new, no app had it |
 
 `pytest` from this folder runs everything (`tests/`): the core modules
 need no Qt; the GUI tests run headless under `QT_QPA_PLATFORM=offscreen`.
@@ -168,6 +169,57 @@ Remove button, and a label naming the source; call `apply()` on OK.
 `keyring` is an OPTIONAL dependency (`pip install "redactor_common[secrets]"`),
 and the package imports fine without it. Each app should list `keyring` in
 its own `requirements.txt` (and bundle it when freezing).
+
+## Export/Import Settings
+
+One `<app>-settings.json` per app (File > Export Settings... / Import
+Settings...). `core/settings_bundle.py` owns the format and logic,
+`gui/settings_bundle_dialogs.py` the dialogs. The app only writes an adapter:
+
+```python
+from redactor_common.core import settings_bundle as sb
+from redactor_common.gui.settings_bundle_dialogs import (
+    export_settings, import_settings, settings_menu_actions)
+
+class CbzSettings(sb.SettingsAdapter):
+    app_slug = "cbzredactor"
+    app_version = APP_VERSION
+
+    def sections(self):
+        return [sb.SectionSpec("columns", "Column layout"),
+                sb.SectionSpec("patterns", "Rename patterns"),
+                sb.SectionSpec("tools", "External tool paths", portable=False)]
+
+    def read_section(self, key):   # ALL supported keys, current or default value
+        return {"columns": lambda: {"order": s.value("cols/order", [])},
+                "patterns": lambda: {"rename": s.value("rename/pattern", "")},
+                "tools": lambda: {"ffmpeg": s.value("tools/ffmpeg", "")}}[key]()
+
+    def write_section(self, key, values):   # only known, non-secret, changed keys
+        ...
+
+    def redetect_tools(self):      # optional: offered after import
+        self.window.locate_tools()
+
+# File menu:  settings_menu_actions(lambda: export_settings(self, adapter),
+#                                   lambda: import_settings(self, adapter, on_applied=self.reload_settings))
+```
+
+`read_section()` defines which keys an imported file may touch: unknown
+sections and keys in a file are ignored. `write_section()` failing only
+fails that section. Dropping the adapter's `redetect_tools` disables the
+"Re-detect tools" question.
+
+**Portable** (default, ticked): recipes, rename patterns + history +
+default patterns, column layout/visibility/order, view options, field
+defaults (default language, zero-pad choices), lookup preferences.
+**Machine-specific** (`portable=False`, unticked, explicit opt-in): external
+tool paths, last-used folders, local database paths, window geometry. On
+import, prefer `redetect_tools` over copying another computer's paths.
+
+**Secrets are never included.** Keys named like api_key, password, token,
+secret, pin, bearer, credential are dropped on export, on parse, in the
+diff and on apply, even if an adapter offers them (`looks_secret()`).
 
 ## Redact pipeline
 
