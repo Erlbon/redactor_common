@@ -163,7 +163,9 @@ def test_finalize_failure_label_and_exception_and_none():
         "x", recipe.resolve(steps), 0.9, Ctx, finalize=lambda c, r: StepResult.failed("disk full"),
         finalize_label="Save"
     )
-    assert e.status is FileStatus.FAILED and e.failures == ["Save: disk full"] and e.applied == ["A: did"]
+    assert e.status is FileStatus.FAILED and e.failures == ["Save: disk full"]
+    # 2026-09-30#14: changes a failed save never wrote move to not_saved
+    assert e.applied == [] and e.not_saved == ["A: did"]
 
     def boom(c, r):
         raise OSError("nope")

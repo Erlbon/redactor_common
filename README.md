@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#13`.
+Currently: `2026-09-30#14`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -366,6 +366,48 @@ RedactResultsDialog(report, parent, title, header="Done.", extra_notes=["3 files
 ```
 
 `NOTES` and `SKIPPED` sections are appended to `to_text()` only when non-empty, so a report that uses neither is byte-identical to before. A recipe saved by an older app version gets steps it lacks inserted at their catalogue position (right after the nearest preceding catalogue step), not appended at the end.
+
+**Engine pass 2** (added 2026-09-30#14, all optional and backward compatible). Per file the phases are: `first` steps, normal steps (recipe order), `last` steps, `finalize` (the save), `after_save` steps. The editor pins each group in place.
+
+```python
+class Guard(Step):                       # position="first": runs before every normal step
+    key, label, position = "guard", "Check file", "first"   # (unsaved edits, load error, DRM)
+    def run(self, ctx):
+        return StepResult.skipped("unsaved edits") if ctx.dirty else StepResult.nothing()
+
+def save(ctx, rep):                      # finalize may report where the file ended up
+    return StepResult.applied("saved", new_path=ctx.new_path)   # -> ctx.saved_path, FileReport.saved_path
+
+class Rename(Step):                      # position="after_save": runs only if the file was saved
+    key, label, position = "rename", "Rename", "after_save"     # (skipped + note when unchanged,
+    def run(self, ctx):                                         #  failed, skipped; run_when_unchanged=True opts out)
+        new = do_rename(ctx.saved_path)  # ctx.saved_path: the current path (None until a step reports one)
+        return StepResult.applied(f"renamed to {new}", new_path=new)
+class Move(Step):
+    key, label, position = "move", "Move into folders", "after_save"
+    after = ("rename",)                  # must run after these keys: enforced in ordered_keys()/resolve(),
+                                         # the editor refuses the illegal Move up/down and snaps a drag back
+```
+
+- **after_save failures**: the file is FAILED under the step's own label, but what was saved stays in `applied` (it *was* saved). A `SKIPPED` result there is only a note; a `required` failure stops the remaining after_save steps without ABORTING the file. `position="last"` keeps its old meaning (before the save).
+- **`Step.after`**: keys this step must run after; unknown keys are ignored, a key in a *later* position group or a cycle raises `ValueError`. Recipe order is honoured inside each group.
+- **`Step.hidden = True`**: the engine always runs it (even if a hand-edited recipe disables it), the editor doesn't list it and `Recipe.default_for`/the editor never store it.
+- **Batch pre-pass**: `Step.prepare(items, env)` is called once per run for each enabled step, before the first file (`run_redact(..., env=...)`, `run_recipe(..., env=...)`, or `begin_run(items, resolved, env)` for your own loop with `run_recipe_on_item(..., run=run)`). A non-None return value lands in `ctx.batch[step.key]`; `ctx.batch` (a dict) and `ctx.run_context` (`RunContext`: `items`, `env`, `batch`, `unavailable`, `notes`) are set on each file's context unless it already defines those names. If `prepare` raises, the step is *unavailable for this run* (skipped for every file, one line in the report's RUN NOTES), never aborting the run. Keep it cheap (use data already loaded), it has no progress dialog of its own. Building e.g. folder-value counts is left to the apps (no generic helper).
+- **Clean reports**: when `finalize` fails or skips, the changes steps had applied move from `applied` to `FileReport.not_saved` and the report gets a `NOT SAVED` section (only when non-empty; an app that already clears `applied` itself duplicates nothing). Aborted files and skipped-by-a-step files still list earlier changes under CHANGES as before.
+- **Results dialog**: `run_redact(..., header="", extra_notes=None)` passes them to `RedactResultsDialog`.
+- **`Step.options_for(ctx)`** is the supported way to read a step's options (every declared option present); `StepResult.nothing(note=...)` adds an FYI to NOTES.
+
+```python
+# A different final path (CBR -> CBZ, MKV -> MP4): the verified temp takes the new name WITHOUT
+# overwriting anything, then the original goes to the bin/backup; same rollback guarantees.
+res = commit_in_place(orig, temp, trash=trash, verify=check, new_path=orig_stem + ".cbz")
+res.final_path, res.new_path       # new_path is None for an ordinary same-path commit
+# verify may return bool, (bool, "reason") or raise VerifyFailed("reason"); CommitError.reason carries it
+def check(temp):
+    return (False, "3 pages missing") if pages(temp) < expected else True
+```
+
+`commit_in_place(new_path=...)` refuses (CommitError, nothing touched) when `new_path` already exists or its folder is missing; if the rename fails the original is untouched and the temp is left for the caller to clean up; if the original can't be set aside the new file is moved back to the temp name; a failed trash keeps the `.redact-orig` backup and says so in `CommitResult`. A `new_path` equal to the original (case-insensitive on Windows) is the ordinary commit.
 
 **Pattern trail** (rename / move / path-tag patterns; all optional, backward compatible). A saved recipe keeps its stored pattern as saved: later changes to the app's Rename/Export pattern never silently change what Redact does, and the user never has to recreate the recipe. An **empty** stored value means "follow the fallback". The recipe JSON is unchanged (still just the string). Extra `OptionSpec` fields for `kind="str"`:
 

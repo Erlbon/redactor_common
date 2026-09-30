@@ -54,6 +54,7 @@ from redactor_common.core.pipeline import (
     RedactReport,
     Recipe,
     Step,
+    begin_run,
     effective_option_source,
     ordered_keys,
     run_recipe_on_item,
@@ -174,11 +175,18 @@ def run_redact(
     show_results: bool = True,
     finalize: Callable[[Any, FileReport], Any] | None = None,
     finalize_label: str = "Final save",
+    header: str = "",
+    extra_notes: list[str] | None = None,
+    env: Any = None,
 ) -> RedactReport | None:
     """Run `recipe` on `items` under a cancellable progress dialog (one
     label per file), then show the results dialog. Returns the report,
     or None when there was nothing to do. Cancelling stops between
-    files; files already done stay done and appear in the report."""
+    files; files already done stay done and appear in the report.
+
+    `header` / `extra_notes` go to the results dialog (see
+    RedactResultsDialog). `env` is handed to every enabled step's
+    prepare(items, env) once, before the first file (Step.prepare)."""
     items = list(items)
     if not items:
         return None
@@ -186,11 +194,14 @@ def run_redact(
     resolved = recipe.resolve(catalogue)
     report = RedactReport(confidence_threshold=recipe.confidence_threshold)
     started = time.monotonic()
+    run = begin_run(items, resolved, env)
+    report.run_notes = run.notes
 
     def do_one(item: Any, _index: int) -> None:
         report.entries.append(
             run_recipe_on_item(
-                item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label
+                item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label,
+                run=run,
             )
         )
 
@@ -208,7 +219,9 @@ def run_redact(
         report.cancelled = True
         report.not_processed = len(items) - len(report.entries)
     if show_results:
-        RedactResultsDialog(report, parent, title=f"{title} results").exec()
+        RedactResultsDialog(
+            report, parent, title=f"{title} results", header=header, extra_notes=extra_notes
+        ).exec()
     return report
 
 
@@ -232,10 +245,15 @@ class RecipeEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Redact recipe")
         self.resize(620, 460)
+        catalogue = list(catalogue)
         self._steps = {s.key: s for s in catalogue}
+        # Hidden (internal) steps are never listed, stored or edited here.
+        self._visible = [s for s in catalogue if not s.hidden]
         # Same ordering rules as Recipe.resolve(): stored order, new
-        # catalogue steps at their catalogue position, "last" steps pinned.
-        keys = ordered_keys(recipe.order, self._steps.values())
+        # catalogue steps at their catalogue position, position groups
+        # ("first" on top ... "after_save" at the bottom) pinned and each
+        # step's `after` constraints honoured.
+        keys = [k for k in ordered_keys(recipe.order, catalogue) if not self._steps[k].hidden]
         self._enabled = {k: recipe.enabled.get(k, self._steps[k].default_enabled) for k in keys}
         self._options: dict[str, dict[str, Any]] = {}
         for k in keys:
@@ -255,8 +273,8 @@ class RecipeEditorDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked if self._enabled[k] else Qt.CheckState.Unchecked)
             self.list.addItem(item)
         self.list.currentItemChanged.connect(lambda cur, _prev: self._show_step(cur))
-        # A drag may drop a normal step below a pinned "last" one (or the
-        # reverse); put things back once the drop has settled.
+        # A drag may drop a step outside its position group or above a step
+        # it must run after; put things back once the drop has settled.
         self.list.model().rowsMoved.connect(lambda *_: QTimer.singleShot(0, self._repin))
 
         up = QPushButton("Move up")
@@ -475,27 +493,41 @@ class RecipeEditorDialog(QDialog):
         new = row + delta
         if row < 0 or not 0 <= new < self.list.count():
             return
-        if self._is_last(self._key_at(row)) != self._is_last(self._key_at(new)):
-            return  # "last" steps stay pinned below the normal ones
+        if not self.can_move(row, delta):
+            return  # pinned position groups / `after` constraints stay true
         self._commit_shown()
         item = self.list.takeItem(row)
         self.list.insertItem(new, item)
         self.list.setCurrentRow(new)
 
+    def can_move(self, row: int, delta: int) -> bool:
+        """Whether moving the step at `row` by `delta` (+-1) keeps the list
+        legal: same position group, and not above a step it must run after
+        (or below a step that must run after it)."""
+        new = row + delta
+        if row < 0 or not 0 <= new < self.list.count():
+            return False
+        keys = self._keys()
+        keys[row], keys[new] = keys[new], keys[row]
+        return ordered_keys(keys, self._visible) == keys
+
+    def _keys(self) -> list[str]:
+        return [self._key_at(r) for r in range(self.list.count())]
+
     def _key_at(self, row: int) -> str:
         return self.list.item(row).data(Qt.ItemDataRole.UserRole)
 
-    def _is_last(self, key: str) -> bool:
-        return self._steps[key].position == "last"
-
     def _repin(self) -> None:
-        """Stable-partition the list so "last" steps sit at the bottom
-        (keeps their check state and the current selection)."""
+        """Restore the legal order after a drag (stable: position groups
+        pinned, `after` constraints honoured; keeps check states and the
+        current selection)."""
         rows = [self.list.item(r) for r in range(self.list.count())]
-        wanted = [i for i in rows if not self._is_last(i.data(Qt.ItemDataRole.UserRole))]
-        wanted += [i for i in rows if self._is_last(i.data(Qt.ItemDataRole.UserRole))]
-        if wanted == rows:
+        keys = [i.data(Qt.ItemDataRole.UserRole) for i in rows]
+        legal = ordered_keys(keys, self._visible)
+        if legal == keys:
             return
+        by_key = dict(zip(keys, rows))
+        wanted = [by_key[k] for k in legal]
         current = self.list.currentItem().data(Qt.ItemDataRole.UserRole) if self.list.currentItem() else None
         self.list.blockSignals(True)
         for r in range(len(rows) - 1, -1, -1):
@@ -507,7 +539,7 @@ class RecipeEditorDialog(QDialog):
         self.list.blockSignals(False)
 
     def _reset(self) -> None:
-        defaults = Recipe.default_for(self._steps.values())
+        defaults = Recipe.default_for(self._visible)
         self._shown_key = None  # don't commit stale widget values over the defaults
         for k, step in self._steps.items():
             self._options[k] = {o.key: o.default for o in step.options}
@@ -533,7 +565,7 @@ class RecipeEditorDialog(QDialog):
         return Recipe(
             order=order,
             enabled=enabled,
-            options={k: dict(v) for k, v in self._options.items()},
+            options={k: dict(v) for k, v in self._options.items() if k in enabled},
             confidence_threshold=round(self.threshold.value(), 2),
         )
 
