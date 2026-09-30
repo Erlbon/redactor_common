@@ -15,7 +15,8 @@ Handles, generically, for any project:
     the row under the cursor first (matches Explorer and most other
     apps, rather than acting on a selection the person can't see
     anymore).
-  - Two generic file actions any item with a filesystem path supports:
+  - Three generic file actions any item with a filesystem path supports:
+    "Open in Default App" (the OS's registered viewer/player),
     "Open Containing Folder" and "Copy Path".
   - Layering a project's own app-specific actions in via `extra_items`,
     given the resolved current selection.
@@ -43,12 +44,15 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QApplication, QMenu, QTableWidget, QWidget
+from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QTableWidget, QWidget
 
-from redactor_common.core.os_utils import reveal_in_file_manager
+from redactor_common.core.os_utils import open_with_default_app, reveal_in_file_manager
 from redactor_common.gui.menu_builder import MenuAction, MenuItems, populate_menu
+
+MAX_OPEN_WITHOUT_ASKING = 5
 
 
 def show_table_context_menu(
@@ -78,6 +82,7 @@ def show_table_context_menu(
         return
 
     menu_items: MenuItems = [
+        MenuAction("open_default_app", "Open in Default App", lambda: _open_in_default_app(window, items, get_path)),
         MenuAction("open_containing_folder", "Open Containing Folder", lambda: _open_containing_folder(items, get_path)),
         MenuAction("copy_path", "Copy Path", lambda: _copy_paths(items, get_path)),
     ]
@@ -87,6 +92,28 @@ def show_table_context_menu(
     menu = QMenu(window)
     populate_menu(window, menu, menu_items)
     menu.exec(table.viewport().mapToGlobal(pos))
+
+
+def _open_in_default_app(window: QWidget, items: list, get_path: Callable[[Any], str]) -> None:
+    """Opens each selected file in its registered app. A big selection
+    would launch a pile of windows, so it asks past a handful."""
+    if not items:
+        return
+    if len(items) > MAX_OPEN_WITHOUT_ASKING:
+        answer = QMessageBox.question(
+            window, "Open Files", f"Open {len(items)} files in their default apps?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+    failed = [os.path.basename(str(get_path(item))) for item in items if not open_with_default_app(str(get_path(item)))]
+    if failed:
+        QMessageBox.warning(
+            window, "Open in Default App",
+            "Couldn't open (no app registered for the file type, or the file is gone):
+" + "
+".join(failed[:10]),
+        )
 
 
 def _open_containing_folder(items: list, get_path: Callable[[Any], str]) -> None:

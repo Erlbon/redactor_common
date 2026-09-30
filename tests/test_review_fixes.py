@@ -204,3 +204,32 @@ def test_run_with_progress_closes_dialog_when_a_step_raises(monkeypatch):
     with pytest.raises(RuntimeError):
         progress.run_with_progress(None, [1, 2, 3], step, "Working...")
     assert FakeDialog.closed
+
+
+# -- open in default app --------------------------------------------------------------------------
+
+def test_open_with_default_app_launches_existing_file_only(tmp_path, monkeypatch):
+    from redactor_common.core import os_utils
+
+    launched = []
+    monkeypatch.setattr(os_utils.subprocess, "Popen", lambda args: launched.append(args))
+    monkeypatch.setattr(os_utils.sys, "platform", "linux")
+    f = tmp_path / "book.cbz"
+    f.write_bytes(b"x")
+    assert os_utils.open_with_default_app(str(f)) is True
+    assert launched == [["xdg-open", str(f)]]
+    assert os_utils.open_with_default_app(str(tmp_path / "gone.cbz")) is False
+    assert os_utils.open_with_default_app("") is False
+
+
+def test_open_with_default_app_reports_missing_handler(tmp_path, monkeypatch):
+    from redactor_common.core import os_utils
+
+    def boom(_args):
+        raise FileNotFoundError("xdg-open")
+
+    monkeypatch.setattr(os_utils.subprocess, "Popen", boom)
+    monkeypatch.setattr(os_utils.sys, "platform", "linux")
+    f = tmp_path / "a.mp3"
+    f.write_bytes(b"x")
+    assert os_utils.open_with_default_app(str(f)) is False

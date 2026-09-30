@@ -36,6 +36,25 @@ def rename_no_clobber(src: str, dst: str) -> None:
     os.unlink(src)
 
 
+def open_with_default_app(path: str) -> bool:
+    """Opens `path` in whatever the OS has registered for it (the user's
+    own comic reader, e-reader app, music or video player). Returns
+    False if nothing could be launched, so the caller can tell the user;
+    never raises for a missing file or a missing handler."""
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(os.path.normpath(path))  # type: ignore[attr-defined]  # win32 only
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except OSError:
+        return False
+    return True
+
+
 def reveal_in_file_manager(path: str) -> None:
     """Opens the system file manager showing (ideally selecting) path.
     Best-effort -- silently does nothing if the platform call fails,
