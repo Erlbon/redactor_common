@@ -40,9 +40,16 @@ class AutoNumberingDialog(QDialog):
         get_value: Callable[[T, str], str],
         get_display_name: Callable[[T], str],
         item_noun: str = "item",
+        padding: int | None = None,
+        on_padding_changed: Callable[[int], None] | None = None,
         parent=None,
     ):
+        """`padding` / `on_padding_changed`: start with the zero-pad
+        width the app remembered from last time (default 2), and report
+        each change so it can save it."""
         super().__init__(parent)
+        self._initial_padding = 2 if padding is None else padding
+        self._on_padding_changed = on_padding_changed
         self.setWindowTitle("Auto-Numbering")
         self.resize(760, 520)
         self.items = items
@@ -51,6 +58,11 @@ class AutoNumberingDialog(QDialog):
         self._get_display_name = get_display_name
 
         self._build_ui(item_noun)
+        self._refresh_preview()
+
+    def _on_padding_edited(self, value: int) -> None:
+        if self._on_padding_changed is not None:
+            self._on_padding_changed(value)
         self._refresh_preview()
 
     def _build_ui(self, item_noun: str) -> None:
@@ -85,9 +97,9 @@ class AutoNumberingDialog(QDialog):
         row.addWidget(QLabel("Zero-pad to:"))
         self.padding_spin = QSpinBox()
         self.padding_spin.setRange(0, 10)
-        self.padding_spin.setValue(2)
+        self.padding_spin.setValue(self._initial_padding)
         self.padding_spin.setToolTip("0 = no padding")
-        self.padding_spin.valueChanged.connect(self._refresh_preview)
+        self.padding_spin.valueChanged.connect(self._on_padding_edited)
         row.addWidget(self.padding_spin)
         layout.addLayout(row)
 

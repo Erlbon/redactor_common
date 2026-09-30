@@ -45,6 +45,8 @@ class RenamePatternDialog(QDialog):
         always_pad_fields: dict[str, int] | None = None,
         ascii_only: bool = False,
         on_ascii_only_changed: Callable[[bool], None] | None = None,
+        zero_pad_initial: tuple[bool, int] | None = None,
+        on_zero_pad_changed: Callable[[bool, int], None] | None = None,
         parent=None,
     ):
         """
@@ -63,6 +65,11 @@ class RenamePatternDialog(QDialog):
         `ascii_only` / `on_ascii_only_changed`: the "ASCII-safe filenames"
         checkbox (rename_pattern.to_ascii) -- its starting state, and a
         callback the app uses to remember the choice in its settings.
+
+        `zero_pad_initial` / `on_zero_pad_changed`: the same
+        remember-last-choice pair for the zero-pad checkbox and width
+        -- `(enabled, width)` in, `callback(enabled, width)` on every
+        change. Ignored without `zero_pad_field`.
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -74,6 +81,8 @@ class RenamePatternDialog(QDialog):
         self._always_pad_fields = always_pad_fields or {}
         self._initial_ascii_only = ascii_only
         self._on_ascii_only_changed = on_ascii_only_changed
+        self._zero_pad_initial = zero_pad_initial
+        self._on_zero_pad_changed = on_zero_pad_changed
         self.output_folder: str | None = None
 
         self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths)
@@ -105,14 +114,22 @@ class RenamePatternDialog(QDialog):
         if self._zero_pad_field:
             pad_row = QHBoxLayout()
             self.zero_pad_cb = QCheckBox(zero_pad_label)
-            self.zero_pad_cb.stateChanged.connect(self._refresh_preview)
             pad_row.addWidget(self.zero_pad_cb)
 
             self.zero_pad_width_combo = QComboBox()
             for width in zero_pad_widths:
                 self.zero_pad_width_combo.addItem(f"{width} digits (e.g. {str(1).zfill(width)})", width)
-            self.zero_pad_width_combo.currentIndexChanged.connect(self._refresh_preview)
             pad_row.addWidget(self.zero_pad_width_combo)
+            if self._zero_pad_initial is not None:
+                enabled, width = self._zero_pad_initial
+                self.zero_pad_cb.setChecked(bool(enabled))
+                index = self.zero_pad_width_combo.findData(width)
+                if index >= 0:
+                    self.zero_pad_width_combo.setCurrentIndex(index)
+            # Connected after the restore above so setting the saved
+            # state doesn't write it straight back.
+            self.zero_pad_cb.stateChanged.connect(self._on_zero_pad_edited)
+            self.zero_pad_width_combo.currentIndexChanged.connect(self._on_zero_pad_edited)
             pad_row.addStretch(1)
             layout.addLayout(pad_row)
         else:
@@ -174,6 +191,13 @@ class RenamePatternDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+
+    def _on_zero_pad_edited(self, *_args) -> None:
+        if self._on_zero_pad_changed is not None:
+            self._on_zero_pad_changed(
+                self.zero_pad_cb.isChecked(), int(self.zero_pad_width_combo.currentData())
+            )
+        self._refresh_preview()
 
     def _on_ascii_toggled(self, checked: bool) -> None:
         if self._on_ascii_only_changed is not None:

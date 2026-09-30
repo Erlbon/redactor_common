@@ -510,3 +510,34 @@ def test_build_menu_bar_rejects_an_unknown_menu_key():
     specs["Collection"] = []
     with pytest.raises(ValueError, match="extra_menus"):
         build_menu_bar(QMainWindow(), specs)
+
+
+def test_rename_pattern_dialog_restores_and_reports_zero_pad(tmp_path):
+    from redactor_common.gui.rename_pattern_dialog import RenamePatternDialog
+
+    seen = []
+    dialog = RenamePatternDialog(
+        [str(tmp_path / "a.cbz")], [("number", "Number")], lambda item: {"number": "1"}, lambda item: item,
+        pattern_history=[], default_pattern="%number%", zero_pad_field="number",
+        zero_pad_initial=(True, 3), on_zero_pad_changed=lambda on, w: seen.append((on, w)),
+    )
+    assert dialog.zero_pad_cb.isChecked()
+    assert dialog.zero_pad_width_combo.currentData() == 3
+    assert seen == []  # restoring the saved state must not re-save it
+    dialog.zero_pad_width_combo.setCurrentIndex(0)
+    dialog.zero_pad_cb.setChecked(False)
+    assert seen == [(True, 2), (False, 2)]
+
+
+def test_auto_numbering_dialog_restores_and_reports_padding():
+    from redactor_common.gui.auto_numbering_dialog import AutoNumberingDialog
+
+    seen = []
+    dialog = AutoNumberingDialog(
+        ["x"], [("number", "Number", True)], lambda item, key: "", lambda item: item,
+        padding=4, on_padding_changed=seen.append,
+    )
+    assert dialog.padding_spin.value() == 4
+    assert seen == []
+    dialog.padding_spin.setValue(3)
+    assert seen == [3]
