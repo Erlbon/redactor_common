@@ -21,6 +21,13 @@ Autonomy policy (decided by the user, 2026-09-30):
     threshold (default 0.9); otherwise it is listed as NEEDS REVIEW in
     the report. Never silently guessed.
 
+A step may also return StepResult.skipped(reason) -- "deliberately not
+processed" (unsaved edits, a load error the app already explained): the
+file ends as SKIPPED (neither a failure nor an abort), its remaining
+steps and the finalize hook don't run, and the report lists it in its
+own SKIPPED section. StepResult.nothing(note=...) attaches an FYI that
+lands in the report's NOTES section.
+
 Isolation: one file's failure never affects another file. Inside a
 file, a step that raises is recorded as FAILED and later steps still
 run -- unless the step is `required`, in which case the file is
@@ -51,6 +58,7 @@ class StepStatus(Enum):
     NOTHING = "nothing"
     SUGGESTION = "suggestion"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 @dataclass
@@ -62,15 +70,18 @@ class StepResult:
     value: Any = None  # SUGGESTION: what would be applied
     confidence: float = 0.0  # SUGGESTION: 0..1
     reason: str = ""  # SUGGESTION: why the step thinks so
-    message: str = ""  # FAILED: what went wrong
+    message: str = ""  # FAILED: what went wrong; SKIPPED: why
+    note: str = ""  # any non-failed status: an FYI for the report's NOTES section
 
     @classmethod
     def applied(cls, *changes: str) -> "StepResult":
         return cls(StepStatus.APPLIED, changes=[c for c in changes if c])
 
     @classmethod
-    def nothing(cls) -> "StepResult":
-        return cls(StepStatus.NOTHING)
+    def nothing(cls, note: str = "") -> "StepResult":
+        """Nothing to do. `note` (optional) is a message for the NOTES
+        section of the report, e.g. "no cover art found"."""
+        return cls(StepStatus.NOTHING, note=note)
 
     @classmethod
     def suggestion(cls, value: Any, confidence: float, reason: str = "") -> "StepResult":
@@ -80,12 +91,20 @@ class StepResult:
     def failed(cls, message: str) -> "StepResult":
         return cls(StepStatus.FAILED, message=message)
 
+    @classmethod
+    def skipped(cls, reason: str) -> "StepResult":
+        """The file was deliberately not processed (not a failure). The
+        engine stops the file here and marks it SKIPPED."""
+        return cls(StepStatus.SKIPPED, message=reason)
+
 
 @dataclass(frozen=True)
 class OptionSpec:
     """One per-step option, declared generically so the recipe editor can
     build a widget for it without knowing the step. kind is "bool",
-    "int", "float" or "choice" (`choices` = allowed string values)."""
+    "int", "float", "choice" (`choices` = allowed string values) or
+    "str" (single-line text; `max_length`, if set, is a hard limit --
+    a longer stored value falls back to the default)."""
 
     key: str
     label: str
@@ -95,6 +114,7 @@ class OptionSpec:
     maximum: float | None = None
     choices: tuple[str, ...] = ()
     tooltip: str = ""
+    max_length: int | None = None  # "str" only
 
     def coerce(self, raw: Any) -> Any:
         """Validate a stored/edited value; fall back to the default when
@@ -114,6 +134,12 @@ class OptionSpec:
                 return value
             if self.kind == "choice":
                 return raw if raw in self.choices else self.default
+            if self.kind == "str":
+                if not isinstance(raw, str):
+                    return self.default
+                if self.max_length is not None and len(raw) > self.max_length:
+                    return self.default
+                return raw
         except (TypeError, ValueError):
             pass
         return self.default
@@ -123,8 +149,18 @@ class Step:
     """Base class for a step. Subclass, set the class attributes, and
     override run(); override apply_suggestion() too if run() can return
     a SUGGESTION. `ctx` is whatever the app's make_context() built;
-    this step's current options are on `ctx.step_options` (a dict with
-    every declared option present)."""
+    this step's current options come from `self.options_for(ctx)` (the
+    supported accessor; it's also `ctx.step_options`, a dict with every
+    declared option present).
+
+    `default_enabled` is a class attribute; to vary it per instance pass
+    it to the constructor (`MyStep(default_enabled=False)`) or assign it
+    on the instance. A subclass with its own __init__ need not call
+    super().__init__() unless it wants the kwarg.
+
+    `position` is "normal" or "last". "last" steps always run after every
+    normal step, whatever the stored recipe order says (e.g. a step that
+    saves the file); the recipe editor pins them at the bottom."""
 
     key: str = ""
     label: str = ""
@@ -132,6 +168,20 @@ class Step:
     default_enabled: bool = True
     required: bool = False  # a failure aborts the file (original untouched)
     options: Sequence[OptionSpec] = ()
+    position: str = "normal"  # "normal" | "last"
+
+    def __init__(self, *, default_enabled: bool | None = None) -> None:
+        if default_enabled is not None:
+            self.default_enabled = default_enabled
+
+    def options_for(self, ctx: Any) -> dict[str, Any]:
+        """This step's current, validated options while run() is called
+        for `ctx`: every declared option is present (declared defaults
+        fill any the context lacks, e.g. when called outside the engine)."""
+        current = getattr(ctx, "step_options", None)
+        if not isinstance(current, dict):
+            current = {}
+        return {o.key: o.coerce(current.get(o.key, o.default)) for o in self.options}
 
     def run(self, ctx: Any) -> StepResult:
         raise NotImplementedError
@@ -153,6 +203,32 @@ def _index_catalogue(catalogue: Iterable[Step]) -> dict[str, Step]:
     return by_key
 
 
+def ordered_keys(stored_order: Iterable[str], catalogue: Iterable[Step]) -> list[str]:
+    """The run order for `stored_order` against `catalogue`: stored keys
+    the catalogue still has keep their stored order; catalogue steps the
+    stored order lacks (added by a newer app version) are inserted right
+    after their nearest preceding catalogue step that is already placed
+    (or first, if none precedes them) rather than appended at the end;
+    finally steps with position == "last" are moved, in order, after all
+    normal ones."""
+    steps = list(catalogue)
+    by_key = _index_catalogue(steps)
+    keys = list(dict.fromkeys(k for k in stored_order if k in by_key))
+    placed = set(keys)
+    for i, step in enumerate(steps):
+        if step.key in placed:
+            continue
+        at = 0
+        for prev in reversed(steps[:i]):
+            if prev.key in placed:
+                at = keys.index(prev.key) + 1
+                break
+        keys.insert(at, step.key)
+        placed.add(step.key)
+    normal = [k for k in keys if by_key[k].position != "last"]
+    return normal + [k for k in keys if by_key[k].position == "last"]
+
+
 # --- recipe ----------------------------------------------------------------
 
 
@@ -161,8 +237,9 @@ class Recipe:
     """Ordered step keys + per-step enabled flags and options + the
     confidence threshold. Steps are identified by key only, so a recipe
     saved by an older app version keeps working: keys the catalogue no
-    longer has are skipped, steps it gained are appended (at their
-    default_enabled state)."""
+    longer has are skipped, steps it gained are inserted at their
+    catalogue position (at their default_enabled state), and steps with
+    position "last" always run after the normal ones."""
 
     order: list[str] = field(default_factory=list)
     enabled: dict[str, bool] = field(default_factory=dict)
@@ -173,7 +250,7 @@ class Recipe:
     def default_for(cls, catalogue: Iterable[Step]) -> "Recipe":
         steps = list(catalogue)
         return cls(
-            order=[s.key for s in steps],
+            order=ordered_keys([s.key for s in steps], steps),
             enabled={s.key: s.default_enabled for s in steps},
             options={s.key: {o.key: o.default for o in s.options} for s in steps},
         )
@@ -182,10 +259,8 @@ class Recipe:
         """The enabled steps in run order, each with its validated,
         fully-populated options dict."""
         by_key = _index_catalogue(catalogue)
-        keys = [k for k in self.order if k in by_key]
-        keys += [k for k in by_key if k not in keys]
         out: list[tuple[Step, dict[str, Any]]] = []
-        for key in dict.fromkeys(keys):
+        for key in ordered_keys(self.order, by_key.values()):
             step = by_key[key]
             if not self.enabled.get(key, step.default_enabled):
                 continue
@@ -245,6 +320,7 @@ class FileStatus(Enum):
     NEEDS_REVIEW = "needs review"  # nothing applied, but guesses are waiting
     FAILED = "failed"  # at least one step failed (applied changes still listed)
     ABORTED = "aborted"  # a required step failed; original left untouched
+    SKIPPED = "skipped"  # deliberately not processed (a step said so); not a failure
 
 
 @dataclass
@@ -265,6 +341,8 @@ class FileReport:
     review: list[ReviewItem] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     duration: float = 0.0
+    notes: list[str] = field(default_factory=list)  # FYIs ("<step>: <note>")
+    skips: list[str] = field(default_factory=list)  # why the file was skipped
 
 
 @dataclass
@@ -280,6 +358,12 @@ class RedactReport:
 
     def needs_review(self) -> list[FileReport]:
         return [e for e in self.entries if e.review]
+
+    def with_notes(self) -> list[FileReport]:
+        return [e for e in self.entries if e.notes]
+
+    def skipped(self) -> list[FileReport]:
+        return [e for e in self.entries if e.status is FileStatus.SKIPPED]
 
     def to_text(self) -> str:
         lines = ["Redact report", "============="]
@@ -323,6 +407,21 @@ class RedactReport:
                 head += "  [aborted -- original left untouched]"
             lines.append(head)
             lines += [f"  ! {f}" for f in e.failures]
+
+        # Only when non-empty, so a report from code that never uses
+        # notes/skips is text-identical to what it always was.
+        noted = self.with_notes()
+        if noted:
+            lines += ["", "NOTES", "-----"]
+            for e in noted:
+                lines.append(f"{e.file}")
+                lines += [f"  * {n}" for n in e.notes]
+        skipped = self.skipped()
+        if skipped:
+            lines += ["", "SKIPPED  (deliberately not processed)", "-" * 37]
+            for e in skipped:
+                lines.append(f"{e.file}")
+                lines += [f"  - {r}" for r in e.skips]
         return "\n".join(lines) + "\n"
 
 
@@ -338,10 +437,15 @@ def _as_changes(value: str | Iterable[str] | None) -> list[str]:
 
 
 def _set_options(ctx: Any, opts: dict[str, Any]) -> None:
+    """Private setter the engine uses (kept for compatibility); steps read
+    the result through Step.options_for(ctx)."""
     try:
         ctx.step_options = opts
     except AttributeError:
         pass  # a context that can't take it just doesn't get option access
+
+
+FinalizeFn = Callable[[Any, FileReport], "StepResult | None"]
 
 
 def run_recipe_on_item(
@@ -350,11 +454,20 @@ def run_recipe_on_item(
     threshold: float,
     make_context: Callable[[Any], Any],
     describe: Callable[[Any], str] = str,
+    finalize: FinalizeFn | None = None,
+    finalize_label: str = "Final save",
 ) -> FileReport:
     """One file through the whole recipe. Never raises (short of
     KeyboardInterrupt): every failure lands in the returned FileReport.
     `resolved` comes from Recipe.resolve(). Exposed so the GUI can drive
-    the per-file loop through run_with_progress()."""
+    the per-file loop through run_with_progress().
+
+    `finalize(ctx, file_report)` (optional) runs once after all resolved
+    steps -- only if the file wasn't aborted or skipped -- typically to
+    save the context once. It returns a StepResult (or None = nothing);
+    its changes join `applied` under `finalize_label`, a failure (or
+    exception) marks the file FAILED under that label. The file report so
+    far is passed so it can tell whether anything changed."""
     started = time.monotonic()
     try:
         name = describe(item)
@@ -363,6 +476,7 @@ def run_recipe_on_item(
     entry = FileReport(file=name, item=item)
     ctx = None
     aborted = False
+    skipped = False
     try:
         try:
             ctx = make_context(item)
@@ -375,6 +489,12 @@ def run_recipe_on_item(
             if failure and step.required:
                 aborted = True
                 break
+            if entry.skips:
+                skipped = True
+                break
+        if finalize is not None and not aborted and not skipped:
+            _run_finalize(finalize, ctx, entry, finalize_label)
+            skipped = bool(entry.skips)  # finalize may skip too
     finally:
         closer = getattr(ctx, "close", None)
         if callable(closer):
@@ -388,11 +508,39 @@ def run_recipe_on_item(
         entry.status = FileStatus.ABORTED
     elif entry.failures:
         entry.status = FileStatus.FAILED
+    elif skipped:
+        entry.status = FileStatus.SKIPPED
     elif entry.applied:
         entry.status = FileStatus.CHANGED
     elif entry.review:
         entry.status = FileStatus.NEEDS_REVIEW
     return entry
+
+
+def _run_finalize(finalize: FinalizeFn, ctx: Any, entry: FileReport, label: str) -> None:
+    try:
+        result = finalize(ctx, entry)
+        if result is None:
+            return
+        if not isinstance(result, StepResult):
+            raise TypeError("finalize returned no StepResult")
+        _fold_result(result, label, entry)
+    except Exception as exc:
+        entry.failures.append(f"{label}: {type(exc).__name__}: {exc}")
+
+
+def _fold_result(result: StepResult, label: str, entry: FileReport) -> bool:
+    """Folds a non-suggestion result into `entry`; True if it failed."""
+    if result.note:
+        entry.notes.append(f"{label}: {result.note}")
+    if result.status is StepStatus.APPLIED:
+        entry.applied += [f"{label}: {c}" for c in result.changes] or [f"{label}: done"]
+    elif result.status is StepStatus.FAILED:
+        entry.failures.append(f"{label}: {result.message or 'failed'}")
+        return True
+    elif result.status is StepStatus.SKIPPED:
+        entry.skips.append(f"{label}: {result.message or 'skipped'}")
+    return False
 
 
 def _run_step(step: Step, opts: dict, threshold: float, ctx: Any, label: str, entry: FileReport) -> bool:
@@ -403,12 +551,11 @@ def _run_step(step: Step, opts: dict, threshold: float, ctx: Any, label: str, en
         result = step.run(ctx)
         if not isinstance(result, StepResult):
             raise TypeError("the step returned no StepResult")
-        if result.status is StepStatus.APPLIED:
-            entry.applied += [f"{label}: {c}" for c in result.changes] or [f"{label}: done"]
-        elif result.status is StepStatus.FAILED:
-            entry.failures.append(f"{label}: {result.message or 'failed'}")
-            return True
-        elif result.status is StepStatus.SUGGESTION:
+        if result.status is not StepStatus.SUGGESTION:
+            return _fold_result(result, label, entry)
+        else:
+            if result.note:
+                entry.notes.append(f"{label}: {result.note}")
             if result.confidence >= threshold:
                 done = _as_changes(step.apply_suggestion(ctx, result))
                 pct = f"auto-applied at {result.confidence:.0%}"
@@ -433,6 +580,8 @@ def run_recipe(
     progress: Callable[[int, int, Any], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     describe: Callable[[Any], str] = str,
+    finalize: FinalizeFn | None = None,
+    finalize_label: str = "Final save",
 ) -> RedactReport:
     """Run `recipe` over `items`, each isolated from the others.
     `progress(done, total, item)` is called before each file (item is
@@ -451,7 +600,9 @@ def run_recipe(
         if progress is not None:
             progress(index, len(items), item)
         report.entries.append(
-            run_recipe_on_item(item, resolved, recipe.confidence_threshold, make_context, describe)
+            run_recipe_on_item(
+                item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label
+            )
         )
     else:
         if progress is not None:

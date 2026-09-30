@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#09`.
+Currently: `2026-09-30#10`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -291,6 +291,34 @@ def on_edit_recipe(self):
 ```
 
 A step producing a corrected file writes it beside the original and calls `commit_in_place(path, temp_path, verify=...)`; it raises `CommitError` (original intact) on failure. The context may define `close()`; the engine calls it after each file.
+
+**Notes, skips, final save, ordering** (added 2026-09-30#10, all optional and backward compatible):
+
+```python
+StepResult.nothing(note="no cover art found")     # FYI -> report's NOTES section
+StepResult.skipped("unsaved edits")               # file deliberately not processed:
+                                                  # FileStatus.SKIPPED, its own SKIPPED section,
+                                                  # remaining steps + finalize don't run
+
+def save_once(ctx, file_report):                  # runs after all steps, unless the file was
+    if not file_report.applied:                   # aborted/skipped; returns StepResult | None
+        return None                               # (failure -> file FAILED, label "Final save")
+    ctx.book.save()
+    return StepResult.applied("saved")
+run_redact(self, books, recipe, CATALOGUE, make_context=BookCtx,
+           finalize=save_once, finalize_label="Save")      # also run_recipe / run_recipe_on_item
+
+class Prefix(Step):
+    key, label, position = "prefix", "Add prefix", "last"   # "last" steps always run after the
+    options = (OptionSpec("text", "Prefix", "str", "", max_length=20),)  # normal ones; the editor pins them
+    def run(self, ctx):
+        text = self.options_for(ctx)["text"]              # supported option accessor
+        ...
+Prefix(default_enabled=False)                             # per-instance default
+RedactResultsDialog(report, parent, title, header="Done.", extra_notes=["3 files skipped"])
+```
+
+`NOTES` and `SKIPPED` sections are appended to `to_text()` only when non-empty, so a report that uses neither is byte-identical to before. A recipe saved by an older app version gets steps it lacks inserted at their catalogue position (right after the nearest preceding catalogue step), not appended at the end.
 
 ## Adoption (as of 2026-09-23)
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Iterable
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QApplication,
@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -52,6 +53,7 @@ from redactor_common.core.pipeline import (
     RedactReport,
     Recipe,
     Step,
+    ordered_keys,
     run_recipe_on_item,
 )
 from redactor_common.gui.menu_builder import MenuAction
@@ -65,9 +67,21 @@ from redactor_common.gui.standard_shortcuts import REDACT
 class RedactResultsDialog(QDialog):
     """Report text + Needs-review list. Non-blocking helpers
     (save_report_to, copy_report) are separate from the buttons so they
-    can be tested without a file dialog."""
+    can be tested without a file dialog.
 
-    def __init__(self, report: RedactReport, parent: QWidget | None = None, title: str = "Redact results"):
+    Optional `header` (a line or paragraph shown above the tabs) and
+    `extra_notes` (lines shown below them) let an app add its own context
+    -- "3 files had unsaved edits and were skipped" -- without a subclass.
+    Neither is part of the saved/copied report text."""
+
+    def __init__(
+        self,
+        report: RedactReport,
+        parent: QWidget | None = None,
+        title: str = "Redact results",
+        header: str = "",
+        extra_notes: list[str] | None = None,
+    ):
         super().__init__(parent)
         self.report = report
         self.setWindowTitle(title)
@@ -113,8 +127,19 @@ class RedactResultsDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(close)
 
+        self.header_label: QLabel | None = None
+        self.notes_label: QLabel | None = None
         layout = QVBoxLayout(self)
+        if header:
+            self.header_label = QLabel(header)
+            self.header_label.setWordWrap(True)
+            layout.addWidget(self.header_label)
         layout.addWidget(self.tabs)
+        notes = [n for n in (extra_notes or []) if n]
+        if notes:
+            self.notes_label = QLabel("\n".join(notes))
+            self.notes_label.setWordWrap(True)
+            layout.addWidget(self.notes_label)
         layout.addLayout(buttons)
 
     def copy_report(self) -> None:
@@ -145,6 +170,8 @@ def run_redact(
     describe: Callable[[Any], str] = str,
     title: str = "Redact",
     show_results: bool = True,
+    finalize: Callable[[Any, FileReport], Any] | None = None,
+    finalize_label: str = "Final save",
 ) -> RedactReport | None:
     """Run `recipe` on `items` under a cancellable progress dialog (one
     label per file), then show the results dialog. Returns the report,
@@ -160,7 +187,9 @@ def run_redact(
 
     def do_one(item: Any, _index: int) -> None:
         report.entries.append(
-            run_recipe_on_item(item, resolved, recipe.confidence_threshold, make_context, describe)
+            run_recipe_on_item(
+                item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label
+            )
         )
 
     finished = run_with_progress(
@@ -202,11 +231,9 @@ class RecipeEditorDialog(QDialog):
         self.setWindowTitle("Redact recipe")
         self.resize(620, 460)
         self._steps = {s.key: s for s in catalogue}
-        # Normalize through resolve()-like rules: recipe order first
-        # (known keys only), then catalogue steps the recipe lacks.
-        keys = [k for k in recipe.order if k in self._steps]
-        keys += [k for k in self._steps if k not in keys]
-        keys = list(dict.fromkeys(keys))
+        # Same ordering rules as Recipe.resolve(): stored order, new
+        # catalogue steps at their catalogue position, "last" steps pinned.
+        keys = ordered_keys(recipe.order, self._steps.values())
         self._enabled = {k: recipe.enabled.get(k, self._steps[k].default_enabled) for k in keys}
         self._options: dict[str, dict[str, Any]] = {}
         for k in keys:
@@ -226,6 +253,9 @@ class RecipeEditorDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked if self._enabled[k] else Qt.CheckState.Unchecked)
             self.list.addItem(item)
         self.list.currentItemChanged.connect(lambda cur, _prev: self._show_step(cur))
+        # A drag may drop a normal step below a pinned "last" one (or the
+        # reverse); put things back once the drop has settled.
+        self.list.model().rowsMoved.connect(lambda *_: QTimer.singleShot(0, self._repin))
 
         up = QPushButton("Move up")
         up.clicked.connect(lambda: self.move_current(-1))
@@ -303,6 +333,8 @@ class RecipeEditorDialog(QDialog):
                 value = w.value()
             elif isinstance(w, QComboBox):
                 value = w.currentText()
+            elif isinstance(w, QLineEdit):
+                value = w.text()
             else:
                 continue
             self._options[self._shown_key][spec.key] = value
@@ -345,6 +377,10 @@ class RecipeEditorDialog(QDialog):
             w = QComboBox()
             w.addItems(list(spec.choices))
             w.setCurrentText(str(value))
+        elif spec.kind == "str":
+            w = QLineEdit(str(value))
+            if spec.max_length is not None:
+                w.setMaxLength(int(spec.max_length))
         else:
             w = QCheckBox()
             w.setChecked(bool(value))
@@ -357,10 +393,36 @@ class RecipeEditorDialog(QDialog):
         new = row + delta
         if row < 0 or not 0 <= new < self.list.count():
             return
+        if self._is_last(self._key_at(row)) != self._is_last(self._key_at(new)):
+            return  # "last" steps stay pinned below the normal ones
         self._commit_shown()
         item = self.list.takeItem(row)
         self.list.insertItem(new, item)
         self.list.setCurrentRow(new)
+
+    def _key_at(self, row: int) -> str:
+        return self.list.item(row).data(Qt.ItemDataRole.UserRole)
+
+    def _is_last(self, key: str) -> bool:
+        return self._steps[key].position == "last"
+
+    def _repin(self) -> None:
+        """Stable-partition the list so "last" steps sit at the bottom
+        (keeps their check state and the current selection)."""
+        rows = [self.list.item(r) for r in range(self.list.count())]
+        wanted = [i for i in rows if not self._is_last(i.data(Qt.ItemDataRole.UserRole))]
+        wanted += [i for i in rows if self._is_last(i.data(Qt.ItemDataRole.UserRole))]
+        if wanted == rows:
+            return
+        current = self.list.currentItem().data(Qt.ItemDataRole.UserRole) if self.list.currentItem() else None
+        self.list.blockSignals(True)
+        for r in range(len(rows) - 1, -1, -1):
+            self.list.takeItem(r)
+        for item in wanted:
+            self.list.addItem(item)
+        if current is not None:
+            self.list.setCurrentRow(_row_of(self.list, current))
+        self.list.blockSignals(False)
 
     def _reset(self) -> None:
         defaults = Recipe.default_for(self._steps.values())
@@ -373,6 +435,7 @@ class RecipeEditorDialog(QDialog):
             self.list.addItem(item)
             item.setCheckState(Qt.CheckState.Checked if defaults.enabled[key] else Qt.CheckState.Unchecked)
         self.list.blockSignals(False)
+        self._repin()
         self.threshold.setValue(defaults.confidence_threshold)
         self.list.setCurrentRow(0)
         self._show_step(self.list.currentItem())

@@ -113,8 +113,8 @@ def test_recipe_unknown_and_missing_keys():
     assert [s.key for s, _ in resolved] == ["noop"]  # "gone" skipped, fix disabled
     r.enabled["fix"] = True
     resolved = r.resolve(steps)
-    assert [s.key for s, _ in resolved] == ["noop", "fix"]  # new step appended
-    assert resolved[1][1] == {"level": 2}  # out-of-range option -> default
+    assert [s.key for s, _ in resolved] == ["fix", "noop"]  # new step inserted at its catalogue position
+    assert resolved[0][1] == {"level": 2}  # out-of-range option -> default
     assert r.confidence_threshold == 0.9
 
 
