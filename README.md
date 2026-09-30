@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#11`.
+Currently: `2026-09-30#12`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -366,6 +366,23 @@ RedactResultsDialog(report, parent, title, header="Done.", extra_notes=["3 files
 ```
 
 `NOTES` and `SKIPPED` sections are appended to `to_text()` only when non-empty, so a report that uses neither is byte-identical to before. A recipe saved by an older app version gets steps it lacks inserted at their catalogue position (right after the nearest preceding catalogue step), not appended at the end.
+
+**Pattern trail** (rename / move / path-tag patterns; all optional, backward compatible). A saved recipe keeps its stored pattern as saved: later changes to the app's Rename/Export pattern never silently change what Redact does, and the user never has to recreate the recipe. An **empty** stored value means "follow the fallback". The recipe JSON is unchanged (still just the string). Extra `OptionSpec` fields for `kind="str"`:
+
+- `suggestions: Callable[[], list[str]]` -- the app's pattern history, newest first. Its presence makes the editor show an editable combo instead of a plain line edit (de-duplicated; filename patterns first, then path patterns containing `/`).
+- `fallback: Callable[[], str]` + `fallback_label: str` -- the pattern used while the stored value is empty, and how to describe it.
+- `preview: Callable[[str], str]` -- renders an example result; shown as a `Preview:` line when given.
+
+The editor always captions the option `In effect: <pattern> -- <source>` (updating as you type), where the source is `set in this recipe`, `follows: <fallback_label>` or `default` (`effective_option_source(spec, stored)` returns that pair, for use in your own step code), and a **Use fallback** button clears the field to follow again.
+
+```python
+OptionSpec("pattern", "Filename pattern", "str", "",
+           suggestions=lambda: rename_history(),              # ["{author} - {title}", ...]
+           fallback=lambda: settings.value("rename/pattern", "{title}"),
+           fallback_label="the last Rename/Export pattern",
+           preview=lambda p: render_pattern(p, SAMPLE_BOOK))
+# in the step: value, _src = effective_option_source(spec, self.options_for(ctx)["pattern"])
+```
 
 ## Adoption (as of 2026-09-23)
 

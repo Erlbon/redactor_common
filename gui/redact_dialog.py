@@ -53,6 +53,7 @@ from redactor_common.core.pipeline import (
     RedactReport,
     Recipe,
     Step,
+    effective_option_source,
     ordered_keys,
     run_recipe_on_item,
 )
@@ -356,9 +357,89 @@ class RecipeEditorDialog(QDialog):
             text += ("\n\n" if text else "") + "If this step fails, the file is left untouched."
         self.description.setText(text)
         for spec in step.options:
-            widget = self._make_widget(spec, self._options[key][spec.key])
+            value = self._options[key][spec.key]
+            if spec.kind == "str" and spec.suggestions is not None:
+                widget, row = self._make_pattern_row(spec, value)
+                self._widgets[spec.key] = widget
+                self.options_form.addRow(spec.label, row)
+                continue
+            widget = self._make_widget(spec, value)
             self._widgets[spec.key] = widget
             self.options_form.addRow(spec.label, widget)
+
+    @staticmethod
+    def _pattern_choices(spec: OptionSpec) -> list[str]:
+        """The suggestion list for the dropdown: de-duplicated, newest
+        first, filename patterns before path patterns (those with '/')."""
+        try:
+            raw = list(spec.suggestions()) if spec.suggestions else []
+        except Exception:
+            raw = []
+        seen: set[str] = set()
+        unique = [p for p in raw if isinstance(p, str) and p and not (p in seen or seen.add(p))]
+        return [p for p in unique if "/" not in p] + [p for p in unique if "/" in p]
+
+    @staticmethod
+    def _make_pattern_row(spec: OptionSpec, value: Any) -> tuple[QComboBox, QWidget]:
+        """The "pattern trail" for a str option with suggestions: an
+        editable combo (recent patterns), a 'Use fallback' button, a live
+        'In effect: ... -- source' caption and an optional preview line.
+        Returns (the combo holding the value, the row widget to lay out)."""
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        combo.addItems(RecipeEditorDialog._pattern_choices(spec))
+        edit = combo.lineEdit()
+        if spec.max_length is not None:
+            edit.setMaxLength(int(spec.max_length))
+        if spec.fallback is not None:
+            edit.setPlaceholderText("(follow " + (spec.fallback_label or "the app's current setting") + ")")
+        combo.setCurrentText(str(value))
+        if spec.tooltip:
+            combo.setToolTip(spec.tooltip)
+
+        clear = QPushButton("Use fallback")
+        clear.setToolTip("Clear the pattern so this step follows the fallback again")
+        clear.setEnabled(spec.fallback is not None)
+        clear.clicked.connect(lambda: combo.setCurrentText(""))
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addWidget(combo, 1)
+        top.addWidget(clear)
+
+        caption = QLabel()
+        caption.setWordWrap(True)
+        caption.setObjectName("pattern_caption")
+        preview = QLabel()
+        preview.setWordWrap(True)
+        preview.setObjectName("pattern_preview")
+        preview.setVisible(spec.preview is not None)
+
+        def refresh() -> None:
+            effective, source = effective_option_source(spec, combo.currentText())
+            caption.setText(f"In effect: {effective} — {source}")
+            if spec.preview is not None:
+                try:
+                    shown = spec.preview(effective)
+                except Exception as exc:
+                    shown = f"(no preview: {exc})"
+                preview.setText(f"Preview: {shown}")
+
+        combo.editTextChanged.connect(lambda _t: refresh())
+        refresh()
+
+        row = QWidget()
+        col = QVBoxLayout(row)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.addLayout(top)
+        col.addWidget(caption)
+        col.addWidget(preview)
+        # Handles for tests / callers that want the pieces.
+        combo.setProperty("pattern_trail", True)
+        row.caption = caption  # type: ignore[attr-defined]
+        row.preview = preview  # type: ignore[attr-defined]
+        row.use_fallback = clear  # type: ignore[attr-defined]
+        return combo, row
 
     @staticmethod
     def _make_widget(spec: OptionSpec, value: Any) -> QWidget:

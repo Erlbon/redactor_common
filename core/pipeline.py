@@ -115,6 +115,16 @@ class OptionSpec:
     choices: tuple[str, ...] = ()
     tooltip: str = ""
     max_length: int | None = None  # "str" only
+    # "str" pattern options only (all optional; the recipe JSON is unchanged,
+    # it still stores just the string): `suggestions` = the app's pattern
+    # history, newest first; `fallback` = the pattern used when the stored
+    # value is empty (described to the user by `fallback_label`); `preview`
+    # renders an example result for a pattern. The editor shows these as a
+    # "pattern trail"; a saved non-empty value is always kept as saved.
+    suggestions: Callable[[], list[str]] | None = None
+    fallback: Callable[[], str] | None = None
+    fallback_label: str = ""
+    preview: Callable[[str], str] | None = None
 
     def coerce(self, raw: Any) -> Any:
         """Validate a stored/edited value; fall back to the default when
@@ -143,6 +153,24 @@ class OptionSpec:
         except (TypeError, ValueError):
             pass
         return self.default
+
+
+def effective_option_source(spec: OptionSpec, stored_value: Any) -> tuple[str, str]:
+    """(pattern in effect, where it came from) for a "str" option.
+    A non-empty stored value wins ("set in this recipe"); an empty one
+    follows `spec.fallback` ("follows: <fallback_label>"); with no fallback
+    it is the spec default ("default")."""
+    stored = stored_value if isinstance(stored_value, str) else ""
+    if stored:
+        return stored, "set in this recipe"
+    if spec.fallback is not None:
+        try:
+            value = spec.fallback()
+        except Exception:
+            value = ""
+        label = spec.fallback_label or "the app's current setting"
+        return (value if isinstance(value, str) else ""), f"follows: {label}"
+    return (spec.default if isinstance(spec.default, str) else ""), "default"
 
 
 class Step:
