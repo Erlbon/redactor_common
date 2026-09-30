@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#12`.
+Currently: `2026-09-30#13`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -510,6 +510,74 @@ each is a design decision rather than a copy to delete:
   architectures; sharing it needs design work first.
 - **mp3** has no Search/Replace or Case Conversion (no obvious tag use
   case yet).
+
+## Standard menu skeleton
+
+Every app's menu bar is `File, Edit, View, <app menus>, Tools, Help` (6-8 headings, no Window
+menu), with the shared actions under one label, one mnemonic and one shortcut. It is built by
+`gui/standard_menus.py` next to the old `menu_builder.build_menu_bar()` (File/Import/Operations/
+Settings/Help), which keeps working unchanged until an app migrates.
+
+```python
+from redactor_common.core import labels
+from redactor_common.gui.menu_builder import MenuAction
+from redactor_common.gui.standard_menus import (
+    AppMenu, StandardMenuSpec, build_standard_menu_bar, get_action_registry, look_up_submenu,
+    standard_edit_items, standard_file_items, standard_help_items, standard_tools_items,
+    standard_view_items)
+from redactor_common.gui.command_palette import add_command_palette
+
+spec = StandardMenuSpec(
+    file=standard_file_items(open_files=self.add_files, open_folder=self.add_folder,
+                             save=self.save_selected, save_all=self.save_all, save_as=self.save_as,
+                             rename_file=self.rename_one, rename_export_move=self.rename_dialog,
+                             remove_from_list=self.remove_files, clear_list=self.clear,
+                             exit_slot=self.close),          # slot None = greyed, never hidden
+    edit=standard_edit_items(undo=self.undo, redo=self.redo, apply=self.apply_selected,
+                             search_replace=self.search_replace),
+    view=standard_view_items(show_metadata_panel=self.toggle_panel, refresh_list=self.refresh),
+    app_menus=[AppMenu(labels.MENU_METADATA, [
+        MenuAction("parse", labels.PARSE_FILENAME, self.parse, shortcut=standard_shortcuts.PARSE_FILENAME),
+        look_up_submenu([MenuAction("lu_cv", "Comic &Vine…", self.look_up_cv)])])],
+    tools=standard_tools_items(api_keys=self.api_keys, columns=self.columns),
+    help=standard_help_items("Comic Redactor", self.changelog, self.credits, self.about))
+menus = build_standard_menu_bar(self, spec)        # dict 'File' -> QMenu ...
+registry = get_action_registry(self)                # key -> QAction (toolbar, palette, lint)
+add_command_palette(self, registry)                 # Ctrl+K
+```
+
+- **Labels** (`core/labels.py`, Qt-free): `OPEN_FILES`, `OPEN_FOLDER`, `SAVE`, `SAVE_ALL`,
+  `RENAME_EXPORT_MOVE`, `EXPORT_SETTINGS` (`Ex&port Settings…`), `IMPORT_SETTINGS`, `REMOVE_FROM_LIST`,
+  `SEARCH_REPLACE`, `LOOK_UP`, `COMMAND_PALETTE`, `CHANGELOG`, `CREDITS`, `about(app_name)`,
+  `apply_to_selected(n)`, the `MENU_*` headings, ... Import them, never retype a shared label. Title Case
+  for menus; sentence case is for dialogs and tooltips. `strip_mnemonic`, `plain_label`,
+  `mnemonic_letter` are the helpers.
+- **Builder behaviour**: standard blocks are `standard_{file,edit,view,tools,help}_items()`. Core
+  actions with no slot are present but disabled; optional ones (`save_as`, `delete_files`,
+  `import_and_convert`, `auto_number`, `filter_list`, every Tools entry) are omitted when `None`. Roles:
+  `about` AboutRole, `preferences` PreferencesRole, `exit` QuitRole, NoRole on everything else. `hidden=[...]`
+  registers palette-only actions. `set_apply_count(action, n)` keeps 'Apply to N Selected' current.
+- **Command palette** (Ctrl+K, `gui/command_palette.py`): lists every menu action as
+  `Title   Menu ▸ Submenu   [shortcut]`, substring/fuzzy filter, Enter triggers, disabled actions greyed.
+- **Shortcuts**: new constants in `gui/standard_shortcuts.py` (`OPEN_FILES`, `OPEN_FOLDER`, `SAVE_AS`,
+  `SAVE_ALL`, `DELETE_FILES`, `APPLY`, `FILTER_LIST`, `COMMAND_PALETTE`, `RESET_ZOOM`, `PREFERENCES`, ...);
+  F1 is Help contents, never About.
+- **Lint** - call it from each app's test suite:
+
+  ```python
+  from redactor_common.gui.menu_lint import lint_menu_bar
+  def test_menu_skeleton(qapp):
+      assert lint_menu_bar(MainWindow()) == []       # or lint_menu_bar(spec); check_canonical=False while migrating
+  ```
+
+  It checks heading order and count (max 8), unique mnemonics per menu, duplicate shortcuts, the
+  platform-standard shortcuts (Ctrl+Shift+S is Save As, F1 is not About...) and canonical labels.
+- **Migration order** (one check-in per app per step, each with its version bump): (1) bump the pin, add
+  the lint test with `check_canonical=False`; (2) label-only pass using the constants; (3) move items
+  into the skeleton with shortcuts unchanged; (4) shortcut fixes, keeping each old key as a secondary
+  alias for one release with `with_aliases(action, *old_shortcuts)` (`QAction.setShortcuts`); (5) drop
+  the old five-menu `build_menu_bar()` call. cbz's former Collection menu becomes a `Collection ▸`
+  submenu in Tools.
 
 ## License
 

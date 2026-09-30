@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core import settings_bundle as sb
+from redactor_common.core import labels
 from redactor_common.gui.menu_builder import MenuAction
 
 _FILE_FILTER = "Settings files (*.json);;All files (*)"
@@ -221,8 +222,8 @@ def settings_menu_actions(
 ) -> list[MenuAction]:
     """MenuAction specs for the File menu, same vocabulary as gui/menu_builder."""
     return [
-        MenuAction("export_settings", "&Export Settings...", export_slot,
+        MenuAction("export_settings", labels.EXPORT_SETTINGS, export_slot,
                    tooltip="Save portable settings to a file"),
-        MenuAction("import_settings", "I&mport Settings...", import_slot,
+        MenuAction("import_settings", labels.IMPORT_SETTINGS, import_slot,
                    tooltip="Load settings from a file exported by this program"),
     ]

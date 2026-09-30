@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from redactor_common.core import labels
 from redactor_common.core.pipeline import (
     FileReport,
     OptionSpec,
@@ -547,7 +548,7 @@ def _row_of(lst: QListWidget, key: str) -> int:
 # --- menu specs ---------------------------------------------------------------
 
 
-def redact_menu_action(slot: Callable[[], None], text: str = "&Redact...") -> MenuAction:
+def redact_menu_action(slot: Callable[[], None], text: str = labels.REDACT) -> MenuAction:
     """The standard "Redact" item (Ctrl+Shift+E) for the Operations menu."""
     return MenuAction(
         "redact",
@@ -558,6 +559,6 @@ def redact_menu_action(slot: Callable[[], None], text: str = "&Redact...") -> Me
     )
 
 
-def edit_recipe_menu_action(slot: Callable[[], None], text: str = "Redact &Recipe...") -> MenuAction:
+def edit_recipe_menu_action(slot: Callable[[], None], text: str = labels.EDIT_REDACT_RECIPE) -> MenuAction:
     """Companion item opening RecipeEditorDialog (no shortcut)."""
     return MenuAction("redact_recipe", text, slot, tooltip="Choose and order the Redact steps")

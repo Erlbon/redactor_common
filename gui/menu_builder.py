@@ -68,6 +68,11 @@ class MenuAction:
     shortcuts: Iterable[str] | None = None
     tooltip: str | None = None
     checkable: bool = False
+    # Added for the standard menu skeleton (gui/standard_menus.py); both are
+    # optional so the original constructor calls keep working unchanged.
+    role: QAction.MenuRole | None = None  # None leaves Qt's default (TextHeuristic)
+    keywords: str = ""  # extra words the command palette matches
+    enabled: bool = True  # False = shown greyed (disable, never hide)
 
 
 @dataclass
@@ -121,6 +126,12 @@ def populate_menu(
                 shortcut=item.shortcut, shortcuts=item.shortcuts,
                 tooltip=item.tooltip, checkable=item.checkable,
             )
+            if item.role is not None:
+                act.setMenuRole(item.role)
+            if not item.enabled:
+                act.setEnabled(False)
+            if item.keywords:
+                act.setData(item.keywords)  # read by gui/command_palette
             menu.addAction(act)
             actions_out[item.key] = act
         else:
