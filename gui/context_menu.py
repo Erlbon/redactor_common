@@ -110,9 +110,7 @@ def _open_in_default_app(window: QWidget, items: list, get_path: Callable[[Any],
     if failed:
         QMessageBox.warning(
             window, "Open in Default App",
-            "Couldn't open (no app registered for the file type, or the file is gone):
-" + "
-".join(failed[:10]),
+            "Couldn't open (no app registered for the file type, or the file is gone):\n" + "\n".join(failed[:10]),
         )
 
 

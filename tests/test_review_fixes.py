@@ -233,3 +233,22 @@ def test_open_with_default_app_reports_missing_handler(tmp_path, monkeypatch):
     f = tmp_path / "a.mp3"
     f.write_bytes(b"x")
     assert os_utils.open_with_default_app(str(f)) is False
+
+
+# -- every module imports -------------------------------------------------------------------------
+
+def test_every_module_imports():
+    """A syntax error in a module no other test touches (the context menu
+    once shipped broken that way) must fail here, not in the apps."""
+    import importlib
+    import pkgutil
+
+    import redactor_common
+
+    failures = []
+    for info in pkgutil.walk_packages(redactor_common.__path__, "redactor_common."):
+        try:
+            importlib.import_module(info.name)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{info.name}: {exc!r}")
+    assert not failures, failures
