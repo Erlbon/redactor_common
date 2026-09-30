@@ -45,6 +45,20 @@ opened, merge it as soon as CI is green and delete the branch. Then
 check the Windows CI run on `main`. Everything else here still applies
 (sync first, version bump and changelog, tests).
 
+## Lookups live in the right-click menu too
+
+Erlend, 2026-09-30: every lookup must be reachable from the file
+table's right-click menu, not only the menu bar. Anything in an app's
+Import/lookup menu that acts on the selected files (TMDB, TheTVDB,
+OpenSubtitles, Comic Vine, GCD, Bedetheque, ComicRack, Google Books,
+Open Library, Calibre, MusicBrainz) also goes into the context menu
+via `extra_items`, as a "Look Up" `Submenu` when there are several.
+Whole-library reports (e.g. cbzredactor's Compare ComicRack Library
+with GCD) are exempt. Add the entry in the same commit as any new
+lookup. Dialog choices such as the zero-pad checkbox/width and the
+ASCII-safe checkbox are remembered between runs in every app (the
+shared dialogs take an initial value plus a change callback).
+
 ## Version bump is mandatory at check-in, not just before release
 
 **Any commit to one of the four apps that changes real code (not a

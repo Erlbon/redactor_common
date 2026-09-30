@@ -22,6 +22,8 @@ The project skill in `.claude/skills/redactor-conventions/SKILL.md` holds the fu
 
 8. **Merge straight to main.** One developer, no reviewer (Erlend, 2026-09-28). Finished work that passes its tests is merged into `main` and pushed, not left waiting on a branch or in a PR. If a PR was opened, merge it once CI is green and delete the branch.
 
+9. **Every lookup/import source is in the right-click menu too.** Anything in an app's Import/lookup menu that acts on the selected files (TMDB, Comic Vine, Google Books, MusicBrainz...) also appears in the table's right-click menu, as a "Look Up" submenu when there are several (Erlend, 2026-09-30). Whole-library reports are exempt. Remembered dialog choices (zero-pad width, ASCII checkbox) persist between runs in every app.
+
 Full text of these rules: `.claude/skills/redactor-conventions/SKILL.md` in redactor_common.
 
 ## Machine-local, not in git
