@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#06`.
+Currently: `2026-09-30#07`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -83,6 +83,7 @@ Currently: `2026-09-30#06`.
 | `pattern_history.py` | `dedupe_and_trim()` + `encode_history()`/`decode_history()` (reads JSON or video's `\x1f` format) for the Rename/Parse pattern history | 2026-09-23; four copies before |
 | `version_bump.py` | The `YYYY-MM-DD#NN` bump (`bump_version_file()`, `pep440_from()`, `main()`), called by every repo's own few-line `bump_version.py` | 2026-09-23; five copies before |
 | `languages.py` | One ISO 639 table (639-1, 639-2/T, 639-2/B, English name): `convert()`, `name_for()`, `language_pairs(codes, style)` for each app's quick-pick list in its format's code style (EPUB/ComicInfo 2-letter, ID3 3-letter, Matroska bibliographic "ger") | 2026-09-23 |
+| `secret_store.py` | `get_secret()`/`set_secret()`/`delete_secret()`/`secret_source()`/`keyring_available()` + `migrate_legacy_secret()` -- API keys and passwords in the OS credential store (via optional `keyring`), never scrambled; see "Secrets" below | 2026-09-30; cbz kept Comic Vine/GCD credentials in its ini (password XOR-"scrambled"), video kept TMDB/TVDB/OpenSubtitles keys in plaintext |
 
 `pytest` from this folder runs everything (`tests/`): the core modules
 need no Qt; the GUI tests run headless under `QT_QPA_PLATFORM=offscreen`.
@@ -133,6 +134,40 @@ past exactly that on 2026-09-23.
 | `image_decode.py` | `decode_scaled(bytes, size)` -- decode straight to a target size via `QImageReader.setScaledSize()`, never upscaling; safe on a worker thread | split out of `async_icon_cache.py`, 2026-09-23 |
 | `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there. 2026-09-29#04: deleting the owner window mid-load (quitting the app, or pytest's final gc after failing tests) deadlocked on the GIL -- pools are no longer Qt children; `shutdown()` added |
 | `visible_rows.py` | `VisibleRowsWatcher` -- reports the on-screen rows (+ buffer), debounced, on scroll/resize/sort/row changes: the lazy half of epub's lazy cover loading (~126s → ~2.6s for a 15k-book rebuild) | epub, 2026-09-23; now also cbz's table covers |
+
+## Secrets
+
+`core/secret_store.py` keeps API keys and passwords out of settings files.
+Resolution order: env var (if you name one) > OS keyring (Windows Credential
+Manager / macOS Keychain / Linux Secret Service, service `redactor/<app>`) >
+opt-in fallback file > your `legacy` value. There is no scrambling: with no
+usable keyring `set_secret()` raises `SecretStoreUnavailable`, and only an
+explicit `allow_unencrypted_fallback=True` (ask the user) writes a plainly
+named `redactor_<app>_secrets_UNENCRYPTED.json` (0600 on POSIX) in the
+per-user config folder.
+
+```python
+from redactor_common.core import secret_store as ss
+
+key = ss.get_secret("mp3redactor", "discogs_token", env_var="DISCOGS_TOKEN",
+                    legacy=lambda: settings.value("discogs/token", ""))
+# once, at startup: move an old cleartext/scrambled value into the store
+ss.migrate_legacy_secret("mp3redactor", "discogs_token",
+                         read_legacy=lambda: settings.value("discogs/token", ""),
+                         clear_legacy=lambda: settings.remove("discogs/token"))
+try:
+    ss.set_secret("mp3redactor", "discogs_token", new_value)
+except ss.SecretStoreUnavailable:
+    ...  # tell the user; if they agree: set_secret(..., allow_unencrypted_fallback=True)
+```
+
+`gui/secret_field.py`'s `SecretField(app, name, env_var=None)` is the
+settings-dialog row: masked edit that never shows the value (empty = keep),
+Remove button, and a label naming the source; call `apply()` on OK.
+
+`keyring` is an OPTIONAL dependency (`pip install "redactor_common[secrets]"`),
+and the package imports fine without it. Each app should list `keyring` in
+its own `requirements.txt` (and bundle it when freezing).
 
 ## Redact pipeline
 
