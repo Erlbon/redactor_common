@@ -66,6 +66,13 @@ UNDO = "Ctrl+Z"  # QKeySequence::Undo
 REDO = "Ctrl+Y"  # QKeySequence::Redo (Ctrl+Shift+Z also works via Qt's own alt binding)
 SEARCH_REPLACE = "Ctrl+H"  # QKeySequence::Replace
 
+# The one-button "Redact" automation (core/pipeline.py): runs the
+# default recipe on the selected files. Ctrl+Shift+E picked 2026-09-30
+# after grepping all four apps' source for shortcuts: free everywhere,
+# and sits next to Ctrl+E (export by pattern) in the same E-for-export/
+# edit-the-file family without colliding with it.
+REDACT = "Ctrl+Shift+E"
+
 # --- Help ---
 HELP = "F1"  # QKeySequence::HelpContents
 

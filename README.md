@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#04`.
+Currently: `2026-09-30#05`.
 
 ## core/ — pure logic, no PyQt6 dependency, unit-tested
 
@@ -133,6 +133,48 @@ past exactly that on 2026-09-23.
 | `image_decode.py` | `decode_scaled(bytes, size)` -- decode straight to a target size via `QImageReader.setScaledSize()`, never upscaling; safe on a worker thread | split out of `async_icon_cache.py`, 2026-09-23 |
 | `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there. 2026-09-29#04: deleting the owner window mid-load (quitting the app, or pytest's final gc after failing tests) deadlocked on the GIL -- pools are no longer Qt children; `shutdown()` added |
 | `visible_rows.py` | `VisibleRowsWatcher` -- reports the on-screen rows (+ buffer), debounced, on scroll/resize/sort/row changes: the lazy half of epub's lazy cover loading (~126s → ~2.6s for a 15k-book rebuild) | epub, 2026-09-23; now also cbz's table covers |
+
+## Redact pipeline
+
+`core/pipeline.py` (engine, Qt-free) + `gui/redact_dialog.py` (dialogs) are the shared "Redact" button: run an ordered **recipe** of steps on the selected files with no operator input. Output is in place (`commit_in_place()` keeps the original until the new file is verified, then sends it to the Recycle Bin; a failed trash keeps a `<stem>.redact-orig<ext>` backup and reports it). Deterministic steps return `StepResult.applied(...)`; a *guess* returns `StepResult.suggestion(value, confidence, reason)` and is applied via the step's `apply_suggestion()` only at confidence >= the recipe threshold (default 0.9), otherwise it lands in the report's NEEDS REVIEW list. A step that raises is recorded as FAILED and later steps still run, unless the step is `required` (then that file is aborted and left untouched). Shortcut: `standard_shortcuts.REDACT` (`Ctrl+Shift+E`).
+
+```python
+from redactor_common.core.pipeline import OptionSpec, Recipe, Step, StepResult, commit_in_place
+from redactor_common.gui.redact_dialog import RecipeEditorDialog, redact_menu_action, run_redact
+
+class FixTitle(Step):                       # deterministic
+    key, label = "fix_title", "Tidy title"
+    description = "Trim and collapse whitespace in the title."
+    def run(self, ctx):                     # ctx = whatever make_context(item) returns
+        new = " ".join(ctx.book.title.split())
+        if new == ctx.book.title:
+            return StepResult.nothing()
+        old, ctx.book.title = ctx.book.title, new
+        return StepResult.applied(f"title {old!r} -> {new!r}")
+
+class GuessLanguage(Step):                  # a guess with a confidence
+    key, label = "language", "Detect language"
+    options = (OptionSpec("min_chars", "Minimum text length", "int", 200, 50, 5000),)
+    def run(self, ctx):
+        lang, conf = detect(ctx.book, ctx.step_options["min_chars"])
+        return StepResult.suggestion(lang, conf, "based on the first pages")
+    def apply_suggestion(self, ctx, result):
+        ctx.book.language = result.value
+        return f"language = {result.value}"
+
+CATALOGUE = [FixTitle(), GuessLanguage()]   # default order; default_enabled per step
+recipe = Recipe.from_json(settings.value("redact/recipe", ""))   # "" -> defaults
+# Operations menu: redact_menu_action(self.on_redact)  ->  MenuAction (Ctrl+Shift+E)
+def on_redact(self):
+    run_redact(self, self.selected_books(), recipe, CATALOGUE,
+               make_context=lambda book: BookCtx(book), describe=lambda b: b.filename)
+def on_edit_recipe(self):
+    dlg = RecipeEditorDialog(CATALOGUE, recipe, self)
+    if dlg.exec():
+        settings.setValue("redact/recipe", dlg.recipe().to_json())
+```
+
+A step producing a corrected file writes it beside the original and calls `commit_in_place(path, temp_path, verify=...)`; it raises `CommitError` (original intact) on failure. The context may define `close()`; the engine calls it after each file.
 
 ## Adoption (as of 2026-09-23)
 

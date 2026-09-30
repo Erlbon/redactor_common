@@ -8,7 +8,7 @@ Shared interface/UX package for the Redactor apps (epub, mp3, video, cbz). Conta
 - Then, in each consuming app that needs it: bump the `requirements.txt` pin, run its tests, bump its own `APP_VERSION`, add a `CHANGELOG.md` entry, commit.
 
 ## Layout
-`core/` (e.g. `tool_locator.py`, `folder_refresh`, `version.py`), `gui/` (e.g. `progress.py` with `run_with_progress()`, `sortable_table`, `menu_builder`, `LookupDialogBase`), `tests/`, `.claude/skills/redactor-conventions/`.
+`core/` (e.g. `pipeline.py` (the Redact engine + `commit_in_place`), `tool_locator.py`, `folder_refresh`, `version.py`), `gui/` (e.g. `redact_dialog.py`, `progress.py` with `run_with_progress()`, `sortable_table`, `menu_builder`, `LookupDialogBase`), `tests/`, `.claude/skills/redactor-conventions/`.
 
 The project skill in `.claude/skills/redactor-conventions/SKILL.md` holds the full family conventions; the summary below is the same content.
 ## Family conventions (apply to every Redactor repo)
