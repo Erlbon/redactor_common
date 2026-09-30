@@ -46,12 +46,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterable, Sequence
 
+from redactor_common.core.os_utils import LOCK_HINT, is_lock_error, rename_with_retry, retry_on_lock
 from redactor_common.core.trash import move_to_trash
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.9
@@ -935,23 +935,25 @@ def _backup_path(original: str) -> str:
 
 
 def _rename_no_clobber(src: str, dst: str) -> None:
-    """Rename src -> dst, raising FileExistsError instead of overwriting
-    (os.rename already refuses on Windows; POSIX would replace silently,
-    so use a hard link, which never does, and fall back to check+rename
-    on filesystems without links)."""
-    if sys.platform == "win32":
-        os.rename(src, dst)
-        return
-    try:
-        os.link(src, dst)
-    except FileExistsError:
-        raise
-    except OSError:
-        if os.path.lexists(dst):
-            raise FileExistsError(dst)
-        os.rename(src, dst)
-        return
-    os.unlink(src)
+    """Rename src -> dst, raising FileExistsError instead of overwriting,
+    and riding out a brief Windows file lock (os_utils.rename_with_retry)."""
+    rename_with_retry(src, dst)
+
+
+def _rename(src: str, dst: str) -> None:
+    """os.rename, retried through a brief Windows file lock."""
+    retry_on_lock(os.rename, src, dst)
+
+
+def _replace(src: str, dst: str) -> None:
+    """os.replace, retried through a brief Windows file lock."""
+    retry_on_lock(os.replace, src, dst)
+
+
+def _lock_note(exc: BaseException) -> str:
+    """Suffix for a CommitError message when the final error was a lock
+    (retries were exhausted): tells the user what to look for."""
+    return f"; {LOCK_HINT}" if is_lock_error(exc) else ""
 
 
 def _same_path(a: str, b: str) -> bool:
@@ -1002,6 +1004,11 @@ def commit_in_place(
     in the same directory/volume as the original so step 3 is an
     atomic rename.
 
+    Every rename/replace step is retried for ~1.6 s on a lock error
+    (PermissionError, winerror 5/32/33: antivirus, indexer, sync client)
+    before it counts as failed; a CommitError caused by a lock that never
+    cleared says so in its message.
+
     `new_path` (keyword): the new file belongs at a DIFFERENT path (an
     extension/name change: CBR -> CBZ, MKV -> MP4). Then the order is:
     refuse if `new_path` already exists (or its folder doesn't); verify;
@@ -1045,23 +1052,23 @@ def commit_in_place(
 
     backup = _backup_path(original_path)
     try:
-        os.rename(original_path, backup)
+        _rename(original_path, backup)
     except OSError as exc:
-        raise CommitError(f"couldn't set the original aside ({exc}); nothing was changed") from exc
+        raise CommitError(f"couldn't set the original aside ({exc}){_lock_note(exc)}; nothing was changed") from exc
 
     try:
-        os.replace(temp, original_path)
+        _replace(temp, original_path)
         if not os.path.isfile(original_path) or os.path.getsize(original_path) == 0:
             raise OSError("the replaced file is missing or empty")
     except Exception as exc:
         try:
-            os.replace(backup, original_path)
+            _replace(backup, original_path)
         except OSError as rb_exc:
             raise CommitError(
                 f"replace failed ({exc}) AND the rollback failed ({rb_exc}); "
                 f"your original is safe at: {backup}"
             ) from exc
-        raise CommitError(f"couldn't put the new file in place ({exc}); original restored") from exc
+        raise CommitError(f"couldn't put the new file in place ({exc}){_lock_note(exc)}; original restored") from exc
 
     return _trash_backup(original_path, backup, trash, None)
 
@@ -1095,24 +1102,24 @@ def _commit_to_new_path(original_path: str, temp: str, target: str, trash: Calla
         # put it back so the caller's cleanup finds it.
         if not os.path.lexists(temp) and os.path.lexists(target):
             try:
-                os.rename(target, temp)
+                _rename(target, temp)
             except OSError:
                 raise CommitError(
                     f"couldn't put the new file in place ({exc}); original untouched, "
                     f"the new file is at: {target}"
                 ) from exc
-        raise CommitError(f"couldn't put the new file in place ({exc}); original untouched") from exc
+        raise CommitError(f"couldn't put the new file in place ({exc}){_lock_note(exc)}; original untouched") from exc
 
     backup = _backup_path(original_path)
     try:
-        os.rename(original_path, backup)
+        _rename(original_path, backup)
     except OSError as exc:
         try:
-            os.rename(target, temp)
+            _rename(target, temp)
         except OSError as rb_exc:
             raise CommitError(
-                f"couldn't set the original aside ({exc}) AND couldn't undo the new file ({rb_exc}); "
+                f"couldn't set the original aside ({exc}){_lock_note(exc)} AND couldn't undo the new file ({rb_exc}); "
                 f"your original is untouched, the new file is at: {target}"
             ) from exc
-        raise CommitError(f"couldn't set the original aside ({exc}); nothing was changed") from exc
+        raise CommitError(f"couldn't set the original aside ({exc}){_lock_note(exc)}; nothing was changed") from exc
     return _trash_backup(original_path, backup, trash, target)

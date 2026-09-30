@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#14`.
+Currently: `2026-09-30#15`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -300,6 +300,8 @@ diff and on apply, even if an adapter offers them (`looks_secret()`).
 ## Redact pipeline
 
 `core/pipeline.py` (engine, Qt-free) + `gui/redact_dialog.py` (dialogs) are the shared "Redact" button: run an ordered **recipe** of steps on the selected files with no operator input. Output is in place (`commit_in_place()` keeps the original until the new file is verified, then sends it to the Recycle Bin; a failed trash keeps a `<stem>.redact-orig<ext>` backup and reports it). Deterministic steps return `StepResult.applied(...)`; a *guess* returns `StepResult.suggestion(value, confidence, reason)` and is applied via the step's `apply_suggestion()` only at confidence >= the recipe threshold (default 0.9), otherwise it lands in the report's NEEDS REVIEW list. A step that raises is recorded as FAILED and later steps still run, unless the step is `required` (then that file is aborted and left untouched). Shortcut: `standard_shortcuts.REDACT` (`Ctrl+Shift+E`).
+
+**Lock retry.** Every rename/replace step of `commit_in_place()` (set the original aside, put the new file in place, the rollbacks, the `new_path` rename) and `RenameLog`'s write is retried for about 1.6 s on a lock error (any `PermissionError`, or on Windows winerror 5/32/33: antivirus, indexer, preview or sync client holding the just-written file) before it counts as failed. `FileExistsError` and `FileNotFoundError` are never retried, and the no-overwrite rule still holds. A `CommitError` caused by a lock that never cleared says "the file may be locked by another program (antivirus, sync client, preview)". The helpers are in `core/os_utils.py`: `retry_on_lock(func, *args, attempts=6, delay=0.15, sleep=None, **kw)`, `replace_with_retry(src, dst)`, `rename_with_retry(src, dst)` (no-clobber) and `is_lock_error(exc)`.
 
 ```python
 from redactor_common.core.pipeline import OptionSpec, Recipe, Step, StepResult, commit_in_place

@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from redactor_common.core.os_utils import rename_no_clobber
+from redactor_common.core.os_utils import rename_no_clobber, replace_with_retry
 
 MAX_BATCHES = 50
 
@@ -105,15 +105,8 @@ class RenameLog:
         try:
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False, indent=1)
-            for attempt in range(5):
-                try:
-                    os.replace(tmp, self.path)
-                    break
-                except PermissionError:
-                    # Windows: a virus scanner or indexer can briefly hold the file
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05)
+            # Windows: a virus scanner or indexer can briefly hold the file
+            replace_with_retry(tmp, self.path, attempts=5, delay=0.05)
         except OSError:
             # best effort, like the apps' other settings: the rename itself already happened
             try:
