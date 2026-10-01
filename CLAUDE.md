@@ -29,3 +29,6 @@ Full text of these rules: `.claude/skills/redactor-conventions/SKILL.md` in reda
 ## Machine-local, not in git
 The release scripts (`release.ps1`, `release-<project>.ps1`, `release-all.ps1`) and a hand-placed `upx.exe` lived in a machine-local `_shared-tools` folder that is deliberately not in git. They are not in this repo and must be recreated or copied over by hand.
 
+
+## Line endings
+Text files are stored with LF in git (`.gitattributes`: `* text=auto eol=lf`); only `*.bat`/`*.cmd`/`*.ps1` are checked out as CRLF. Do not hand-convert line endings.
