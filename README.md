@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-01#04`.
+Currently: `2026-10-01#05`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -147,6 +147,7 @@ History: path patterns share the pattern history with filename patterns; tell th
 | `tool_locator.py` | External CLI tool lookup: override → bundled `tools/` dir → PATH → well-known install folders (`install_dirs`, `windows_program_dirs()`), for installers that don't add themselves to PATH (MKVToolNix, Calibre, Sigil). `which` injectable | mp3 (tiers 1-3); tier 4 from epub's Calibre/Sigil lookup, 2026-09-23 |
 | `auto_number.py` | `generate_auto_number()` / `apply_auto_number_to_text_field()` — sequential-number generation for Auto-Numbering | video, already generic |
 | `series_numbering.py` | `generate_series_numbers()` — decimal-capable (`Decimal`, not `int`) sequential-value generation, for a "start here, +step per row" quick numbering of a single field (a novella slotted in at "3.5", a comic special issue) | epub, already generic |
+| `duplicates.py` | `DuplicateGroup`/`DuplicateMember`, tiers, `sort_groups()`, `DismissStore` + `JsonDismissStore`/`InMemoryDismissStore` for the Find Duplicates review dialog; see "Find Duplicates review dialog" | video, generalized 2026-10-01 |
 | `os_utils.py` | `reveal_in_file_manager()` — cross-platform "show this file in Explorer/Finder" | epub, already generic |
 | `lookup_client.py` | `fetch_json()`/`fetch_bytes()` -- injectable-`fetch` HTTP (a URL or a `urllib` Request from `build_request()`: query params, API-key/bearer headers, JSON POST), HTTPError/URLError/timeout/decode-error → friendly-message translation, per-code `status_messages`, `make_default_fetch()` for a fixed-User-Agent fetch | cbzredactor; request building + status messages added 2026-09-23 for video's TMDB/TheTVDB/OpenSubtitles and epub's Google Books/Open Library clients |
 | `undo.py` | `UndoManager` — bounded in-memory undo/redo stack (bulk edits, search/replace, case conversion, lookup-apply, ...), generic via caller-supplied `snapshot_fn`/`restore_fn`. Redo (2026-09-13) works by having `undo()`/`redo()` snapshot the item's current state onto the opposite stack before overwriting it, via the same `snapshot_fn` passed to `push()` — pass it to `undo()`/`redo()` too to get redo; omit it for the old undo-only behavior | epub, generalized off its original version (which snapshotted `EpubBook`/`EpubMetadata` fields directly) once cbzredactor needed the same "last N in-memory edits" undo behavior |
@@ -203,6 +204,7 @@ past exactly that on 2026-09-23.
 | `sortable_table.py` | `NumericTableWidgetItem` (compares numerically when it can — an optional explicit `sort_value` covers a suffixed display like "128.5 LUFS"/"44100 Hz" whose text alone isn't a bare number — falling back to normal text comparison otherwise) + `suspend_sorting(table)` (a context manager disabling `setSortingEnabled()` for a bulk `setItem()` populate loop, restoring whatever state was in effect before — REQUIRED around one, since Qt re-sorts as items land and can relocate an earlier row's items before a later row is even written) | epub, generalized off nine hand-written copies of the same `was_sorting = table.isSortingEnabled(); ...` block at each of its own bulk-repopulate call sites. Only safe to pair with `Qt.UserRole`-based row→item mapping, NOT list-index-based mapping — see cbzredactor's own deliberate non-native sort implementation, which exists specifically because native sort doesn't fit its architecture |
 | `manage_list_dialog.py` | `ManageListDialog` — Add/Remove screen over a hideable-defaults-plus-custom-entries list (Add/Remove Genres, Add/Remove Languages) | epub, already generic (promoted once cbzredactor needed the same pattern) |
 | `lookup_dialog.py` | `LookupDialogBase` + `LookupResult` — table (File/Found/Apply) on the left, a detail panel on the right with the selected row's existing/"Current" cover shown side by side with the source's "Found" one (`get_local_cover`, optional -- so a mismatch is obvious at a glance instead of only surfacing after Apply), an editable per-row query-correction form (`query_fields` + "Search This Item", re-runs just that row with the corrected values), and an optional "Other Matches Found" picker (`LookupAlternative` + `resolve_alternative`, opt-in -- a subclass whose own search can return several plausible candidates for one row lists the runners-up there instead of requiring the query text be corrected and re-searched to get a different result) | cbzredactor, generalized off its Comic Vine/GCD lookup dialogs; epub's Google Books/Calibre/Open Library dialogs moved onto it 2026-09-23 (with `auto_search=False` for Calibre's locate-the-tool step, and `accepted_rows()` for applying found covers); the alternatives picker added 2026-09-19 for Comic Vine specifically, after its loose free-text search kept surfacing the wrong release as the top hit |
+| `duplicates_dialog.py` | `DuplicatesDialog` + `run_find_duplicates()` -- the shared Find Duplicates review dialog (groups with tier + reason, nothing pre-selected, Reveal/Open/Select in list/Not duplicates/Move to Recycle Bin behind a confirm); see "Find Duplicates review dialog" |
 | `quick_pick_dialog.py` | `QuickPickDialog` — a searchable, fixed-size list-picker popup (filter box + internally-scrolling list + OK/Cancel always visible) for a field's "+" quick-pick button; single- or multi-select, with an optional "Add Custom..." callback | cbzredactor, replacing a flat `QMenu` that overflowed the screen once enough custom genres piled up ("the genre list gets too long to see the apply button") -- epub's Genre/Language pickers moved onto it 2026-09-23 |
 | `theme.py` | `apply_theme(app)` — Fusion style + an explicit, WCAG-contrast-verified light/dark QPalette (auto-detected from the OS via `QStyleHints.colorScheme()`), so selection is actually visible in dark mode and looks identical across every app that calls it at startup | cbzredactor ("can't see what is selected in dark mode... want uniform behaviour across the apps") -- wired into epub/mp3/video's own `main.py` too, one line each, since "uniform" was the explicit ask |
 | `standard_shortcuts.py` | Canonical shortcut-string constants (`LOAD_FILES`, `SAVE_AS`, `RENAME_SINGLE_FILE`, `RENAME_EXPORT_BY_PATTERN`, `PARSE_FILENAME_TO_METADATA`, `REDO`, `HELP`, ...) for every action shape all four apps share, matching Qt's own `QKeySequence::StandardKey` Windows bindings where one exists (verified via `QKeySequence.keyBindings()`, not assumed) — a project imports these instead of repeating literal key strings. `RENAME_EXPORT_BY_PATTERN`/`PARSE_FILENAME_TO_METADATA` are a deliberate Ctrl+E/Ctrl+I export/import mnemonic pair (changed same-day from an initial Ctrl+Shift+R/Ctrl+E pairing once that pairing was explicitly requested). See its own module docstring for the full rationale and the 2026-09-13 audit that produced it (mp3 missing Ctrl+O entirely, Parse Filename squatting on F3, three different "Save As" keys, videoredactor's Exit bound to a StandardKey that doesn't work on Windows) | 2026-09-13, consumed by cbz/epub/mp3/video |
@@ -348,6 +350,64 @@ absent from the type definition but in the public JSON), `identifiers{}`, the wo
 shape, author `name`/`alternate_names`/`birth_date`, `first_publish_date` -- the readers don't care, but
 a recipe should use `.get()` everywhere. Other dumps (ratings, reading-log, covers_metadata, ...) have their
 own column layouts; pass their `columns`.
+
+## Find Duplicates review dialog
+
+`core/duplicates.py` (Qt-free) + `gui/duplicates_dialog.py`, promoted from videoredactor's Find
+Duplicates dialog (2026-10-01) so epub, mp3 and video share one review screen. **Policy: duplicates are
+not errors.** The same book can legitimately exist twice (two editions, a wrongly assigned ISBN) and one
+recording sits on several releases, so the dialog is a *review aid*: it groups candidates, shows **why**
+each group matched (a tier label in words -- Identical / Strong match / Possible match / Weak match -- plus
+a reason sentence), **selects nothing by default**, never changes a file unless the user picks an action,
+and lets the user mark a group "Not duplicates" so it stops appearing. The apps do the finding; they
+return `DuplicateGroup`s.
+
+- `DuplicateMember(item, path, fields, fingerprint)`: `item` is handed back to the app unchanged,
+  `fields` maps column key -> display text, `fingerprint` is a **content** identity (hash of the bytes /
+  audio / frame data) so a dismissal survives a rename or move. No fingerprint -> the path is used (a
+  rename then makes the group reappear, the safe direction).
+- `DuplicateGroup(key, tier, reason, members)`; tiers `TIER_IDENTICAL > TIER_STRONG > TIER_POSSIBLE >
+  TIER_WEAK` (`tier_label()`, `tier_strength()`); `sort_groups()` orders strongest tier, then larger group.
+- Dismissal: `DismissStore` (`is_dismissed`, `dismiss`, `undismiss_all`, `count`, plus an optional
+  `undismiss` that enables the per-group "Show This Group Again" button), keyed by `dismissal_key()` = hash
+  of the *sorted member fingerprints*. It covers exactly the set reviewed: when a third copy joins (or a
+  member leaves) the group is a different set and reappears. `JsonDismissStore(path, max_entries=5000)`
+  (lazy, tolerant load; atomic write via temp file + `replace_with_retry`; oldest dropped past the cap; a
+  failed write keeps the in-memory state and sets `last_error`) and `InMemoryDismissStore`. An app can
+  also implement the four methods over its own settings.
+- `DuplicatesDialog(groups, columns, parent, *, title, dismiss_store=None, on_select_in_list=None,
+  on_trashed=None, trash=move_to_trash, allow_trash=True, intro_text="")`: tree of groups (group row =
+  tier label + reason + file count, member rows = the `columns` values). Buttons: Reveal in Folder, Open
+  (also double-click/Enter), Select These in the List (only with `on_select_in_list`; closes the dialog),
+  Not Duplicates (Hide This Group) / Show This Group Again plus a "Show N hidden groups" checkbox (only
+  with a `dismiss_store`), Move Selected to Recycle Bin... (only when `allow_trash`). Trashing lists the
+  files in a confirm that defaults to No, refuses to remove every file of a group (one must stay),
+  isolates failures per file, and touches only the selected files. After `exec()`: `.to_select`, `.trashed`.
+- `run_find_duplicates(parent, items, find_fn, columns, *, ..., cancellable=True)` runs
+  `find_fn(items, progress, cancelled)` on a worker thread under a progress dialog (`progress(done,
+  total=None, label=None)` is thread-safe; `cancelled()` is True after Cancel), then opens the dialog.
+  Returns the dialog, or `None` if cancelled / nothing found (an info box says so) / `find_fn` raised.
+
+```python
+store = JsonDismissStore(str(app_data_dir / "dismissed_duplicates.json"))
+COLUMNS = [("name", "File"), ("folder", "Folder"), ("size", "Size")]
+
+def find_fn(books, progress, cancelled):
+    groups = []
+    for i, (isbn, same) in enumerate(group_by_isbn(books)):
+        if cancelled():
+            break
+        progress(i + 1, len(books), f"Comparing {same[0].path.name}")
+        groups.append(DuplicateGroup(
+            f"isbn:{isbn}", TIER_STRONG, f"same ISBN {isbn}",
+            [DuplicateMember(b, str(b.path), {"name": b.path.name, "folder": str(b.path.parent),
+                                              "size": format_size(b.size)}, content_hash(b.path))
+             for b in same]))
+    return groups
+
+run_find_duplicates(window, loaded_books, find_fn, COLUMNS, dismiss_store=store,
+                    on_select_in_list=window.reselect_books, on_trashed=window.remove_books)
+```
 
 ## Secrets
 
