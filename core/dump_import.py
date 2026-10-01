@@ -338,10 +338,26 @@ def iter_tsv_records(
     on_bad_line: Optional[BadLineFn] = None,
     stats: Optional[ReadStats] = None,
     max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+    header: Union[bool, str] = False,
+    null: Optional[str] = None,
 ) -> Iterator[Any]:
     """Yields one record per line of a delimiter-separated dump (Open
     Library's `type key revision last_modified {json}` files) as a dict
     {column: text}, or as a tuple of strings when `columns` is None.
+
+    `header`: False (default; every line is data), True (the first line
+    names the columns, as in IMDb's *.tsv.gz) or "auto" (the first line
+    is a header when at least half of `columns` appear in it). With a
+    header the fields are located BY NAME, so reordered columns work and
+    NEW extra columns are tolerated (ignored); but when `columns` is
+    given and any of them is missing from the header (a renamed or
+    dropped column) DumpImportError is raised before a single record --
+    a changed format fails loudly. With a header and columns=None the
+    records are dicts keyed by the header's names. The header line is
+    not counted in `stats`. A UTF-8 BOM before the header is ignored.
+    `null`: text that marks a missing value (IMDb: backslash + "N"); a
+    field equal to it becomes None (a field merely CONTAINING it is
+    unchanged). Default None: no mapping, as before.
 
     `stream`: a DumpStream from open_dump() (progress counts its bytes) or
     any binary/text file-like with readline(). `json_columns`: names (or,
@@ -373,30 +389,67 @@ def iter_tsv_records(
             json_positions.append(names.index(column))
         else:
             raise ValueError(f"json column {column!r} is not one of the columns")
+    if header not in (False, True, "auto"):
+        raise ValueError("header must be False, True or 'auto'")
+    null_bytes = null.encode("utf-8") if null is not None else None
     sep = delimiter.encode("utf-8")
     source = _LineSource(
         source=stream, kind="tab-separated dump", cancelled=cancelled, progress=progress,
         on_bad_line=on_bad_line, stats=stats, max_line_bytes=max_line_bytes,
     )
+    pending_header = bool(header)
+    positions: Optional[list[int]] = None   # header mode: where each output column sits in a line
+    out_names = names
     for number, raw in source.lines():
         if raw is None:
+            if pending_header:
+                raise DumpImportError(f"This doesn't look like the expected {source.kind}: the header line is far too long.")
             source.bad(number, f"line longer than {max_line_bytes} bytes", None)
             continue
+        if pending_header:
+            pending_header = False
+            first = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw
+            found = [p.decode("utf-8", "replace").strip() for p in first.split(sep)]
+            is_header = True
+            if header == "auto":
+                is_header = names is not None and 2 * len(set(names) & set(found)) >= len(names)
+                if not is_header:
+                    raw = first  # a BOM'd first data line: keep it clean
+            if is_header:
+                if names is not None:
+                    missing = [n for n in names if n not in found]
+                    if missing:
+                        raise DumpImportError(
+                            f"This doesn't look like the expected {source.kind}: its header has columns "
+                            f"{', '.join(found)[:300]} but {', '.join(missing)} "
+                            f"{'is' if len(missing) == 1 else 'are'} missing. The dump format may have changed."
+                        )
+                    positions = [found.index(n) for n in names]
+                else:
+                    positions = list(range(len(found)))
+                    out_names = found
+                wanted = min_columns if min_columns is not None else len(found)
+                split_max = len(found) - 1
+                continue
         parts = raw.split(sep, split_max)
         if len(parts) < wanted:
             source.bad(number, f"expected {wanted} columns, found {len(parts)}", raw, shape=True)
             continue
+        if positions is not None:
+            parts = [parts[i] for i in positions]
+        if null_bytes is not None:
+            parts = [None if p == null_bytes else p for p in parts]
         try:
             for position in json_positions:
-                if position < len(parts):
+                if position < len(parts) and parts[position] is not None:
                     text = parts[position]
                     parts[position] = _loads(text) if text.strip() else None
         except ValueError as exc:  # JSONDecodeError and bad UTF-8 are both ValueErrors
             source.bad(number, f"bad JSON ({exc})", raw)
             continue
-        values = [p if not isinstance(p, bytes) else p.decode("utf-8", "replace") for p in parts]
+        values = [p.decode("utf-8", "replace") if isinstance(p, bytes) else p for p in parts]
         source.good()
-        yield dict(zip(names, values)) if names is not None else tuple(values)
+        yield dict(zip(out_names, values)) if out_names is not None else tuple(values)
 
 
 def iter_jsonl_records(

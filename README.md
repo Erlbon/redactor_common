@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-01#02`.
+Currently: `2026-10-01#03`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -232,6 +232,16 @@ reported to `on_bad_line(lineno, reason, preview)` -- never aborts. A *systemati
 `DumpImportError` instead: most of the first 50 lines with the wrong column count, over 20% of the first
 1000 unreadable, or nothing readable at all -- so a changed dump format fails loudly, not as an empty
 database. `cancelled()` raises `ImportCancelled`, like `iter_xml_records`.
+
+**Header + null marker (IMDb-style TSV).** `iter_tsv_records(..., header=False|True|"auto", null=None)`
+(defaults unchanged). `header=True`: the first line names the columns (a UTF-8 BOM is ignored; the line
+isn't counted in `ReadStats`); fields are found BY NAME, so reordered columns work and new extra columns
+are ignored, but if any of `columns` is missing from the header (renamed/dropped) it raises
+`DumpImportError` before the first record. With `columns=None` it yields dicts keyed by the header names.
+`"auto"`: a header when at least half of `columns` appear in the first line (then validated strictly).
+`null="\\N"` (backslash + N, as IMDb writes it): a field equal to it becomes `None`; a field merely
+containing it is untouched. Example: `iter_tsv_records(dump, ["tconst", "titleType", "startYear"],
+header=True, null="\\N")` over `title.basics.tsv.gz`.
 
 **Tar archives + PostgreSQL COPY (MusicBrainz).**
 `iter_tar_members(path_or_stream, wanted=None, *, progress=None, cancelled=None)` streams a
