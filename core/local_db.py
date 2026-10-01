@@ -21,6 +21,11 @@ What's shared, learned on GCD's 6.7 GB dump (2026-09-28):
   "G.I. Joe - A Real American Hero" finds "G.I. Joe: A Real American
   Hero" and "Mangaverse - Ghostlocke" finds "Marvel Mangaverse:
   Ghostlocke".
+  That per-session build doesn't scale past a few hundred thousand
+  names (Open Library has tens of millions of editions): for big data
+  prebuild the index INSIDE the database file with
+  SqliteBuilder.create_fts_index() (core/dump_import.py) and query it
+  with fts_query() below -- no startup cost, ranked by bm25.
 - query_in() splits a long id list into chunks under SQLite's
   bound-variable limit (a common word can match thousands of names).
 - Index steering: dumps often ship without SQLite's index statistics
@@ -78,7 +83,9 @@ def year_gap(a, b) -> int:
 
 
 class NameIndex:
-    """In-memory full-text index over (id, name) pairs. match(text)
+    """In-memory full-text index over (id, name) pairs -- for up to a few
+    hundred thousand names; for millions of rows prebuild an FTS5 index in
+    the file instead (SqliteBuilder.create_fts_index + fts_query). match(text)
     returns the ids whose normalized name contains every word of
     normalize_words(text), in no particular order -- rank them yourself."""
 
@@ -167,6 +174,22 @@ class LocalDatabase:
             rows += self.query(sql.replace("{ids}", ",".join("?" * len(chunk))), [*before, *chunk, *after])
         return rows
 
+    def has_table(self, name: str) -> bool:
+        """True when the file has a table, view or virtual table `name`."""
+        return bool(self.query(
+            "select 1 from sqlite_master where type in ('table', 'view') and name = ? collate nocase", (name,)
+        ))
+
+    def table_columns(self, name: str) -> list[str]:
+        """Column names of `name` in declaration order; [] when it doesn't
+        exist."""
+        with self.lock:
+            try:
+                rows = self._con.execute(f'pragma table_info("{name.replace(chr(34), chr(34) * 2)}")').fetchall()
+            except sqlite3.DatabaseError as exc:
+                raise self.error_cls(f"Database query failed: {exc}") from exc
+        return [row[1] for row in rows]
+
     def name_index(self, key: str, names_sql: str, normalize: Callable[[str], str] = normalize_words) -> NameIndex:
         """The session's NameIndex for `names_sql` (a query returning
         (id, name) rows), built on first use and cached under `key`."""
@@ -183,6 +206,59 @@ class LocalDatabase:
                 index.close()
             self._name_indexes.clear()
             self._con.close()
+
+
+_FTS_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def fts_match_string(text: str, prefix: bool = True, normalize: Callable[[str], str] = normalize_words) -> str:
+    """A safe FTS5 MATCH expression for user text: every word of
+    normalize(text) as a quoted token, AND-ed; the last one a prefix
+    ("har" finds "harry") when `prefix`. "" when the text has no words."""
+    words = normalize(text).split()
+    tokens = ['"' + word.replace('"', '""') + '"' for word in words]
+    if tokens and prefix:
+        tokens[-1] += "*"
+    return " ".join(tokens)
+
+
+def fts_query(
+    db: LocalDatabase,
+    table: str,
+    text: str,
+    limit: int = 50,
+    *,
+    prefix: bool = True,
+    key: Optional[str] = None,
+    from_table: Optional[str] = None,
+    columns: Optional[Iterable[str]] = None,
+    normalize: Callable[[str], str] = normalize_words,
+) -> list:
+    """Searches a prebuilt FTS5 table (SqliteBuilder.create_fts_index) for
+    rows containing every word of `text`, best bm25 match first, at most
+    `limit`. Returns rowids -- or, with `key`, that column's values: a
+    column of the FTS table itself (an external-content index reads it
+    through from its source table), or, with `from_table`, a column of
+    that table joined on rowid (e.g. the isbn or id column that wasn't
+    itself indexed).
+    `columns` restricts the match to some of the indexed columns. Words
+    are normalized and quoted, so punctuation or a stray quote in user
+    input can't break the FTS5 syntax. [] for text without words."""
+    match = fts_match_string(text, prefix, normalize)
+    if not match:
+        return []
+    for ident in (table, *(columns or ()), *([key] if key else []), *([from_table] if from_table else [])):
+        if not _FTS_IDENT.match(ident):
+            raise db.error_cls(f"Not a valid table/column name: {ident!r}")
+    if columns:
+        match = "{" + " ".join(columns) + "} : (" + match + ")"
+    if from_table and key:
+        sql = (f"select j.{key} from {table} join {from_table} j on j.rowid = {table}.rowid "
+               f"where {table} match ? order by {table}.rank limit ?")
+    else:
+        sql = f"select {key or 'rowid'} from {table} where {table} match ? order by rank limit ?"
+    rows = db.query(sql, (match, int(limit)))
+    return [row[0] for row in rows]
 
 
 _open: dict[tuple[object, str], LocalDatabase] = {}

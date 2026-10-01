@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-09-30#15`.
+Currently: `2026-10-01#01`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -211,6 +211,84 @@ past exactly that on 2026-09-23.
 | `image_decode.py` | `decode_scaled(bytes, size)` -- decode straight to a target size via `QImageReader.setScaledSize()`, never upscaling; safe on a worker thread | split out of `async_icon_cache.py`, 2026-09-23 |
 | `async_preview.py` | `AsyncPreviewLoader` -- ONE preview image (the selected file's cover/thumbnail) loaded + decoded off the GUI thread; debounced, only the latest request delivered | 2026-09-23: cbz decoded full-resolution comic pages on the GUI thread per selection; video ran ffmpeg there. 2026-09-29#04: deleting the owner window mid-load (quitting the app, or pytest's final gc after failing tests) deadlocked on the GIL -- pools are no longer Qt children; `shutdown()` added |
 | `visible_rows.py` | `VisibleRowsWatcher` -- reports the on-screen rows (+ buffer), debounced, on scroll/resize/sort/row changes: the lazy half of epub's lazy cover loading (~126s → ~2.6s for a 15k-book rebuild) | epub, 2026-09-23; now also cbz's table covers |
+
+## Building a database from a dump
+
+`core/dump_import.py` + `core/local_db.py` turn a big source dump into a compact, indexed SQLite file
+that an app queries offline. Layers: `open_dump()` (streams plain/.gz/.bz2/.xz/.zip with progress) ->
+a reader (`iter_xml_records`, `iter_tsv_records`, `iter_jsonl_records`) -> the app's *recipe* (which
+records to keep, how they map to tables) -> `SqliteBuilder`. **Never download a dump automatically;
+the user supplies the file** (they are many GB). Tests use small synthetic fixtures only.
+
+**Line readers.** `iter_tsv_records(stream, columns, *, delimiter="\t", json_columns=(), min_columns=None,
+progress=None, cancelled=None, on_bad_line=None, stats=None, max_line_bytes=64 MiB)` yields dicts
+(tuples when `columns` is None); `json_columns` (names, or positions when `columns` is None) are parsed
+with `json.loads` (empty -> None). `iter_jsonl_records(stream, *, ...same keywords)` yields one dict per
+line. Both take a `DumpStream` (progress = its byte counter) or any file-like with `readline()`; read one
+line at a time (flat memory), tolerate CRLF and blank lines, and cope with huge lines (a line over
+`max_line_bytes` is skipped and drained in chunks, not loaded). A bad line (broken JSON, too few columns,
+not an object, over-long) is skipped and counted in `ReadStats` (`lines/records/blank/bad/first_error`) and
+reported to `on_bad_line(lineno, reason, preview)` -- never aborts. A *systematic* mismatch raises
+`DumpImportError` instead: most of the first 50 lines with the wrong column count, over 20% of the first
+1000 unreadable, or nothing readable at all -- so a changed dump format fails loudly, not as an empty
+database. `cancelled()` raises `ImportCancelled`, like `iter_xml_records`.
+
+**Writing.** `SqliteBuilder(dest, tables, indexes=(), batch=5000, page_size=8192, cache_mb=200)`: bulk-load
+pragmas (journal off, synchronous off, exclusive lock, big cache), `add()`/`add_many()` in executemany
+batches, indexes + ANALYZE only after the load, `.partial` renamed at the end. `finish()` still returns the
+row counts; afterwards `builder.sizes` has the bytes per table/index and the file total (`"(file)"`).
+`create_fts_index(table, columns, name=None, tokenize="unicode61 remove_diacritics 2", *, contentless=False,
+prefix=(), optimize=False, progress=None, cancelled=None, chunk=50000)` builds a prebuilt FTS5 index after
+the last `add()` (external-content by default: the text isn't stored twice; `contentless=True` is smaller
+still, rowid only), filled by rowid range so a progress bar works on millions of rows; recorded in the
+info table as `fts.<name>`. The per-session in-memory `NameIndex` doesn't scale to Open Library; use this.
+
+**Querying.** `LocalDatabase.has_table(name)`, `.table_columns(name)`, and
+`fts_query(db, fts_table, text, limit=50, *, prefix=True, key=None, from_table=None, columns=None)`:
+builds a safe MATCH string (`fts_match_string`: words of `normalize_words(text)`, quoted, AND-ed, prefix
+on the last), returns rowids -- or `key` values (an FTS column, or with `from_table` a column of the source
+table joined on rowid) -- best bm25 first. Index normalized text if you need `&`/punctuation folded exactly
+like `normalize_words`.
+
+**ISBNs.** `core/isbn_norm.py`: `clean_isbn`, `is_valid_isbn10/13` (checksums, `X`), `isbn10_to_13`,
+`isbn13_to_10` (None for 979), `normalize_isbn(text, strict=True)` -> canonical 13 digits or None,
+`isbn_variants(text)` -> `[isbn13, isbn10]`.
+
+```python
+from redactor_common.core.dump_import import SqliteBuilder, open_dump, iter_tsv_records, ReadStats
+from redactor_common.core.isbn_norm import normalize_isbn
+
+TABLES = {"edition": ["id integer primary key", "key text", "title text", "isbn13 text"]}
+stats = ReadStats()
+with SqliteBuilder(dest, TABLES, ["create index ed_isbn on edition(isbn13)"]) as out, open_dump(path) as dump:
+    n = 0
+    for rec in iter_tsv_records(dump, ["type", "key", "rev", "modified", "json"], json_columns=["json"],
+                                progress=progress, cancelled=cancelled, stats=stats):
+        j = rec["json"]
+        for isbn in j.get("isbn_13", []) + j.get("isbn_10", []):
+            if normalized := normalize_isbn(isbn):
+                n += 1
+                out.add("edition", (n, rec["key"], j.get("title", ""), normalized))
+    out.create_fts_index("edition", ["title"], progress=progress)
+    out.finish({"source": "Open Library", "bad_lines": stats.bad})
+# later: fts_query(db, "edition_fts", "dune frank", 20, key="isbn13", from_table="edition")
+```
+
+**Open Library format** (checked 2026-10-01 against openlibrary.org/developers/dumps and the `/type/edition`
+definition in the openlibrary repo; nothing downloaded). Dumps: `ol_dump_editions_YYYY-MM-DD.txt.gz`,
+`ol_dump_works_...`, `ol_dump_authors_...` (the page links `..._latest.txt.gz` aliases), the all-types
+`ol_dump_latest.txt.gz` (editions+works+authors+redirects, ~12 GB), and the complete-history
+`ol_cdump_latest.txt.gz` (note `cdump`, not `ol_dump_`). Each line is 5 tab-separated columns: `type`
+(`/type/edition`), `key` (`/books/OL…M`), `revision`, `last_modified`, `JSON` (the page's own DuckDB
+example addresses it as `column4`, i.e. 0-based fifth). Edition fields (per the type definition):
+`title`, `subtitle`, `authors` (list of `{key}`), `works` (list of `{key}`), `publishers`, `publish_date`
+(free text), `isbn_10`, `isbn_13`, `number_of_pages` (int), `languages` (`{key: "/languages/eng"}`),
+`series`, `subjects`, `by_statement`, `ocaid`, `oclc_numbers`, `lccn`, `publish_places`, `source_records`,
+`description`/`notes` (a string or `{type, value}`). Not confirmed from a primary source: `covers` (ids;
+absent from the type definition but in the public JSON), `identifiers{}`, the works `authors[{author:{key}}]`
+shape, author `name`/`alternate_names`/`birth_date`, `first_publish_date` -- the readers don't care, but
+a recipe should use `.get()` everywhere. Other dumps (ratings, reading-log, covers_metadata, ...) have their
+own column layouts; pass their `columns`.
 
 ## Secrets
 

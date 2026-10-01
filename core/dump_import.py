@@ -16,7 +16,10 @@ records to keep and how they map to its tables):
 2. Readers turn the stream into records. iter_xml_records() yields one
    element per record (e.g. ComicRack's <Book>) and frees each one
    after use, so a 437 MB / 234k-book library streams through in ~8 s
-   with flat memory.
+   with flat memory. iter_tsv_records() / iter_jsonl_records() do the
+   same for line formats (Open Library's tab-separated + JSON files,
+   JSON-lines dumps): bad lines are skipped and counted, but a changed
+   format fails loudly.
 3. SqliteBuilder writes the tables: bulk-load settings, rows in
    batches, indexes only after the load, ANALYZE at the end (so SQLite
    picks good indexes -- the GCD dump ships without statistics, which
@@ -37,12 +40,14 @@ import bz2
 import datetime
 import gzip
 import io
+import json
 import lzma
 import os
 import sqlite3
 import zipfile
 from contextlib import contextmanager
-from typing import Callable, Iterable, Iterator, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from xml.etree import ElementTree as ET
 
 ProgressFn = Callable[[float], None]
@@ -170,6 +175,240 @@ def iter_xml_records(
         progress(1.0)
 
 
+@dataclass
+class ReadStats:
+    """What a line reader saw: pass one in (`stats=`) to read the totals
+    afterwards. `bad` lines were skipped (broken JSON, too few columns,
+    over-long); `first_error` describes the first of them."""
+
+    lines: int = 0      # non-blank lines read
+    records: int = 0    # records yielded
+    blank: int = 0
+    bad: int = 0
+    first_error: str = ""
+
+
+# Called for every skipped line: (line number, reason, the line's first 200 chars).
+BadLineFn = Callable[[int, str, str], None]
+
+DEFAULT_MAX_LINE_BYTES = 64 << 20  # Open Library's biggest records are a few MB
+SNIFF_COLUMN_LINES = 50            # a wrong column count on these -> format changed
+SNIFF_JSON_LINES = 1000            # too many unparsable records in these -> format changed
+SNIFF_BAD_FRACTION = 0.2
+SNIFF_MIN_SAMPLE = 10
+
+
+class _LineSource:
+    """Shared engine of the line readers: bounded readline (a runaway line
+    can't eat memory), CRLF/blank handling, cancel + progress, the
+    skip-and-count policy and the "format has changed" tripwire."""
+
+    def __init__(self, source, kind, *, cancelled, progress, on_bad_line, stats, max_line_bytes, check_every=500):
+        self.dump = source if isinstance(source, DumpStream) else None
+        self.stream = source.stream if self.dump else source
+        self.kind = kind
+        self.cancelled = cancelled
+        self.progress = progress
+        self.on_bad_line = on_bad_line
+        self.stats = stats if stats is not None else ReadStats()
+        self.max_line = max_line_bytes
+        self.check_every = check_every
+        self.number = 0
+        self.sniffed = 0        # non-blank lines inspected by the tripwire
+        self.sniff_bad = 0      # of those, how many were bad
+        self.shape_bad = 0      # ... of the first SNIFF_COLUMN_LINES, wrong column count
+
+    def lines(self) -> Iterator[tuple[int, Optional[bytes]]]:
+        """(line number, content without the line ending); content is None for
+        an over-long line (already skipped past)."""
+        readline = self.stream.readline
+        limit = self.max_line
+        while True:
+            raw = readline(limit + 1)
+            if not raw:
+                break
+            self.number += 1
+            if self.number % self.check_every == 0:
+                if self.cancelled and self.cancelled():
+                    raise ImportCancelled()
+                if self.progress and self.dump:
+                    self.progress(self.dump.fraction())
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8", "replace")
+            if len(raw) > limit and not raw.endswith(b"\n"):
+                while True:  # drain the rest of the line in chunks
+                    rest = readline(1 << 20)
+                    if not rest or (rest.endswith(b"\n") if isinstance(rest, bytes) else rest.endswith("\n")):
+                        break
+                yield self.number, None
+                continue
+            raw = raw.rstrip(b"\r\n")
+            if not raw.strip():
+                self.stats.blank += 1
+                continue
+            yield self.number, raw
+        if self.progress:
+            self.progress(1.0)
+        self._check_sample(final=True)
+
+    def bad(self, number: int, reason: str, raw: Optional[bytes], shape: bool = False) -> None:
+        stats = self.stats
+        stats.lines += 1
+        stats.bad += 1
+        self.sniffed += 1
+        self.sniff_bad += 1
+        if shape and self.sniffed <= SNIFF_COLUMN_LINES:
+            self.shape_bad += 1
+        if not stats.first_error:
+            stats.first_error = f"line {number}: {reason}"
+        if self.on_bad_line:
+            preview = "" if raw is None else raw[:200].decode("utf-8", "replace")
+            self.on_bad_line(number, reason, preview)
+        self._check_sample()
+
+    def good(self) -> None:
+        self.stats.lines += 1
+        self.stats.records += 1
+        self.sniffed += 1
+        if self.sniffed == SNIFF_COLUMN_LINES or self.sniffed == SNIFF_JSON_LINES:
+            self._check_sample()
+
+    def _check_sample(self, final: bool = False) -> None:
+        """Fails loudly when the start of the file doesn't look like the
+        format the recipe expects (a changed dump), instead of quietly
+        producing an empty database."""
+        if self.sniffed == 0 or self.sniffed > SNIFF_JSON_LINES:
+            return
+        size = min(self.sniffed, SNIFF_COLUMN_LINES)
+        if self.shape_bad * 2 > size and (final or self.sniffed >= SNIFF_COLUMN_LINES or self.shape_bad >= SNIFF_MIN_SAMPLE):
+            raise DumpImportError(
+                f"This doesn't look like the expected {self.kind}: the first lines don't have the right "
+                f"columns ({self.stats.first_error}). The dump format may have changed."
+            )
+        if final and self.sniff_bad == self.sniffed:  # nothing at all was readable
+            raise DumpImportError(
+                f"This doesn't look like the expected {self.kind}: none of its {self.sniffed} lines "
+                f"could be read ({self.stats.first_error}). The dump format may have changed."
+            )
+        enough = self.sniffed >= SNIFF_JSON_LINES or final or self.sniff_bad == self.sniffed
+        if enough and self.sniffed >= SNIFF_MIN_SAMPLE and self.sniff_bad > SNIFF_BAD_FRACTION * self.sniffed:
+            raise DumpImportError(
+                f"This doesn't look like the expected {self.kind}: {self.sniff_bad} of the first "
+                f"{self.sniffed} lines couldn't be read ({self.stats.first_error}). "
+                f"The dump format may have changed."
+            )
+
+
+def _loads(raw: bytes) -> Any:
+    return json.loads(raw)
+
+
+def iter_tsv_records(
+    stream,
+    columns: Optional[Sequence[str]],
+    *,
+    delimiter: str = "\t",
+    json_columns: Sequence[Union[str, int]] = (),
+    min_columns: Optional[int] = None,
+    progress: Optional[ProgressFn] = None,
+    cancelled: Optional[CancelledFn] = None,
+    on_bad_line: Optional[BadLineFn] = None,
+    stats: Optional[ReadStats] = None,
+    max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+) -> Iterator[Any]:
+    """Yields one record per line of a delimiter-separated dump (Open
+    Library's `type key revision last_modified {json}` files) as a dict
+    {column: text}, or as a tuple of strings when `columns` is None.
+
+    `stream`: a DumpStream from open_dump() (progress counts its bytes) or
+    any binary/text file-like with readline(). `json_columns`: names (or,
+    with columns=None, 0-based positions) whose text is parsed with
+    json.loads and replaced by the result ("" -> None). With `columns`
+    given, a line is split at most len(columns)-1 times, so a stray
+    delimiter lands in the last column; `min_columns` (default
+    len(columns)) is how many a line needs.
+
+    Tolerance: a line with too few columns, bad JSON, or longer than
+    `max_line_bytes` is skipped and counted (`stats`, `on_bad_line`) --
+    but a systematic mismatch (most of the first 50 lines have the wrong
+    column count, or over 20% of the first 1000 are unreadable) raises
+    DumpImportError, so a changed dump format fails loudly. Blank lines
+    and CRLF endings are fine. Cancelling raises ImportCancelled; progress
+    is reported every 500 lines. Memory stays flat: one line at a time."""
+    names = list(columns) if columns is not None else None
+    if names is not None:
+        wanted = min_columns if min_columns is not None else len(names)
+        split_max = len(names) - 1
+    else:
+        wanted = min_columns or 1
+        split_max = -1
+    json_positions: list[int] = []
+    for column in json_columns:
+        if isinstance(column, int):
+            json_positions.append(column)
+        elif names is not None and column in names:
+            json_positions.append(names.index(column))
+        else:
+            raise ValueError(f"json column {column!r} is not one of the columns")
+    sep = delimiter.encode("utf-8")
+    source = _LineSource(
+        source=stream, kind="tab-separated dump", cancelled=cancelled, progress=progress,
+        on_bad_line=on_bad_line, stats=stats, max_line_bytes=max_line_bytes,
+    )
+    for number, raw in source.lines():
+        if raw is None:
+            source.bad(number, f"line longer than {max_line_bytes} bytes", None)
+            continue
+        parts = raw.split(sep, split_max)
+        if len(parts) < wanted:
+            source.bad(number, f"expected {wanted} columns, found {len(parts)}", raw, shape=True)
+            continue
+        try:
+            for position in json_positions:
+                if position < len(parts):
+                    text = parts[position]
+                    parts[position] = _loads(text) if text.strip() else None
+        except ValueError as exc:  # JSONDecodeError and bad UTF-8 are both ValueErrors
+            source.bad(number, f"bad JSON ({exc})", raw)
+            continue
+        values = [p if not isinstance(p, bytes) else p.decode("utf-8", "replace") for p in parts]
+        source.good()
+        yield dict(zip(names, values)) if names is not None else tuple(values)
+
+
+def iter_jsonl_records(
+    stream,
+    *,
+    progress: Optional[ProgressFn] = None,
+    cancelled: Optional[CancelledFn] = None,
+    on_bad_line: Optional[BadLineFn] = None,
+    stats: Optional[ReadStats] = None,
+    max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+) -> Iterator[dict]:
+    """Yields the JSON object on each line of a JSON-lines dump (MusicBrainz's
+    JSON dumps, ...). Same tolerance, tripwire, cancel/progress and memory
+    behaviour as iter_tsv_records(); a line that isn't a JSON object counts
+    as bad."""
+    source = _LineSource(
+        source=stream, kind="JSON-lines dump", cancelled=cancelled, progress=progress,
+        on_bad_line=on_bad_line, stats=stats, max_line_bytes=max_line_bytes,
+    )
+    for number, raw in source.lines():
+        if raw is None:
+            source.bad(number, f"line longer than {max_line_bytes} bytes", None)
+            continue
+        try:
+            record = _loads(raw)
+        except ValueError as exc:
+            source.bad(number, f"bad JSON ({exc})", raw)
+            continue
+        if not isinstance(record, dict):
+            source.bad(number, "not a JSON object", raw)
+            continue
+        source.good()
+        yield record
+
+
 def split_list(text: Optional[str], separator: str = ",") -> list[str]:
     """"a, b,, c " -> ["a", "b", "c"], order kept, duplicates dropped."""
     return list(dict.fromkeys(p.strip() for p in (text or "").split(separator) if p.strip()))
@@ -183,14 +422,25 @@ class SqliteBuilder:
     add() takes each row as a tuple in that column order, and a row of the
     wrong length fails loudly (a recipe out of step with its schema).
     `indexes`: CREATE INDEX statements, run after the load.
+    `page_size` / `cache_mb`: bulk-load tuning (8 KiB pages suit big
+    tables; the page cache is dropped when the build ends).
+
+    For millions of rows, call create_fts_index() after the last add():
+    the full-text index is then prebuilt inside the file instead of being
+    rebuilt in memory every session (see core/local_db.fts_query).
 
         with SqliteBuilder(dest, tables, indexes) as out:
             out.add("series", (1, "Batman"))
             out.finish({"source": "ComicRack"})
     """
 
-    def __init__(self, dest: str, tables: dict[str, list[str]], indexes: Iterable[str] = (), batch: int = 5000):
+    def __init__(self, dest: str, tables: dict[str, list[str]], indexes: Iterable[str] = (), batch: int = 5000,
+                 page_size: int = 8192, cache_mb: int = 200):
         self.dest = dest
+        self._page_size = page_size
+        self._cache_mb = cache_mb
+        self._fts: dict[str, str] = {}
+        self.sizes: dict[str, int] = {}  # filled by finish(): "(file)" and per table/index, in bytes
         self.partial = dest + ".partial"
         self._tables = tables
         self._widths = {name: len(columns) for name, columns in tables.items()}
@@ -209,7 +459,11 @@ class SqliteBuilder:
         self._con = sqlite3.connect(self.partial)
         # Bulk-load settings: a crash mid-build just means rebuilding,
         # and the file isn't under its real name until finish().
-        for pragma in ("journal_mode = OFF", "synchronous = OFF", "locking_mode = EXCLUSIVE", "cache_size = -200000"):
+        # (page_size must come before the first table is created.)
+        for pragma in (
+            f"page_size = {self._page_size}", "journal_mode = OFF", "synchronous = OFF",
+            "locking_mode = EXCLUSIVE", f"cache_size = -{self._cache_mb * 1024}",
+        ):
             self._con.execute(f"pragma {pragma}")
         for name, columns in self._tables.items():
             self._con.execute(f"create table {name} ({', '.join(columns)})")
@@ -223,6 +477,78 @@ class SqliteBuilder:
         if len(pending) >= self._batch:
             self._flush(table)
 
+    def add_many(self, table: str, rows: Iterable[tuple]) -> None:
+        for row in rows:
+            self.add(table, row)
+
+    def create_fts_index(
+        self,
+        table: str,
+        columns: Sequence[str],
+        name: Optional[str] = None,
+        tokenize: str = "unicode61 remove_diacritics 2",
+        *,
+        contentless: bool = False,
+        prefix: Sequence[int] = (),
+        optimize: bool = False,
+        progress: Optional[ProgressFn] = None,
+        cancelled: Optional[CancelledFn] = None,
+        chunk: int = 50000,
+    ) -> str:
+        """Builds an FTS5 index over `columns` of `table` (a rowid table) and
+        returns its name (default "<table>_fts"). Call after the last add()
+        -- pending rows are flushed first -- so the index is filled in one
+        pass instead of being maintained row by row.
+
+        By default it is an EXTERNAL-CONTENT index: the text stays in `table`
+        only (no second copy), the index maps words -> rowids, and the FTS
+        table's columns can still be selected (they read through to `table`).
+        `contentless=True` stores nothing but the index: smaller still, but
+        only rowid and bm25 rank can be read back. `prefix`: e.g. (2, 3)
+        also builds prefix indexes for fast "har*" queries.
+
+        The rows go in by rowid range so `progress(fraction)` and `cancelled()`
+        work on millions of rows. To index normalized text (e.g. punctuation
+        folded like core/local_db.normalize_words), store the normalized
+        text in its own column and index that."""
+        if self._con is None:
+            raise DumpImportError("create_fts_index() must be called inside the 'with' block")
+        if table not in self._tables:
+            raise DumpImportError(f"create_fts_index: unknown table {table!r}")
+        cols = list(columns)
+        if not cols:
+            raise DumpImportError("create_fts_index: no columns")
+        fts = name or f"{table}_fts"
+        self._flush(table)
+        options = ["content=''" if contentless else f"content='{table}'", "content_rowid='rowid'" if not contentless else None]
+        options = [o for o in options if o]
+        options.append("tokenize='" + tokenize.replace("'", "''") + "'")
+        if prefix:
+            options.append("prefix='" + " ".join(str(int(p)) for p in prefix) + "'")
+        self._con.execute(f"create virtual table {fts} using fts5({', '.join(cols)}, {', '.join(options)})")
+        low, high = self._con.execute(f"select min(rowid), max(rowid) from {table}").fetchone()
+        if low is not None:
+            column_list = ", ".join(cols)
+            start = low
+            while start <= high:
+                if cancelled and cancelled():
+                    raise ImportCancelled()
+                end = start + chunk - 1
+                self._con.execute(
+                    f"insert into {fts}(rowid, {column_list}) select rowid, {column_list} "
+                    f"from {table} where rowid between ? and ?", (start, end),
+                )
+                start = end + 1
+                if progress:
+                    progress(min((start - low) / (high - low + 1), 1.0))
+        if optimize:
+            self._con.execute(f"insert into {fts}({fts}) values('optimize')")
+        self._con.commit()
+        self._fts[fts] = f"{table}({', '.join(cols)})"
+        if progress:
+            progress(1.0)
+        return fts
+
     def _flush(self, table: str) -> None:
         rows = self._pending[table]
         if rows:
@@ -234,7 +560,8 @@ class SqliteBuilder:
     def finish(self, info: Optional[dict] = None) -> dict[str, int]:
         """Flushes, indexes, analyzes, records `info` plus the build date
         and row counts in the info table, and moves the file into place.
-        Returns the row counts."""
+        Returns the row counts; `sizes` then holds the bytes per table/index
+        and the file total ("(file)")."""
         for table in self._tables:
             self._flush(table)
         for statement in self._indexes:
@@ -242,6 +569,7 @@ class SqliteBuilder:
         details = dict(info or {})
         details["built"] = datetime.datetime.now().isoformat(timespec="seconds")
         details.update({f"rows.{table}": str(count) for table, count in self.counts.items()})
+        details.update({f"fts.{fts}": what for fts, what in self._fts.items()})
         self._con.execute(f"create table {INFO_TABLE} (key text primary key, value text)")
         self._con.executemany(f"insert into {INFO_TABLE} values (?, ?)", [(k, str(v)) for k, v in details.items()])
         self._con.commit()
@@ -249,6 +577,7 @@ class SqliteBuilder:
         self._con.commit()
         self._con.close()
         self._con = None
+        self.sizes = self._measure()
         try:
             os.replace(self.partial, self.dest)
         except OSError as exc:
@@ -257,6 +586,21 @@ class SqliteBuilder:
             ) from exc
         self._finished = True
         return dict(self.counts)
+
+    def _measure(self) -> dict[str, int]:
+        """Bytes per table/index (via SQLite's dbstat, when compiled in) and
+        for the whole file, under "(file)"."""
+        sizes: dict[str, int] = {"(file)": os.path.getsize(self.partial)}
+        try:
+            con = sqlite3.connect(self.partial)
+            try:
+                for name, size in con.execute("select name, sum(pgsize) from dbstat group by name"):
+                    sizes[name] = size
+            finally:
+                con.close()
+        except sqlite3.DatabaseError:
+            pass  # no dbstat: the file total is still there
+        return sizes
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._finished:
