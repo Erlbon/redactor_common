@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-01#05`.
+Currently: `2026-10-01#06`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -493,6 +493,81 @@ import, prefer `redetect_tools` over copying another computer's paths.
 **Secrets are never included.** Keys named like api_key, password, token,
 secret, pin, bearer, credential are dropped on export, on parse, in the
 diff and on apply, even if an adapter offers them (`looks_secret()`).
+
+## Preferences dialog
+
+`core/preferences.py` (Qt-free) + `gui/preferences_dialog.py`: one Preferences
+dialog for the whole family, storage-agnostic. An app declares its settings as
+`PrefSpec`s grouped in `PrefSection`s, implements `PreferencesBackend` (`get(key)`
+and `set_many(dict)`) over its own storage, and opens `PreferencesDialog`. The
+dialog builds a page per section (checkbox / spin box / combo / text / path with
+Browse / editable language combo), shows the plain-language `help` under each
+control, greys a control while its `depends_on` checkbox is off, offers OK /
+Cancel / Apply and "Reset to Defaults" for the current page, and writes ONLY the
+changed keys in one `set_many` call. Cancel writes nothing. More than six pages
+switch from tabs to a list. `coerce(spec, raw)` turns whatever the storage returns
+(an ini gives strings) into the spec's type and falls back to the default when
+the value is missing, malformed or out of range.
+
+Standard sections (settings that are the same idea in several apps), each
+accepting subset flags and `overrides={key: {field: value}}`:
+
+- `filenames_section(ascii_filenames=, zero_pad=, auto_number=, width_min=, width_max=)`
+- `language_section(style="alpha2"|"alpha3"|"alpha3b", codes=, include_enabled=)`
+
+Shared keys (constants in `core/preferences.py`, use them in the backend and in
+the Export/Import adapter):
+
+| Constant | Key | Type | Default |
+| --- | --- | --- | --- |
+| `KEY_ASCII_FILENAMES` | `ascii_filenames` | bool | off |
+| `KEY_ZERO_PAD_NUMBERS` | `zero_pad_numbers` | bool | off |
+| `KEY_ZERO_PAD_WIDTH` | `zero_pad_width` | int 1-9 | 2 |
+| `KEY_AUTO_NUMBER_PADDING` | `auto_number_padding` | int 1-9 | 2 |
+| `KEY_BLANK_LANGUAGE_ENABLED` | `blank_language_enabled` | bool | on |
+| `KEY_DEFAULT_LANGUAGE` | `default_language` | language code | en (in the app's code style) |
+
+Settings only one app has (mp3's delete-backups, epub's text wrapping, video's
+transcode options, cbz's conversion/resize defaults, tool paths) are declared as
+extra `PrefSpec` sections or as `extra_pages=[(title, widget_factory)]`, which
+come after the shared sections and manage themselves.
+
+```python
+from redactor_common.core.preferences import (
+    KEY_ASCII_FILENAMES, KEY_ZERO_PAD_NUMBERS, KEY_ZERO_PAD_WIDTH, KEY_AUTO_NUMBER_PADDING,
+    CallbackBackend, filenames_section, language_section)
+from redactor_common.gui.preferences_dialog import PreferencesDialog, preferences_menu_action
+
+# --- QSettings-backed app (epub, cbz): map shared keys to the app's own ini keys
+_QKEYS = {KEY_ASCII_FILENAMES: "rename/ascii_only", KEY_ZERO_PAD_NUMBERS: "rename/zero_pad_enabled",
+          KEY_ZERO_PAD_WIDTH: "rename/zero_pad_width", KEY_AUTO_NUMBER_PADDING: "rename/auto_number_padding"}
+
+def _get(key):  return app_settings._settings().value(_QKEYS[key])      # raw string is fine
+def _set(values):
+    s = app_settings._settings()
+    for key, value in values.items():
+        s.setValue(_QKEYS[key], value)
+
+dlg = PreferencesDialog([filenames_section()], CallbackBackend(_get, _set), parent=self)
+if dlg.exec():
+    self.reload_settings()
+
+# --- ini/dataclass-backed app (mp3, video): one atomic save per set_many
+_FIELDS = {KEY_ASCII_FILENAMES: "ascii_filenames", KEY_ZERO_PAD_NUMBERS: "rename_zero_pad",
+           KEY_ZERO_PAD_WIDTH: "rename_zero_pad_width", KEY_AUTO_NUMBER_PADDING: "auto_number_padding"}
+
+def _get(key):  return getattr(self.settings, _FIELDS[key])
+def _set(values):
+    self.settings = dataclasses.replace(self.settings, **{_FIELDS[k]: v for k, v in values.items()})
+    save_settings(self.settings)
+
+# Tools menu entry (label, Ctrl+, and the Preferences role come from the family constants):
+preferences_menu_action(self.open_preferences)
+```
+
+A class with `get` / `set_many` methods works as well as `CallbackBackend`.
+`dlg.result_values()` is what was written; `dlg.applied` (signal) fires after each
+Apply with the keys just written.
 
 ## Redact pipeline
 
