@@ -68,8 +68,23 @@ def test_app_paths_frozen(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "meipass"), raising=False)
-    assert app_paths.base_dir("ignored") == exe.parent
+    if sys.platform == "win32":
+        assert app_paths.base_dir("ignored") == exe.parent
+    else:
+        # Linux/Mac: per-user config folder, not next to the binary.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert app_paths.base_dir("ignored") == tmp_path / "xdg" / "app"
     assert app_paths.asset_path("icon.ico", "ignored") == tmp_path / "meipass" / "icon.ico"
+
+
+def test_app_paths_frozen_non_windows_uses_user_config_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "bin" / "myapp"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert app_paths.base_dir("ignored") == tmp_path / "xdg" / "myapp"
+    assert (tmp_path / "xdg" / "myapp").is_dir()
 
 
 # -- crash_log ---------------------------------------------------------------------

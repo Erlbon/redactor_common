@@ -191,10 +191,13 @@ def test_folder_refresh():
         # case of the one genuinely-new result here -- it naturally
         # inherits whatever case the scanned folder string carried in,
         # which is fine; only the de-dup guarantee is being tested.)
-        upper_existing = [str(d / "a.mp3").upper()]
-        new4 = folder_refresh.find_new_files_in_loaded_folders(upper_existing, find_in_folder)
-        assert len(new4) == 1
-        assert os.path.normcase(new4[0]) == os.path.normcase(str(d / "b.mp3"))
+        # Only meaningful on a case-insensitive platform: on Linux an
+        # upper-cased path is a different (nonexistent) folder.
+        if os.path.normcase("A") == "a":
+            upper_existing = [str(d / "a.mp3").upper()]
+            new4 = folder_refresh.find_new_files_in_loaded_folders(upper_existing, find_in_folder)
+            assert len(new4) == 1
+            assert os.path.normcase(new4[0]) == os.path.normcase(str(d / "b.mp3"))
 
 if __name__ == "__main__":
     test_table_settings()

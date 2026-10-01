@@ -194,6 +194,7 @@ def test_new_path_survives_transient_lock(tmp_path, monkeypatch):
     orig, temp = _files(tmp_path)
     target = str(tmp_path / "book.cbz2")
     monkeypatch.setattr(os, "rename", _flaky(os.rename, 3))
+    monkeypatch.setattr(os, "link", _flaky(os.link, 3))  # POSIX no-clobber rename goes via os.link
     result = commit_in_place(orig, temp, trash=_trash, new_path=target)
     assert result.final_path == target
     assert open(target, "rb").read() == b"new content"
@@ -204,6 +205,7 @@ def test_new_path_lock_never_clears_leaves_original_and_temp(tmp_path, monkeypat
     orig, temp = _files(tmp_path)
     target = str(tmp_path / "book.cbz2")
     monkeypatch.setattr(os, "rename", _flaky(os.rename, None))
+    monkeypatch.setattr(os, "link", _flaky(os.link, None))  # POSIX no-clobber rename goes via os.link
     with pytest.raises(CommitError) as info:
         commit_in_place(orig, temp, trash=_trash, new_path=target)
     assert "may be locked by another program" in str(info.value)
