@@ -19,7 +19,11 @@ records to keep and how they map to its tables):
    with flat memory. iter_tsv_records() / iter_jsonl_records() do the
    same for line formats (Open Library's tab-separated + JSON files,
    JSON-lines dumps): bad lines are skipped and counted, but a changed
-   format fails loudly.
+   format fails loudly. iter_pgcopy_records() reads PostgreSQL COPY text
+   files (MusicBrainz's mbdump/<table>), and iter_tar_members() streams
+   the tar archives that hold them, member by member, without unpacking;
+   check_schema_sequence() guards against a dump with a changed schema
+   (column lists: core/musicbrainz_schema.py).
 3. SqliteBuilder writes the tables: bulk-load settings, rows in
    batches, indexes only after the load, ANALYZE at the end (so SQLite
    picks good indexes -- the GCD dump ships without statistics, which
@@ -43,9 +47,12 @@ import io
 import json
 import lzma
 import os
+import re
 import sqlite3
+import tarfile
 import zipfile
-from contextlib import contextmanager
+import zlib
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from xml.etree import ElementTree as ET
@@ -70,6 +77,10 @@ class _CountingReader(io.RawIOBase):
     def __init__(self, raw):
         self._raw = raw
         self.count = 0
+        # Optional no-argument callable run after every read: iter_tar_members
+        # uses it to cancel / report progress even while tarfile is skipping
+        # a multi-GB member nobody asked for.
+        self.hook: Optional[Callable[[], None]] = None
 
     def readable(self) -> bool:
         return True
@@ -79,6 +90,8 @@ class _CountingReader(io.RawIOBase):
         n = len(data)
         buffer[:n] = data
         self.count += n
+        if self.hook:
+            self.hook()
         return n
 
 
@@ -186,6 +199,7 @@ class ReadStats:
     blank: int = 0
     bad: int = 0
     first_error: str = ""
+    replaced: int = 0   # invalid UTF-8 bytes replaced with U+FFFD (iter_pgcopy_records)
 
 
 # Called for every skipped line: (line number, reason, the line's first 200 chars).
@@ -203,7 +217,9 @@ class _LineSource:
     can't eat memory), CRLF/blank handling, cancel + progress, the
     skip-and-count policy and the "format has changed" tripwire."""
 
-    def __init__(self, source, kind, *, cancelled, progress, on_bad_line, stats, max_line_bytes, check_every=500):
+    def __init__(self, source, kind, *, cancelled, progress, on_bad_line, stats, max_line_bytes, check_every=500,
+                 keep_blank=False):
+        self.keep_blank = keep_blank  # yield empty lines (a COPY row can be one empty column)
         self.dump = source if isinstance(source, DumpStream) else None
         self.stream = source.stream if self.dump else source
         self.kind = kind
@@ -224,7 +240,10 @@ class _LineSource:
         readline = self.stream.readline
         limit = self.max_line
         while True:
-            raw = readline(limit + 1)
+            try:
+                raw = readline(limit + 1)
+            except (OSError, EOFError, lzma.LZMAError, zlib.error, tarfile.TarError) as exc:
+                raise DumpImportError(f"The {self.kind} is damaged or incomplete: {exc}") from exc
             if not raw:
                 break
             self.number += 1
@@ -243,6 +262,10 @@ class _LineSource:
                 yield self.number, None
                 continue
             raw = raw.rstrip(b"\r\n")
+            if self.keep_blank:
+                # Only a truly empty line is "blank" to the caller; "\t" is a row.
+                yield self.number, raw
+                continue
             if not raw.strip():
                 self.stats.blank += 1
                 continue
@@ -407,6 +430,317 @@ def iter_jsonl_records(
             continue
         source.good()
         yield record
+
+
+# ---- PostgreSQL COPY text format -----------------------------------------
+
+# One backslash escape of COPY's text format, per the PostgreSQL docs
+# (COPY, "Text Format"): \NNN octal (1-3 digits), \xHH hex (1-2 digits),
+# \b \f \n \r \t \v, and any other character after a backslash stands for
+# itself (so "\\" is a backslash and "\N" inside a field is just "N").
+# A backslash that ends the field is kept as it is.
+_PG_ESCAPE = re.compile(rb"\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|(.)|\Z)", re.DOTALL)
+_PG_SIMPLE_ESCAPES = {
+    b"b": bytes((8,)),
+    b"f": bytes((12,)),
+    b"n": bytes((10,)),
+    b"r": bytes((13,)),
+    b"t": bytes((9,)),
+    b"v": bytes((11,)),
+}
+_BACKSLASH = bytes((92,))
+_TAB = bytes((9,))
+_PG_END_OF_DATA = bytes((92, 46))  # backslash + dot
+
+
+def _pg_escape_match(match: "re.Match[bytes]") -> bytes:
+    octal, hexa, char = match.groups()
+    if octal:
+        return bytes((int(octal, 8) & 0xFF,))
+    if hexa:
+        return bytes((int(hexa, 16),))
+    if char is None:  # a lone backslash at the very end
+        return _BACKSLASH
+    return _PG_SIMPLE_ESCAPES.get(char, char)
+
+
+def unescape_pgcopy(data: bytes) -> bytes:
+    """Resolves the backslash escapes of one PostgreSQL COPY text field."""
+    return _PG_ESCAPE.sub(_pg_escape_match, data)
+
+
+def iter_pgcopy_records(
+    stream,
+    columns: Optional[Sequence[str]],
+    *,
+    null: str = r"\N",
+    exact: bool = False,
+    progress: Optional[ProgressFn] = None,
+    cancelled: Optional[CancelledFn] = None,
+    on_bad_line: Optional[BadLineFn] = None,
+    stats: Optional[ReadStats] = None,
+    max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+) -> Iterator[Any]:
+    """Yields one record per line of a PostgreSQL `COPY ... TO` text file
+    (MusicBrainz's `mbdump/<table>` members): a dict {column: text-or-None},
+    or a tuple when `columns` is None. Tab-separated, no header, `\\N`
+    (`null`) is None, and the backslash escapes are resolved exactly as
+    PostgreSQL does -- see unescape_pgcopy(). An empty field stays "" (only
+    `null` means None). A line `\\.` ends the data (dumps don't have one,
+    COPY accepts it). Values are always text: convert numbers/dates yourself.
+
+    `columns` is the table's column order (core/musicbrainz_schema.TABLES).
+    A line with fewer columns is a bad line; one with more has its extra
+    trailing columns dropped, unless `exact=True`, which makes it bad too --
+    pass the full verified list with exact=True so a table that gained a
+    column fails loudly. Same tolerance as iter_tsv_records(): bad lines are
+    skipped and counted (`stats`, `on_bad_line`), a systematic mismatch (most
+    of the first 50 lines have the wrong column count) raises DumpImportError,
+    `cancelled()` raises ImportCancelled, memory stays flat. Text is decoded
+    as UTF-8 with errors replaced; `stats.replaced` counts the replacements.
+
+    `stream`: a DumpStream, or any binary file-like with readline() -- e.g.
+    a member from iter_tar_members()."""
+    names = list(columns) if columns is not None else None
+    ncols = len(names) if names is not None else 0
+    null_bytes = null.encode("utf-8")
+    null_in_fast_path = _BACKSLASH not in null_bytes
+    source = _LineSource(
+        source=stream, kind="PostgreSQL COPY dump", cancelled=cancelled, progress=progress,
+        on_bad_line=on_bad_line, stats=stats, max_line_bytes=max_line_bytes, keep_blank=True,
+    )
+    stats = source.stats
+
+    def decode(piece: bytes) -> str:
+        try:
+            return piece.decode("utf-8")
+        except UnicodeDecodeError:
+            text = piece.decode("utf-8", "replace")
+            stats.replaced += text.count("\ufffd") - piece.count(b"\xef\xbf\xbd")
+            return text
+
+    for number, raw in source.lines():
+        if raw is None:
+            source.bad(number, f"line longer than {max_line_bytes} bytes", None)
+            continue
+        if raw == _PG_END_OF_DATA:
+            break
+        if not raw and ncols != 1:
+            stats.blank += 1  # a row of one empty column is the only way a line is empty
+            continue
+        if _BACKSLASH not in raw:
+            values = decode(raw).split("\t")
+            if null_in_fast_path:
+                values = [None if v == null else v for v in values]
+        else:
+            values = []
+            for piece in raw.split(_TAB):
+                if piece == null_bytes:
+                    values.append(None)
+                elif _BACKSLASH in piece:
+                    values.append(decode(_PG_ESCAPE.sub(_pg_escape_match, piece)))
+                else:
+                    values.append(decode(piece))
+        if names is not None:
+            found = len(values)
+            if found < ncols or (exact and found > ncols):
+                source.bad(number, f"expected {'exactly ' if exact else ''}{ncols} columns, found {found}",
+                           raw, shape=True)
+                continue
+        source.good()
+        yield dict(zip(names, values)) if names is not None else tuple(values)
+    if progress:
+        progress(1.0)
+    source._check_sample(final=True)
+
+
+# ---- tar archives (MusicBrainz's mbdump.tar.bz2, the JSON dumps) -------------
+
+def _clean_member_name(name: str) -> str:
+    while name.startswith("./"):
+        name = name[2:]
+    return name
+
+
+def iter_tar_members(
+    path_or_stream,
+    wanted: Optional[Sequence[str]] = None,
+    *,
+    progress: Optional[ProgressFn] = None,
+    cancelled: Optional[CancelledFn] = None,
+) -> Iterator[tuple[str, Any]]:
+    """Streams a .tar / .tar.gz / .tar.bz2 / .tar.xz member by member,
+    without unpacking anything to disk or loading a member into memory:
+    yields (member name, binary file-like) for each regular file. The
+    compression is detected from the data, not the file name.
+
+    The stream is read forward only, so consume each member (or leave it
+    alone) BEFORE asking for the next one -- the file-like is dead after
+    that. `wanted`: only yield these members; an entry matches the full
+    name ("mbdump/artist") or just the last part ("artist"), the others are
+    skipped without being read into Python (the decompressor still passes
+    over their bytes), and the archive isn't read past the last wanted
+    member. `path_or_stream`: a path, a DumpStream, or a binary file-like.
+
+    `progress(fraction)` follows the compressed bytes read (path / DumpStream
+    only) and `cancelled()` is checked as they come in, so a cancel doesn't
+    wait for a multi-GB member to be skipped; ImportCancelled is raised.
+    A damaged archive raises DumpImportError. Use `contextlib.closing()` if
+    you may stop iterating early, so the file is closed promptly."""
+    if isinstance(wanted, str):
+        wanted = (wanted,)
+    remaining = set(wanted) if wanted is not None else None
+    counter: Optional[_CountingReader] = None
+    total = 1
+    owned = None
+    if isinstance(path_or_stream, DumpStream):
+        counter, total = path_or_stream._counter, path_or_stream._total
+        fileobj = path_or_stream.stream
+    elif isinstance(path_or_stream, (str, os.PathLike)):
+        path = os.fspath(path_or_stream)
+        if not os.path.isfile(path):
+            raise DumpImportError(f"File not found: {path or '(not set)'}")
+        try:
+            owned = open(path, "rb")
+        except OSError as exc:
+            raise DumpImportError(f"Couldn't read {os.path.basename(path)}: {exc}") from exc
+        counter = _CountingReader(owned)
+        total = max(os.path.getsize(path), 1)
+        fileobj = io.BufferedReader(counter, 1 << 20)
+    else:
+        fileobj = path_or_stream
+    previous_hook = counter.hook if counter else None
+    last_reported = [0.0]
+    if counter is not None:
+        def hook() -> None:
+            if cancelled and cancelled():
+                raise ImportCancelled()
+            if progress:
+                fraction = min(counter.count / total, 1.0)
+                if fraction - last_reported[0] >= 0.005:
+                    last_reported[0] = fraction
+                    progress(fraction)
+        counter.hook = hook
+    try:
+        try:
+            archive = tarfile.open(fileobj=fileobj, mode="r|*")
+        except (tarfile.TarError, OSError, EOFError, lzma.LZMAError, zlib.error) as exc:
+            raise DumpImportError(f"Not a readable tar archive: {exc}") from exc
+        try:
+            while True:
+                if cancelled and cancelled():
+                    raise ImportCancelled()
+                try:
+                    info = archive.next()
+                except (tarfile.TarError, OSError, EOFError, lzma.LZMAError, zlib.error) as exc:
+                    raise DumpImportError(f"The archive is damaged or incomplete: {exc}") from exc
+                if info is None:
+                    break
+                if not info.isfile():
+                    continue
+                name = _clean_member_name(info.name)
+                if remaining is not None:
+                    base = name.rsplit("/", 1)[-1]
+                    hit = name if name in remaining else base if base in remaining else None
+                    if hit is None:
+                        continue
+                    remaining.discard(hit)
+                member = archive.extractfile(info)
+                if member is None:
+                    continue
+                yield name, member
+                if remaining is not None and not remaining:
+                    break  # everything asked for has been seen
+            if progress:
+                progress(1.0)
+        finally:
+            archive.close()
+    finally:
+        if counter is not None:
+            counter.hook = previous_hook
+        if owned is not None:
+            owned.close()
+
+
+def read_small_member(path_or_stream, name: str, max_bytes: int = 1 << 20) -> Optional[bytes]:
+    """The content of one small archive member (TIMESTAMP, SCHEMA_SEQUENCE,
+    ...), or None if the archive has no such member. A member over
+    `max_bytes` raises DumpImportError rather than being loaded."""
+    with closing(iter_tar_members(path_or_stream, [name])) as members:
+        for _, member in members:
+            data = member.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise DumpImportError(f"{name} is larger than {max_bytes} bytes -- not the expected file.")
+            return data
+    return None
+
+
+@dataclass
+class ArchiveInfo:
+    """The bookkeeping files at the start of a MusicBrainz dump archive.
+    Any of them is None when the archive doesn't have it."""
+
+    timestamp: Optional[str] = None            # TIMESTAMP, e.g. "2026-09-30 00:22:22.1+00"
+    schema_sequence: Optional[int] = None      # SCHEMA_SEQUENCE
+    replication_sequence: Optional[int] = None  # REPLICATION_SEQUENCE (may be empty -> None)
+
+
+_INFO_FILES = ("TIMESTAMP", "SCHEMA_SEQUENCE", "REPLICATION_SEQUENCE")
+
+
+def read_archive_info(path_or_stream, *, cancelled: Optional[CancelledFn] = None) -> ArchiveInfo:
+    """Reads TIMESTAMP / SCHEMA_SEQUENCE / REPLICATION_SEQUENCE from the root
+    of a dump archive. MusicBrainz puts them first, so this stops as soon as
+    the tables (members inside a folder, like `mbdump/artist`) begin and only
+    decompresses the first few KB. `path_or_stream` as for iter_tar_members;
+    a stream can only be used once, so pass the path when you will read the
+    tables afterwards."""
+    info = ArchiveInfo()
+    found = 0
+    with closing(iter_tar_members(path_or_stream, cancelled=cancelled)) as members:
+        for name, member in members:
+            if "/" in name:
+                break
+            if name not in _INFO_FILES:
+                continue
+            text = member.read(4096).decode("utf-8", "replace").strip()
+            found += 1
+            if name == "TIMESTAMP":
+                info.timestamp = text or None
+            else:
+                try:
+                    number = int(text) if text else None
+                except ValueError:
+                    raise DumpImportError(f"{name} in the archive isn't a number: {text[:40]!r}") from None
+                if name == "SCHEMA_SEQUENCE":
+                    info.schema_sequence = number
+                else:
+                    info.replication_sequence = number
+            if found == len(_INFO_FILES):
+                break
+    return info
+
+
+def check_schema_sequence(archive_info: Union[ArchiveInfo, int, None], expected: Union[int, Iterable[int]]) -> int:
+    """Fails loudly when a dump's schema differs from the one a recipe was
+    written for (its table/column lists would then be wrong). `archive_info`:
+    read_archive_info()'s result (or the number itself); `expected`: the
+    schema sequence the recipe knows, or several it accepts. Returns the
+    dump's number; raises DumpImportError otherwise."""
+    accepted = sorted({expected} if isinstance(expected, int) else set(expected))
+    found = archive_info.schema_sequence if isinstance(archive_info, ArchiveInfo) else archive_info
+    wanted_text = " or ".join(str(n) for n in accepted)
+    if found is None:
+        raise DumpImportError(
+            f"This dump doesn't say which database schema it uses (no SCHEMA_SEQUENCE file), "
+            f"so it can't be checked against schema {wanted_text}. Use the official mbdump.tar.bz2."
+        )
+    if found not in accepted:
+        raise DumpImportError(
+            f"The dump was made with schema {found} but this recipe expects {wanted_text} -- "
+            f"update the app (its column lists are for schema {wanted_text}), or use a dump of that schema."
+        )
+    return found
 
 
 def split_list(text: Optional[str], separator: str = ",") -> list[str]:

@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-01#01`.
+Currently: `2026-10-01#02`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -232,6 +232,55 @@ reported to `on_bad_line(lineno, reason, preview)` -- never aborts. A *systemati
 `DumpImportError` instead: most of the first 50 lines with the wrong column count, over 20% of the first
 1000 unreadable, or nothing readable at all -- so a changed dump format fails loudly, not as an empty
 database. `cancelled()` raises `ImportCancelled`, like `iter_xml_records`.
+
+**Tar archives + PostgreSQL COPY (MusicBrainz).**
+`iter_tar_members(path_or_stream, wanted=None, *, progress=None, cancelled=None)` streams a
+`.tar/.tar.gz/.tar.bz2/.tar.xz` (compression sniffed from the data) and yields `(member_name, binary file-like)`
+one at a time -- nothing is extracted to disk or loaded into memory. Streaming is forward-only: consume a
+member (or ignore it) before asking for the next. `wanted` ("mbdump/artist" or just "artist") skips the others
+without reading them into Python and stops at the last wanted member; progress follows the compressed bytes
+and `cancelled` is polled while skipping, so cancelling doesn't wait out a multi-GB member. Wrap in
+`contextlib.closing()` if you may stop early. `read_small_member(src, name, max_bytes=1 MiB)` returns one small
+member's bytes (or None); `read_archive_info(src)` -> `ArchiveInfo(timestamp, schema_sequence,
+replication_sequence)` reads the root bookkeeping files and stops where the tables begin;
+`check_schema_sequence(info, expected)` (int or several accepted) raises `DumpImportError` "the dump was made
+with schema N but this recipe expects M -- update the app" (also when the archive has no SCHEMA_SEQUENCE).
+`iter_pgcopy_records(stream, columns, *, null=r"\N", exact=False, progress=None, cancelled=None,
+on_bad_line=None, stats=None, max_line_bytes=64 MiB)` reads a PostgreSQL `COPY ... TO` text file (tab-separated,
+no header): dicts (tuples when `columns` is None) of text values, `\N` -> None, empty string stays "", escapes
+`\t \n \r \\ \b \f \v \NNN \xHH` resolved exactly like PostgreSQL (any other `\c` -> `c`, a trailing lone
+backslash is kept; `unescape_pgcopy()` is the helper), `\.` ends the data. Lines without backslashes take a
+plain-split fast path. Fewer columns than `columns` = bad line; extra trailing ones are dropped, or bad with
+`exact=True` (pass the full verified list + `exact=True` so a changed table fails loudly). Same tolerance and
+"format changed" tripwire as `iter_tsv_records`; invalid UTF-8 is replaced and counted in
+`ReadStats.replaced`. Usage:
+
+```python
+from contextlib import closing
+from redactor_common.core import musicbrainz_schema as mb
+from redactor_common.core.dump_import import (check_schema_sequence, iter_pgcopy_records, iter_tar_members,
+                                              read_archive_info)
+
+check_schema_sequence(read_archive_info(path), mb.SCHEMA_SEQUENCE_EXPECTED)   # the user's mbdump.tar.bz2
+with closing(iter_tar_members(path, [mb.table_member("artist")], progress=progress, cancelled=cancelled)) as tar:
+    for name, member in tar:
+        for rec in iter_pgcopy_records(member, mb.table_columns("artist"), exact=True, cancelled=cancelled):
+            ...  # rec["gid"], rec["name"], rec["begin_date_year"] (text or None)
+```
+
+**MusicBrainz facts** (verified 2026-10-01 from musicbrainz.org/doc/MusicBrainz_Database/Download and the
+musicbrainz-server repo: `admin/sql/CreateTables.sql`, `admin/ExportAllTables`, `lib/MusicBrainz/Script/MBDump.pm`,
+`lib/MusicBrainz/Server/Constants.pm`, `lib/DBDefs.pm.sample`; recorded in `core/musicbrainz_schema.py`,
+which also holds the verified column list of ~30 tables). The core dump `fullexport/<date>/mbdump.tar.bz2`
+(about 7 GB) holds one file per table at `mbdump/<table>`, written by `COPY <table> TO stdout` (default text
+format, columns in CreateTables.sql order -- MusicBrainz's own importer relies on that). The archive's ROOT
+starts with `TIMESTAMP`, `COPYING`, `README`, `REPLICATION_SEQUENCE`, `SCHEMA_SEQUENCE` (single integer),
+then the tables. **Licence:** `mbdump.tar.bz2` is CC0 (public domain); `mbdump-derived.tar.bz2` (annotations,
+tags, `*_meta` ratings, `medium_index`...) and the edit/editor/stats/cover-art archives are CC BY-NC-SA
+3.0 -- recipes read the core archive only (`mb.DERIVED_TABLES` lists what to avoid). The JSON dumps
+(`json-dumps/<date>/release-group.tar.xz`, `artist.tar.xz`, ...) are xz tars of one JSON object per line
+(`iter_tar_members` + `iter_jsonl_records`). Guard against schema changes with `check_schema_sequence` (and
+`exact=True` column counts). Still the rule: **the user supplies the dump file; never download it.**
 
 **Writing.** `SqliteBuilder(dest, tables, indexes=(), batch=5000, page_size=8192, cache_mb=200)`: bulk-load
 pragmas (journal off, synchronous off, exclusive lock, big cache), `add()`/`add_many()` in executemany
