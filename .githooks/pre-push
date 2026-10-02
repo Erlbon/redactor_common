@@ -1,0 +1,7 @@
+#!/bin/sh
+# Test gate (2026-10-02), adapted from the Veritas repo: the whole test suite must pass before anything is pushed.
+# Uses pytest's own exit code (never piped into tail). Qt runs offscreen so no window is needed.
+# A one-off Windows file-lock failure has happened; rerun before assuming the code is broken.
+# Emergency bypass for a docs-only push: git push --no-verify (say why in the commit message).
+QT_QPA_PLATFORM=offscreen python -m pytest -q -p no:cacheprovider || { echo "pre-push: the tests fail; not pushing" >&2; exit 1; }
+exit 0

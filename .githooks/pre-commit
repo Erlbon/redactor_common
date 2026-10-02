@@ -1,0 +1,25 @@
+#!/bin/sh
+# Syntax gate (2026-10-02), copied from the Veritas repo and adapted for the Redactor family.
+# Added after a patch script turned a backslash-n into a real line break and a broken file was committed and released.
+# A staged Python file must parse, and no staged .py/.md/.txt file may contain a stray control character
+# (an escape lost in a heredoc once left a \x01 byte in a source file).
+# The test suite is NOT run here: gate commits on pytest's real exit code yourself, never on `pytest | tail`.
+fail=0
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+  case "$f" in
+    *.py)
+      python -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())" "$f" || { echo "pre-commit: syntax error in $f" >&2; fail=1; } ;;
+  esac
+  case "$f" in
+    *.py|*.md|*.txt)
+      python -c "
+import sys
+data = open(sys.argv[1], 'rb').read()
+bad = [i for i, b in enumerate(data) if b < 32 and b not in (9, 10, 12, 13)]
+if bad:
+    print('pre-commit: control character 0x%02x at byte %d in %s' % (data[bad[0]], bad[0], sys.argv[1]), file=sys.stderr)
+    sys.exit(1)
+" "$f" || fail=1 ;;
+  esac
+done
+exit $fail
