@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-01#06`.
+Currently: `2026-10-05#01`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -293,6 +293,21 @@ tags, `*_meta` ratings, `medium_index`...) and the edit/editor/stats/cover-art a
 (`json-dumps/<date>/release-group.tar.xz`, `artist.tar.xz`, ...) are xz tars of one JSON object per line
 (`iter_tar_members` + `iter_jsonl_records`). Guard against schema changes with `check_schema_sequence` (and
 `exact=True` column counts). Still the rule: **the user supplies the dump file; never download it.**
+
+**MySQL dumps** (`core/dump_mysql.py`; ISFDB's backup). `iter_mysql_dump(stream, tables, *, progress=None,
+cancelled=None, on_bad_line=None, stats=None, max_line_bytes=64 MiB)` streams a `mysqldump` .sql file (`open_dump`
+reads it from a .zip/.gz/.bz2/.xz too) and yields `(table, {column: text-or-None})` for the rows of the wanted
+`tables` (`{table: [columns wanted]}`); `iter_mysql_table(stream, table, columns)` is the single-table form.
+Column names come from the dump's own `CREATE TABLE` blocks, so a recipe names only the columns it wants (any
+order) and a table that gains columns keeps working; a wanted table or column that is missing, rows before their
+CREATE, or a row whose width differs from its table fail loudly or are bad lines (same tolerance and
+"format changed" tripwire as the other readers; `MysqlReadStats.rows` counts rows per table). Handles the default
+extended inserts (`INSERT INTO t VALUES (..),(..);` is one line), `--complete-insert`, `\' \" \\ \n \r \t \0 \b \Z`
+and doubled-quote escapes, NULL -> None, everything else is text (convert numbers and dates yourself); no
+`_binary`/`0x` decoding. Verified on the real ISFDB backup `backup-MySQL-55-2025-12-27.zip` (1.5 GB, 68 tables, UTF-8
+text although the tables declare latin1): the nine tables epubredactor reads (8.4 M rows) stream in about 70 s with
+no bad line. ISFDB's data is CC BY; its account tables (`mw_user`, `emails`, `web_api_users`) must never be named
+in a recipe.
 
 **Writing.** `SqliteBuilder(dest, tables, indexes=(), batch=5000, page_size=8192, cache_mb=200)`: bulk-load
 pragmas (journal off, synchronous off, exclusive lock, big cache), `add()`/`add_many()` in executemany
