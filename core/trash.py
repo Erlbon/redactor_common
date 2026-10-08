@@ -14,12 +14,29 @@ kept") instead of an ImportError at startup.
 
 from __future__ import annotations
 
+import os
+
 
 class TrashError(Exception):
     pass
 
 
+def shell_path(path: str) -> str:
+    """The plain form of a path the Windows shell accepts: no extended-length
+    prefix and one kind of slash. send2trash fails a path like
+    \\\\?\\D:/Download\\x.cbz with "[Errno 3] path not found" although the file
+    exists. Harmless elsewhere (normpath only)."""
+    path = str(path)
+    ext = chr(92) * 2 + "?" + chr(92)
+    if path.startswith(ext):
+        rest = path[len(ext):]
+        unc = "UNC" + chr(92)
+        path = chr(92) * 2 + rest[len(unc):] if rest.startswith(unc) else rest
+    return os.path.normpath(path)
+
+
 def move_to_trash(path: str) -> None:
+    path = shell_path(path)
     try:
         from send2trash import send2trash
     except ImportError as exc:
