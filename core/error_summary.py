@@ -38,3 +38,30 @@ def summarize_errors(
     if len(errors) > max_shown:
         preview += ", ..."
     return preview
+
+
+def wrapped_errors(
+    errors: list[str], max_shown: int = 5, max_chars: int = 600, width: int = 70
+) -> str:
+    """Like summarize_errors(), for a QMessageBox: one error per paragraph,
+    hard-wrapped at `width` characters so the whole text fits the dialog
+    whatever the widget does with a long line (a long "file: reason" used to
+    run off the dialog's right edge and hide the reason). Continuation lines
+    are indented; a path or word longer than `width` is broken. `max_chars`
+    still bounds one runaway message."""
+    import textwrap
+
+    paragraphs = []
+    for message in errors[:max_shown]:
+        if len(message) > max_chars:
+            message = message[:max_chars].rstrip() + "…"
+        paragraphs.append(
+            textwrap.fill(
+                message, width=width, subsequent_indent="    ",
+                break_long_words=True, break_on_hyphens=False,
+            )
+        )
+    text = "\n\n".join(paragraphs)
+    if len(errors) > max_shown:
+        text += f"\n\n... and {len(errors) - max_shown} more"
+    return text

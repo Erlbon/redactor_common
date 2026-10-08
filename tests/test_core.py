@@ -85,6 +85,17 @@ def test_error_summary():
     assert s.count(";") == 2
     assert s.endswith(", ...")
 
+def test_wrapped_errors_fit_the_dialog_and_keep_the_whole_reason():
+    reason = "couldn't move it to the Recycle Bin: [Errno 3] The system cannot find the path specified"
+    message = f"2000AD prog 2503 (2026) (AI-4320p) (juvecube).cbz: {reason}"
+    text = error_summary.wrapped_errors([message], width=60)
+    assert all(len(line) <= 60 for line in text.splitlines())
+    assert " ".join(text.split()) == message  # nothing lost, only re-flowed
+    many = error_summary.wrapped_errors([f"e{i}" for i in range(8)], max_shown=5)
+    assert many.endswith("... and 3 more")
+    assert all(len(line) <= 70 for line in error_summary.wrapped_errors(["x" * 400]).splitlines())
+
+
 def test_auto_number():
     assert auto_number.generate_auto_number(0, start=1, increment=1, padding=2) == "01"
     assert auto_number.generate_auto_number(1, start=1, increment=1, padding=2) == "02"
