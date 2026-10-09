@@ -77,9 +77,12 @@ def rename_items(
     items: Sequence[Any], *, pattern: str, values_for: Values, path_of: ItemPath, skip_reason: SkipReason,
     out: Output, dry_run: bool, ascii_only: bool, log: Any, log_label: str,
     on_renamed: Callable[[Any, str], None] | None = None,
+    companions: Callable[[str, str], list[tuple[str, str]]] | None = None,
 ) -> int:
     """Renames each item in its own folder to `pattern` rendered from its values. Returns how many failed.
-    `on_renamed(item, new_path)` lets the app keep its in-memory item in step."""
+    `on_renamed(item, new_path)` lets the app keep its in-memory item in step. `companions(old, new)` lists
+    the other files that belong to the item by name (a video's poster and subtitles) as (old, new) pairs;
+    they are renamed with it, and logged for undo."""
     taken: set[str] = set()
     renamed: list[tuple[str, str]] = []
     failed = 0
@@ -101,19 +104,31 @@ def rename_items(
                 row["new_path"] = new_path
                 if os.path.normcase(os.path.abspath(new_path)) == os.path.normcase(os.path.abspath(path)):
                     row["status"], row["new_path"] = "unchanged", ""
-                elif dry_run:
-                    row["status"] = "planned"
                 else:
-                    try:
-                        os.rename(path, new_path)
-                    except OSError as exc:
-                        row["status"], row["message"], row["new_path"] = "failed", str(exc), ""
-                        failed += 1
+                    extra = companions(path, new_path) if companions else []
+                    note = f"+{len(extra)} companion file(s)" if extra else ""
+                    if dry_run:
+                        row["status"], row["message"] = "planned", note
                     else:
-                        row["status"] = "renamed"
-                        renamed.append((path, new_path))
-                        if on_renamed is not None:
-                            on_renamed(item, new_path)
+                        try:
+                            os.rename(path, new_path)
+                        except OSError as exc:
+                            row["status"], row["message"], row["new_path"] = "failed", str(exc), ""
+                            failed += 1
+                        else:
+                            row["status"], row["message"] = "renamed", note
+                            renamed.append((path, new_path))
+                            problems = []
+                            for old, new in extra:
+                                try:
+                                    os.rename(old, new)
+                                    renamed.append((old, new))
+                                except OSError as exc:
+                                    problems.append(f"{os.path.basename(old)} not renamed ({exc})")
+                            if problems:
+                                row["message"] = "; ".join(filter(None, [note, *problems]))
+                            if on_renamed is not None:
+                                on_renamed(item, new_path)
         out.record(row)
         say(out, row)
     if renamed:
@@ -127,8 +142,11 @@ def rename_items(
 def move_items(
     items: Sequence[Any], *, root: str, pattern: str, values_for: Values, path_of: ItemPath,
     skip_reason: SkipReason, out: Output, dry_run: bool, copy: bool, ascii_only: bool, log: Any, log_label: str,
+    companions: Callable[[Any], list[Any]] | None = None,
 ) -> int:
-    """Moves (or copies) each item to root/pattern. Returns how many failed."""
+    """Moves (or copies) each item to root/pattern. Returns how many failed. `companions(planned_move)` lists
+    the PlannedMoves of the other files that belong to the item by name (a video's poster and subtitles);
+    they travel with it into the same folders."""
     if not root:
         raise CliError("no library folder: give --root FOLDER (or set one in the app's Rename / Export / Move window)")
     if not os.path.isdir(root):
@@ -153,10 +171,11 @@ def move_items(
             row["status"], row["message"] = "skipped", "the pattern gives an empty name for this file"
         else:
             row["new_path"] = plan.new_path
-            if plan.warning:
-                row["message"] = plan.warning
+            extra = companions(plan) if companions else []
+            problems = [plan.warning] if plan.warning else []
+            note = f"+{len(extra)} companion file(s)" if extra else ""
             if dry_run:
-                row["status"] = "planned"
+                row["status"], row["message"] = "planned", "; ".join(filter(None, [*problems, note]))
             else:
                 try:
                     result = execute_move(plan.old_path, plan.new_path, copy=copy, trash=move_to_trash)
@@ -166,13 +185,26 @@ def move_items(
                 else:
                     row["status"] = "copied" if copy else "moved"
                     if result.warning:
-                        row["message"] = result.warning
-                    if not copy and not result.original_kept:
-                        trashed = [(plan.old_path, result.new_path)] if result.original_trashed else []
-                        log.record(
-                            log_label, [(plan.old_path, result.new_path)],
-                            created_dirs=result.created_dirs, trashed=trashed, root=plan.root,
-                        )
+                        problems.append(result.warning)
+                    pairs = [] if result.original_kept else [(plan.old_path, result.new_path)]
+                    created = list(result.created_dirs)
+                    trashed = [(plan.old_path, result.new_path)] if result.original_trashed else []
+                    for companion in extra:
+                        try:
+                            done = execute_move(companion.old_path, companion.new_path, copy=copy, trash=move_to_trash)
+                        except (OSError, ValueError) as exc:
+                            problems.append(f"{os.path.basename(companion.old_path)} not moved ({exc})")
+                            continue
+                        created += done.created_dirs
+                        if not done.original_kept:
+                            pairs.append((companion.old_path, done.new_path))
+                        if done.original_trashed:
+                            trashed.append((companion.old_path, done.new_path))
+                        if done.warning:
+                            problems.append(done.warning)
+                    row["message"] = "; ".join(filter(None, [*problems, note]))
+                    if not copy and pairs:
+                        log.record(log_label, pairs, created_dirs=created, trashed=trashed, root=plan.root)
         out.record(row)
         say(out, row)
     return failed

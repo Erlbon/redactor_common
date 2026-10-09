@@ -150,3 +150,51 @@ def test_redact_items_calls_after_run_and_adds_its_notes(tmp_path):
 
     document = json.loads(buffer.getvalue())
     assert code == 0 and calls == ["done"] and document["run_notes"] == ["Google Books: refused, not asked again"]
+
+
+def _sidecar(tmp_path, name):
+    f = tmp_path / name
+    f.write_bytes(b"s")
+    return f
+
+
+def test_rename_carries_companion_files_and_logs_them(tmp_path):
+    a = item(tmp_path, "movie.mp3", t="New Name")
+    poster = _sidecar(tmp_path, "movie-poster.jpg")
+    log = RenameLog(str(tmp_path / "l.json"))
+
+    def companions(old, new):
+        stem_old, stem_new = os.path.splitext(old)[0], os.path.splitext(new)[0]
+        return [(stem_old + "-poster.jpg", stem_new + "-poster.jpg")]
+
+    out, _ = output()
+    commands.rename_items(
+        [a], pattern="%t%", out=out, dry_run=True, ascii_only=False, log=log, log_label="r", companions=companions, **KW
+    )
+    assert out.records[0]["status"] == "planned" and "+1 companion" in out.records[0]["message"] and poster.exists()
+    out2, _ = output()
+    commands.rename_items(
+        [a], pattern="%t%", out=out2, dry_run=False, ascii_only=False, log=log, log_label="r", companions=companions, **KW
+    )
+    assert (tmp_path / "New Name.mp3").exists() and (tmp_path / "New Name-poster.jpg").exists() and not poster.exists()
+    assert len(log.last_batch().renames) == 2
+
+
+def test_move_carries_companion_files_into_the_same_folders(tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    a = item(tmp_path, "m.mp3", artist="Band", t="Song")
+    poster = _sidecar(tmp_path, "m-poster.jpg")
+
+    def companions(plan):
+        base = os.path.splitext(plan.new_path)[0]
+        return [SimpleNamespace(old_path=str(poster), new_path=base + "-poster.jpg")]
+
+    out, _ = output()
+    log = RenameLog(str(tmp_path / "l.json"))
+    commands.move_items(
+        [a], root=str(root), pattern="%artist%/%t%", out=out, dry_run=False, copy=False, ascii_only=False, log=log,
+        log_label="m", companions=companions, **KW,
+    )
+    assert (root / "Band" / "Song.mp3").exists() and (root / "Band" / "Song-poster.jpg").exists() and not poster.exists()
+    assert len(log.last_batch().renames) == 2 and "+1 companion" in out.records[0]["message"]
