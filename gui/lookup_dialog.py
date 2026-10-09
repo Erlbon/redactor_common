@@ -342,6 +342,18 @@ class LookupDialogBase(QDialog):
         return image
 
     @staticmethod
+    def _found_placeholder(result: Optional[LookupResult]) -> str:
+        """What the Found side says when there is no image: a match without a cover must not
+        look like no match at all."""
+        if result is None:
+            return "Not searched yet"
+        if result.error:
+            return "Lookup failed"
+        if result.found:
+            return "✓ Match found\n(this source has no cover image)"
+        return "No match"
+
+    @staticmethod
     def _set_cover(label: AspectRatioImageLabel, cover_bytes: Optional[bytes], empty_text: str) -> None:
         pixmap = None
         if cover_bytes:
@@ -511,8 +523,10 @@ class LookupDialogBase(QDialog):
         local_cover = self._get_local_cover(self.items[row]) if self._get_local_cover else None
         self._set_cover(self.detail_cover_current, local_cover, "No local cover")
         self._set_cover(
-            self.detail_cover_found, result.cover_bytes if result else None, "No cover available"
+            self.detail_cover_found, result.cover_bytes if result else None, self._found_placeholder(result)
         )
+        positive = bool(result and result.found and not result.cover_bytes)
+        self.detail_cover_found.setStyleSheet("color: #2e9d4f; font-weight: bold;" if positive else "")
 
         used_query = (result.used_query if result else None) or self._query_overrides.get(row, {})
         for key, edit in self._query_edits.items():
