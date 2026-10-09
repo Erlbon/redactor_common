@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redactor_common"
-version = "2026.10.9.2"
+version = "2026.10.9.3"
 description = "Shared PyQt6 UI + core logic for the Redactor family of tools (epub/video/mp3/cbz)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,7 +26,7 @@ secrets = ["keyring"]
 # layout, which would've thrown away this repo's existing git history
 # per file for no functional benefit.
 [tool.setuptools]
-packages = ["redactor_common", "redactor_common.core", "redactor_common.gui"]
+packages = ["redactor_common", "redactor_common.cli", "redactor_common.core", "redactor_common.gui"]
 
 [tool.setuptools.package-dir]
 redactor_common = "."
