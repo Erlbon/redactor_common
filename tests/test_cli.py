@@ -121,3 +121,68 @@ def test_add_common_options_defines_json_and_quiet():
     cli.add_common_options(parser)
     args = parser.parse_args(["--json", "-q"])
     assert args.json and args.quiet
+
+
+# --- one exe: --output, is_cli_invocation, internal errors -------------------------------------
+
+
+def parse(argv):
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    cli.add_common_options(parser)
+    return parser.parse_args(argv)
+
+
+def test_output_writes_the_json_document_to_a_file_not_stdout(tmp_path, capsys):
+    target = tmp_path / "result.json"
+    out = cli.make_output(parse(["--json", "--output", str(target)]))
+    out.line("ignored in json mode")
+    out.record({"file": "a.cbz"})
+    out.finish({"files": 1})
+    out.close()
+    assert capsys.readouterr().out == ""
+    document = json.loads(target.read_text(encoding="utf-8"))
+    assert document["results"] == [{"file": "a.cbz"}] and document["files"] == 1
+
+
+def test_output_file_also_takes_the_text_lines(tmp_path):
+    target = tmp_path / "result.txt"
+    out = cli.make_output(parse(["-o", str(target)]))
+    out.line("hello")
+    out.close()
+    assert target.read_text(encoding="utf-8") == "hello\n"
+
+
+def test_output_to_an_unwritable_place_is_a_usage_error(tmp_path):
+    with pytest.raises(cli.CliError, match="cannot write the output file"):
+        cli.make_output(parse(["--output", str(tmp_path / "no-such-folder" / "x.json")]))
+
+
+def test_without_output_the_streams_are_the_normal_ones():
+    out = cli.make_output(parse([]))
+    assert out.out is sys.stdout and not out._owns_out
+    out.close()  # nothing to close
+
+
+def test_a_command_name_means_cli_and_anything_else_means_the_window():
+    commands = ["info", "set"]
+    assert cli.is_cli_invocation(["app.exe", "info", "x.cbz"], commands)
+    assert cli.is_cli_invocation(["app.exe", "--help"], commands) and cli.is_cli_invocation(["app.exe", "--version"], commands)
+    assert not cli.is_cli_invocation(["app.exe"], commands)
+    assert not cli.is_cli_invocation(["app.exe", "C:/comics/book.cbz"], commands)  # a path to open
+    assert not cli.is_cli_invocation(["app.exe", "inform"], commands)
+
+
+def test_an_unexpected_error_prints_a_traceback_and_exits_70(capsys):
+    def boom(argv):
+        raise ValueError("kaboom")
+
+    assert cli.run(boom) == cli.EXIT_INTERNAL == 70
+    assert "kaboom" in capsys.readouterr().err
+
+
+def test_bind_standard_streams_leaves_working_streams_alone():
+    before = (sys.stdout, sys.stderr)
+    cli.bind_standard_streams()
+    assert (sys.stdout, sys.stderr) == before
