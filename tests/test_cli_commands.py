@@ -137,3 +137,16 @@ def test_say_and_pattern_options():
     assert (args.pattern, args.zero_pad, args.ascii, args.dry_run) == ("%a%", 3, True, True)
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+def test_redact_items_calls_after_run_and_adds_its_notes(tmp_path):
+    calls = []
+    out, buffer = output()
+    code = commands.redact_items(
+        [], Recipe(), [], make_context=lambda i: None, describe=str, finalize=lambda c, r: None, finalize_label="Save",
+        path_of=lambda i: "", out=out, after_run=lambda: calls.append("done") or ["Google Books: refused, not asked again"],
+    )
+    import json
+
+    document = json.loads(buffer.getvalue())
+    assert code == 0 and calls == ["done"] and document["run_notes"] == ["Google Books: refused, not asked again"]

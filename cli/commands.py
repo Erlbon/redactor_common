@@ -231,8 +231,11 @@ def list_steps(recipe: Recipe, catalogue: Sequence[Step], out: Output) -> int:
 def redact_items(
     items: Sequence[Any], recipe: Recipe, catalogue: Iterable[Step], *, make_context: Callable[[Any], Any],
     describe: Callable[[Any], str], finalize: Callable, finalize_label: str, path_of: ItemPath, out: Output,
+    after_run: Callable[[], Iterable[str] | None] | None = None,
 ) -> int:
-    """Runs the recipe over `items` and reports. Returns EXIT_PARTIAL if any file failed, else EXIT_OK."""
+    """Runs the recipe over `items` and reports. Returns EXIT_PARTIAL if any file failed, else EXIT_OK.
+    `after_run()` is called once the run is over (flush the app's undo log, say) and may return run-wide
+    notes to add to the report."""
 
     def progress(done: int, total: int, item: Any) -> None:
         if item is not None:
@@ -242,6 +245,8 @@ def redact_items(
         items, recipe, catalogue, make_context, progress=progress, describe=describe,
         finalize=finalize, finalize_label=finalize_label,
     )
+    if after_run is not None:
+        report.run_notes += list(after_run() or [])
     for entry in report.entries:
         out.record({
             "file": entry.file, "path": entry.saved_path or (path_of(entry.item) if entry.item is not None else ""),
