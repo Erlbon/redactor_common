@@ -186,3 +186,136 @@ def test_bind_standard_streams_leaves_working_streams_alone():
     before = (sys.stdout, sys.stderr)
     cli.bind_standard_streams()
     assert (sys.stdout, sys.stderr) == before
+
+
+# --- review fixes: paths, JSON on failure, encodings ---------------------------------------------------------
+
+
+def test_brackets_in_a_real_name_are_not_a_wildcard(tmp_path):
+    (tmp_path / "Book [2019].cbz").write_bytes(b"x")
+    (tmp_path / "Book 0.cbz").write_bytes(b"x")  # what the class [2019] would match
+    files, missing = cli.expand_paths([str(tmp_path / "Book [2019].cbz")], [".cbz"])
+    assert [os.path.basename(f) for f in files] == ["Book [2019].cbz"] and missing == []
+
+
+def test_a_wildcard_under_a_folder_with_brackets_still_matches(tmp_path):
+    folder = tmp_path / "Series [Complete]"
+    folder.mkdir()
+    (folder / "a.cbz").write_bytes(b"x")
+    (folder / "b.cbz").write_bytes(b"x")
+    files, missing = cli.expand_paths([str(folder / "*.cbz")], [".cbz"])
+    assert [os.path.basename(f) for f in files] == ["a.cbz", "b.cbz"] and missing == []
+    files, _ = cli.expand_paths([str(folder / "[ab].cbz")], [".cbz"])  # a real pattern in the last part
+    assert len(files) == 2
+
+
+def test_a_wildcard_in_a_folder_name_still_works(tmp_path):
+    for name in ("x1", "x2"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "f.cbz").write_bytes(b"x")
+    files, _ = cli.expand_paths([str(tmp_path / "x*" / "f.cbz")], [".cbz"])
+    assert len(files) == 2
+
+
+def test_wildcard_matches_are_filtered_by_extension_like_a_folder(tmp_path):
+    for name in ("a.cbz", "note.txt", "cover.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+    files, _ = cli.expand_paths([str(tmp_path / "*")], [".cbz"])
+    assert [os.path.basename(f) for f in files] == ["a.cbz"]
+    named, _ = cli.expand_paths([str(tmp_path / "note.txt")], [".cbz"])  # named on purpose: kept
+    assert [os.path.basename(f) for f in named] == ["note.txt"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are a Windows thing")
+def test_junctions_and_symlinks_are_not_followed_in_a_folder_walk(tmp_path):
+    import subprocess
+
+    real = tmp_path / "Marvel"
+    real.mkdir()
+    (real / "a.cbz").write_bytes(b"x")
+    link = tmp_path / "Favourites"
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], capture_output=True)
+    if made.returncode != 0:
+        pytest.skip("could not create a junction here")
+    loop = real / "again"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(loop), str(tmp_path)], capture_output=True)
+    files, _ = cli.expand_paths([str(tmp_path)], [".cbz"])
+    assert [os.path.relpath(f, tmp_path) for f in files] == [os.path.join("Marvel", "a.cbz")]  # once, no loop
+
+
+def test_natural_order_survives_digit_lookalikes():
+    assert cli.natural_key("1\u00b23.cbz")  # a superscript two is not a number
+    assert sorted(["b10", "b2", "b\u00b2"], key=cli.natural_key)
+
+
+def test_json_is_ascii_safe_whatever_the_console_code_page():
+    out = io.StringIO()
+    output = cli.Output(json_mode=True, stdout=out)
+    output.record({"path": "C:/Music/\u01c6 \u4e2d\u6587 \U0001f3b5.mp3"})
+    output.finish()
+    text = out.getvalue()
+    assert text.isascii() and json.loads(text)["results"][0]["path"] == "C:/Music/\u01c6 \u4e2d\u6587 \U0001f3b5.mp3"
+
+
+def test_a_summary_cannot_overwrite_the_documents_own_keys():
+    out = io.StringIO()
+    output = cli.Output(json_mode=True, stdout=out)
+    output.record({"a": 1})
+    output.finish({"results": "oops", "warnings": "oops", "files": 1})
+    document = json.loads(out.getvalue())
+    assert document["results"] == [{"a": 1}] and document["warnings"] == [] and document["files"] == 1
+
+
+def test_a_command_that_fails_still_leaves_a_valid_json_document(tmp_path):
+    target = tmp_path / "result.json"
+    output = cli.make_output(__import__("argparse").Namespace(json=True, quiet=True, output=str(target)))
+    try:
+        try:
+            output.record({"path": "a.cbz", "status": "renamed"})
+            output.error("nothing found for b.cbz")
+            raise RuntimeError("disk on fire")
+        finally:
+            output.close()
+    except RuntimeError:
+        pass
+    document = json.loads(target.read_text(encoding="utf-8"))
+    assert document["results"] == [{"path": "a.cbz", "status": "renamed"}]
+    assert document["error"] == "disk on fire" and document["errors"] == ["nothing found for b.cbz"]
+
+
+def test_an_interrupted_command_is_marked_in_the_document(tmp_path):
+    target = tmp_path / "r.json"
+    output = cli.make_output(__import__("argparse").Namespace(json=True, quiet=True, output=str(target)))
+    with pytest.raises(KeyboardInterrupt):
+        try:
+            raise KeyboardInterrupt
+        finally:
+            output.close()
+    assert json.loads(target.read_text(encoding="utf-8"))["error"] == "interrupted"
+
+
+def test_a_finished_command_writes_exactly_one_document(tmp_path):
+    target = tmp_path / "r.json"
+    output = cli.make_output(__import__("argparse").Namespace(json=True, quiet=True, output=str(target)))
+    output.record({"x": 1})
+    output.finish({"files": 1})
+    output.close()
+    document = json.loads(target.read_text(encoding="utf-8"))  # a second document would not parse
+    assert "error" not in document and document["files"] == 1
+
+
+def test_text_mode_close_writes_nothing_extra(tmp_path):
+    target = tmp_path / "r.txt"
+    output = cli.make_output(__import__("argparse").Namespace(json=False, quiet=True, output=str(target)))
+    output.line("hello")
+    output.close()
+    assert target.read_text(encoding="utf-8") == "hello\n"
+
+
+def test_a_closed_pipe_with_no_stdout_does_not_escape_run(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", None)
+
+    def pipe(argv):
+        raise BrokenPipeError
+
+    assert cli.run(pipe) == 0

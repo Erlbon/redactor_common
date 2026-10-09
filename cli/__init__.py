@@ -105,8 +105,10 @@ class Output:
         self._out = stdout
         self._err = stderr
         self._owns_out = False
+        self._finished = False
         self.records: list[Any] = []
         self.warnings: list[str] = []
+        self.errors: list[str] = []
 
     @property
     def out(self) -> TextIO:
@@ -136,6 +138,7 @@ class Output:
             print(f"warning: {text}", file=self.err)
 
     def error(self, text: str) -> None:
+        self.errors.append(text)
         print(f"error: {text}", file=self.err)
 
     def progress(self, done: int, total: int, label: str) -> None:
@@ -143,8 +146,34 @@ class Output:
         if total > 1:
             self.info(f"[{done}/{total}] {label}")
 
+    def _document(self, summary: dict | None, key: str, extra: dict | None = None) -> str:
+        document: dict[str, Any] = dict(summary or {})
+        if extra:
+            document.update(extra)
+        # The document's own keys come last so a summary can never replace them. ASCII-only JSON: a script
+        # reading a console or pipe with another code page must never see "?" where a path had a letter.
+        document[key] = self.records
+        document["warnings"] = self.warnings
+        document["errors"] = self.errors
+        return json.dumps(document, indent=2, ensure_ascii=True, default=json_default)
+
     def close(self) -> None:
-        """Flushes and closes a result file opened by make_output(); stdout is left open."""
+        """Ends the output. In JSON mode a command that never reached finish() (it was interrupted, or
+        failed) still leaves ONE valid document: what was collected so far plus an "error" entry, so a
+        script reading --output FILE never finds an empty or half-written result. A result file opened by
+        make_output() is flushed and closed; stdout is left open."""
+        if self.json_mode and not self._finished:
+            failure = sys.exc_info()[1]
+            if failure is not None:
+                message = str(failure) or type(failure).__name__
+                extra = {"error": "interrupted" if isinstance(failure, KeyboardInterrupt) else message}
+            else:
+                extra = {"error": "the command ended without a result"}
+            try:
+                print(self._document(None, "results", extra), file=self.out)
+            except (OSError, ValueError):
+                pass
+            self._finished = True
         if self._owns_out and self._out is not None:
             try:
                 self._out.close()
@@ -153,13 +182,10 @@ class Output:
             self._owns_out = False
 
     def finish(self, summary: dict | None = None, key: str = "results") -> None:
-        """In JSON mode: prints {"results": [...], "warnings": [...], **summary} once."""
+        """In JSON mode: prints {**summary, "results": [...], "warnings": [...], "errors": [...]} once."""
+        self._finished = True
         if self.json_mode:
-            document: dict[str, Any] = {key: self.records}
-            if summary:
-                document.update(summary)
-            document["warnings"] = self.warnings
-            print(json.dumps(document, indent=2, ensure_ascii=False, default=json_default), file=self.out)
+            print(self._document(summary, key), file=self.out)
 
 
 def make_output(args: argparse.Namespace) -> Output:
@@ -183,16 +209,33 @@ def is_cli_invocation(argv: Sequence[str], commands: Iterable[str]) -> bool:
 
 
 def natural_key(text: str) -> list:
-    return [int(part) if part.isdigit() else part.lower() for part in _NATURAL.split(text)]
+    return [int(part) if part.isdecimal() else part.lower() for part in _NATURAL.split(text)]
+
+
+def _is_link(path: str) -> bool:
+    """A symlink or (Windows) junction: a folder that is really another folder."""
+    junction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(junction and junction(path))
+
+
+def _wildcard_matches(argument: str) -> list[str]:
+    """What a wildcard argument matches. Only the last part of the path is a pattern, so a folder whose name
+    contains "[" or "]" ("Series [Complete]") still works; if that finds nothing the whole argument is tried
+    as a pattern (a wildcard in a folder name)."""
+    head, tail = os.path.split(argument)
+    matches = glob.glob(os.path.join(glob.escape(head), tail)) if head else glob.glob(tail)
+    return matches or glob.glob(argument)
 
 
 def expand_paths(
     paths: Iterable[str], extensions: Iterable[str], recursive: bool = True
 ) -> tuple[list[str], list[str]]:
-    """(files, missing). Each argument may be a file (kept whatever its extension: the user named it),
-    a folder (every file with one of `extensions` inside it, subfolders too when `recursive`) or a
-    wildcard pattern. Absolute paths, de-duplicated, in natural order. `missing` lists arguments
-    that matched nothing."""
+    """(files, missing). Each argument may be a file (kept whatever its extension: the user named it), a
+    folder (every file with one of `extensions` inside it, subfolders too when `recursive`; symlinked and
+    junctioned folders inside it are not followed) or a wildcard pattern (its matches are filtered by
+    `extensions` like a folder's files; matched folders are searched). An argument that names an existing
+    file or folder is always taken literally, so "[" in a real name is not a wildcard. Absolute paths,
+    de-duplicated, in natural order. `missing` lists arguments that matched nothing."""
     wanted = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
     files: dict[str, str] = {}
     missing: list[str] = []
@@ -201,25 +244,31 @@ def expand_paths(
         absolute = os.path.abspath(path)
         files.setdefault(os.path.normcase(absolute), absolute)
 
+    def wanted_extension(name: str) -> bool:
+        return not wanted or os.path.splitext(name)[1].lower() in wanted
+
     for argument in paths:
-        candidates = glob.glob(argument) if any(c in argument for c in "*?[") else [argument]
+        literal = os.path.lexists(argument)
+        pattern = not literal and any(c in argument for c in "*?[")
+        candidates = _wildcard_matches(argument) if pattern else [argument]
         found = False
         for candidate in candidates:
             if os.path.isfile(candidate):
-                add(candidate)
-                found = True
+                if not pattern or wanted_extension(candidate):  # a file named on purpose is kept
+                    add(candidate)
+                    found = True
             elif os.path.isdir(candidate):
                 found = True
                 if recursive:
                     for root, dirs, names in os.walk(candidate):
-                        dirs.sort(key=natural_key)
+                        dirs[:] = sorted((d for d in dirs if not _is_link(os.path.join(root, d))), key=natural_key)
                         for name in names:
-                            if os.path.splitext(name)[1].lower() in wanted:
+                            if wanted_extension(name):
                                 add(os.path.join(root, name))
                 else:
                     for name in os.listdir(candidate):
                         full = os.path.join(candidate, name)
-                        if os.path.isfile(full) and os.path.splitext(name)[1].lower() in wanted:
+                        if os.path.isfile(full) and wanted_extension(name):
                             add(full)
         if not found:
             missing.append(argument)
@@ -286,8 +335,8 @@ def run(main: Callable[[Sequence[str] | None], int], argv: Sequence[str] | None 
         return EXIT_INTERRUPTED
     except BrokenPipeError:
         try:
-            sys.stdout.close()
-        except OSError:
+            sys.stdout.close()  # what `| head` expects; stdout may be None (windowed exe) or already closed
+        except (AttributeError, OSError, ValueError):
             pass
         return EXIT_OK
     except Exception:  # noqa: BLE001 -- a bug: say so with the traceback and a distinct exit code
