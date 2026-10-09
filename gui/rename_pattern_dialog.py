@@ -20,7 +20,7 @@ from typing import Callable, TypeVar
 from PyQt6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog,
     QDialogButtonBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QMenu, QPushButton, QRadioButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
 from redactor_common.core.error_summary import summarize_errors
@@ -52,6 +52,9 @@ class RenamePatternDialog(QDialog):
         on_zero_pad_changed: Callable[[bool, int], None] | None = None,
         library_root: str = "",
         on_library_root_changed: Callable[[str], None] | None = None,
+        macro_labels: Callable[[], list[str]] | None = None,
+        on_save_macro: Callable[[int, dict], None] | None = None,
+        on_clear_macro: Callable[[int], None] | None = None,
         parent=None,
     ):
         """
@@ -81,6 +84,13 @@ class RenamePatternDialog(QDialog):
         (`callback(path)`) the app uses to remember the choice, like the
         ASCII checkbox. In that mode the pattern may contain "/" or "\\"
         to make sub-folders (`%author%/%series%/%title%`).
+
+        `macro_labels` / `on_save_macro` / `on_clear_macro`: the "Save as
+        Macro" button. `macro_labels()` returns one short description per
+        slot ("" for an empty one); `on_save_macro(slot, macro_state())` and
+        `on_clear_macro(slot)` (slots are 0-based) let the app keep them. The
+        app replays a macro later with `apply_macro_state()` on a dialog it
+        never shows -- see those two methods.
         """
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -98,6 +108,9 @@ class RenamePatternDialog(QDialog):
         self._library_root = library_root or ""
         self._on_library_root_changed = on_library_root_changed
         self._moves: list[PlannedMove] = []
+        self._macro_labels = macro_labels
+        self._on_save_macro = on_save_macro
+        self._on_clear_macro = on_clear_macro
 
         self._build_ui(placeholders, pattern_history, default_pattern, item_noun, zero_pad_label, zero_pad_widths)
         self._refresh_preview()
@@ -212,6 +225,20 @@ class RenamePatternDialog(QDialog):
         self.warning_label.setWordWrap(True)
         layout.addWidget(self.warning_label)
 
+        if self._on_save_macro is not None:
+            macro_row = QHBoxLayout()
+            self.macro_button = QPushButton("Save as Macro…")
+            self.macro_button.setToolTip(
+                "Remember the pattern, action and options above in one of the macro slots, "
+                "so a hotkey can run them on the selected files without this window."
+            )
+            self.macro_menu = QMenu(self.macro_button)
+            self.macro_menu.aboutToShow.connect(self._fill_macro_menu)
+            self.macro_button.setMenu(self.macro_menu)
+            macro_row.addWidget(self.macro_button)
+            macro_row.addStretch(1)
+            layout.addLayout(macro_row)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -220,6 +247,76 @@ class RenamePatternDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+
+    # --- macros -----------------------------------------------------------
+
+    def _fill_macro_menu(self) -> None:
+        self.macro_menu.clear()
+        labels = self._macro_labels() if self._macro_labels else []
+        for slot, label in enumerate(labels):
+            action = self.macro_menu.addAction(f"Save as Macro {slot + 1}" + (f"  (replaces: {label})" if label else ""))
+            action.triggered.connect(lambda _checked=False, n=slot: self._on_save_macro(n, self.macro_state()))
+        if self._on_clear_macro is not None and any(labels):
+            self.macro_menu.addSeparator()
+            for slot, label in enumerate(labels):
+                if label:
+                    action = self.macro_menu.addAction(f"Clear Macro {slot + 1}  ({label})")
+                    action.triggered.connect(lambda _checked=False, n=slot: self._on_clear_macro(n))
+
+    def macro_state(self) -> dict:
+        """Everything this dialog is set to, as plain JSON-able data: the pattern, the action
+        ("rename" / "export" / "move"), the export folder and library root, the zero-pad and
+        ASCII options."""
+        mode = "move" if self.move_radio.isChecked() else "export" if self.export_radio.isChecked() else "rename"
+        return {
+            "pattern": self.pattern_edit.text(),
+            "mode": mode,
+            "export_folder": self.output_folder or "",
+            "library_root": self._library_root,
+            "zero_pad": bool(self.zero_pad_cb and self.zero_pad_cb.isChecked()),
+            "zero_pad_width": int(self.zero_pad_width_combo.currentData()) if self.zero_pad_width_combo else 2,
+            "ascii": self.ascii_cb.isChecked(),
+        }
+
+    def apply_macro_state(self, state: dict) -> None:
+        """Loads a `macro_state()` into the widgets and refreshes the plan, WITHOUT writing the
+        values back through the remember-last-choice callbacks (running a macro must not change
+        what the dialog starts with). Afterwards `can_apply()`, `apply_problem()`,
+        `planned_renames()` and `planned_moves()` answer as if the user had set it all by hand."""
+        widgets = [self.pattern_edit, self.ascii_cb, self.rename_radio, self.export_radio, self.move_radio]
+        if self.zero_pad_cb is not None:
+            widgets += [self.zero_pad_cb, self.zero_pad_width_combo]
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self.pattern_edit.setText(str(state.get("pattern", self.pattern_edit.text())))
+            self.ascii_cb.setChecked(bool(state.get("ascii", self.ascii_cb.isChecked())))
+            if self.zero_pad_cb is not None:
+                self.zero_pad_cb.setChecked(bool(state.get("zero_pad", False)))
+                index = self.zero_pad_width_combo.findData(int(state.get("zero_pad_width", 2)))
+                if index >= 0:
+                    self.zero_pad_width_combo.setCurrentIndex(index)
+            folder = state.get("export_folder") or ""
+            self.output_folder = folder or None
+            self.folder_label.setText(folder or "(no folder chosen)")
+            root = state.get("library_root") or ""
+            if root:
+                self._library_root = root
+            self.root_label.setText(self._library_root or "(no library root chosen)")
+            mode = state.get("mode", "rename")
+            {"move": self.move_radio, "export": self.export_radio}.get(mode, self.rename_radio).setChecked(True)
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+        self._on_mode_toggled()  # enables the right buttons and refreshes the preview and plan
+
+    def can_apply(self) -> bool:
+        """Whether Apply would be enabled right now (a folder chosen, nothing blocking)."""
+        return self._ok_button.isEnabled()
+
+    def apply_problem(self) -> str:
+        """The warning the dialog shows under the preview ("" when there is none)."""
+        return self.warning_label.text()
 
     def _on_zero_pad_edited(self, *_args) -> None:
         if self._on_zero_pad_changed is not None:
