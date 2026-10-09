@@ -67,6 +67,10 @@ _MIN_SEGMENT = 8  # the trimming below never shortens a segment under this
 _MIN_BUDGET = 40  # floor for the relative-path budget, however long the root is
 _SEPARATORS_RE = re.compile(r"[\\/]")
 _FILE_FALLBACK = "untitled"
+# The notes _render_relative() adds when the file part of the pattern gave nothing and "untitled" was used
+# instead. PlannedMove.nameless is set from them, so callers never have to read message text.
+NOTE_EMPTY_NAME = f'the file name was empty, using "{_FILE_FALLBACK}"'
+NOTE_NOTHING = f'the pattern produced nothing, using "{_FILE_FALLBACK}"'
 
 
 def _split_pattern(pattern: str) -> list[str]:
@@ -101,7 +105,7 @@ def _render_relative(
         if not rendered:
             if is_file:
                 rendered = _FILE_FALLBACK
-                notes.append(f"the file name was empty, using \"{_FILE_FALLBACK}\"")
+                notes.append(NOTE_EMPTY_NAME)
             elif fallback_segment:
                 rendered = fallback_segment
             else:
@@ -109,7 +113,7 @@ def _render_relative(
         segments.append(rendered)
     if not segments:
         segments = [_FILE_FALLBACK]
-        notes.append(f"the pattern produced nothing, using \"{_FILE_FALLBACK}\"")
+        notes.append(NOTE_NOTHING)
 
     if max_total is not None:
         def total() -> int:
@@ -159,6 +163,7 @@ class PlannedMove:
     warning: str = ""
     blocking: bool = False  # True: must not be executed
     root: str = ""
+    nameless: bool = False  # the pattern gave this file no name and "untitled" was used (see the NOTE_* constants)
 
     @property
     def is_noop(self) -> bool:
@@ -256,7 +261,8 @@ def plan_moves(
         elif len(new_path) > MAX_PATH_LENGTH:
             warning, blocking = f"the path is longer than {MAX_PATH_LENGTH} characters", True
         dirs = [] if blocking else _missing_dirs(root_abs, os.path.dirname(new_path))
-        planned.append(PlannedMove(item, old_path, new_path, dirs, warning, blocking, root_abs))
+        nameless = NOTE_EMPTY_NAME in notes or NOTE_NOTHING in notes
+        planned.append(PlannedMove(item, old_path, new_path, dirs, warning, blocking, root_abs, nameless))
     return planned
 
 

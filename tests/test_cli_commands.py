@@ -305,3 +305,138 @@ def test_say_and_pattern_options():
     assert (args.pattern, args.zero_pad, args.ascii, args.dry_run) == ("%a%", 3, True, True)
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+# --- second review: patterns, trash, recipe files, values ---------------------------------------------------
+
+
+def test_move_skips_a_file_when_the_pattern_gives_nothing_at_all(tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    a, b = item(tmp_path, "a.mp3", artist="", t=""), item(tmp_path, "b.mp3", artist="", t="")
+    # "//" is the pattern a batch file hands over when cmd has expanded %series% inside the quotes
+    failed, rows = move([a, b], root, "%artist%//%t%")
+    assert failed == 0 and [r["status"] for r in rows] == ["skipped", "skipped"]
+    assert not any(root.iterdir()) and os.path.exists(a.path) and os.path.exists(b.path)
+
+
+def test_a_planned_move_knows_it_was_nameless(tmp_path):
+    from redactor_common.core.move_plan import plan_moves
+
+    root = tmp_path / "lib"
+    root.mkdir()
+    a, b = item(tmp_path, "a.mp3"), item(tmp_path, "b.mp3", t="Real")
+    plans = plan_moves([a, b], str(root), "%t%", lambda i: i.fields, lambda i: i.path)
+    assert [p.nameless for p in plans] == [True, False]
+    plans = plan_moves([b], str(root), "%x%", lambda i: {"x": ""}, lambda i: i.path)
+    assert plans[0].nameless  # the "produced nothing" case too
+
+
+def test_a_real_title_called_untitled_is_not_mistaken_for_the_fallback(tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    a = item(tmp_path, "a.mp3", t="Untitled")
+    failed, rows = move([a], root, "%t%")
+    assert rows[0]["status"] == "moved" and (root / "Untitled.mp3").exists()
+
+
+def test_an_unknown_token_is_a_usage_error_for_rename_and_move(tmp_path):
+    a = item(tmp_path, "a.mp3", t="Song")
+    with pytest.raises(cli.CliError, match="unknown token %tittle%"):
+        rename([a], tmp_path, pattern="%t% %tittle%")
+    root = tmp_path / "lib"
+    root.mkdir()
+    with pytest.raises(cli.CliError, match="unknown token"):
+        move([a], root, "%x%/%t%")
+    assert os.path.exists(a.path)
+    rename([a], tmp_path, pattern="[%t%]", dry_run=True)  # a token inside an optional group is still checked, and known
+
+
+def test_a_rename_pattern_with_a_slash_is_refused(tmp_path):
+    a = item(tmp_path, "a.mp3", t="Song")
+    for bad in ("%t%/%t%", "%t%\\%t%"):
+        with pytest.raises(cli.CliError, match="cannot contain"):
+            rename([a], tmp_path, pattern=bad)
+
+
+def test_trash_to_makes_its_folder_only_when_a_file_arrives(tmp_path):
+    folder = tmp_path / "bin"
+    trash = commands.trash_to(str(folder))
+    assert not folder.exists()  # nothing yet: a dry run or --list-steps leaves no trace
+    f = tmp_path / "x.mp3"
+    f.write_bytes(b"1")
+    trash(str(f))
+    assert (folder / "x.mp3").exists()
+
+
+def test_trash_to_failures_are_trash_errors(tmp_path):
+    from redactor_common.core.trash import TrashError
+
+    blocker = tmp_path / "bin"
+    blocker.write_bytes(b"i am a file")  # the folder cannot be made
+    f = tmp_path / "x.mp3"
+    f.write_bytes(b"1")
+    with pytest.raises(TrashError, match="couldn't move it"):
+        commands.trash_to(str(blocker))(str(f))
+    assert f.exists()
+
+
+def test_trash_with_retries_tries_again_and_accepts_a_file_that_is_gone(tmp_path, monkeypatch):
+    from redactor_common.core.trash import TrashError
+
+    monkeypatch.setattr(commands.time, "sleep", lambda s: None)
+    f = tmp_path / "x.mp3"
+    f.write_bytes(b"1")
+    calls = []
+
+    def flaky(path):
+        calls.append(path)
+        if len(calls) < 3:
+            raise TrashError("locked")
+        os.remove(path)
+
+    commands.trash_with_retries(flaky)(str(f))
+    assert len(calls) == 3 and not f.exists()
+
+    g = tmp_path / "y.mp3"
+    g.write_bytes(b"1")
+
+    def moved_then_error(path):
+        os.remove(path)  # the shell moved it, then reported an error
+        raise TrashError("odd")
+
+    commands.trash_with_retries(moved_then_error)(str(g))  # does not raise: it is gone, which is the goal
+    h = tmp_path / "z.mp3"
+    h.write_bytes(b"1")
+    with pytest.raises(TrashError):
+        commands.trash_with_retries(lambda path: (_ for _ in ()).throw(TrashError("locked")), attempts=3)(str(h))
+
+
+def test_read_recipe_file_refuses_what_is_not_a_recipe(tmp_path):
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"order": ["a"], "enabled": {"a": True}, "options": {}}), encoding="utf-8")
+    assert json.loads(commands.read_recipe_file(str(good)))["order"] == ["a"]
+    for name, content, message in (
+        ("bad.json", "{oops", "not valid JSON"),
+        ("list.json", "[1, 2]", "not a recipe"),
+        ("empty.json", "{}", "not a recipe"),
+        ("other.json", json.dumps({"hello": "world"}), "not a recipe"),
+    ):
+        path = tmp_path / name
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(cli.CliError, match=message):
+            commands.read_recipe_file(str(path))
+    with pytest.raises(cli.CliError, match="cannot read"):
+        commands.read_recipe_file(str(tmp_path / "missing.json"))
+
+
+def test_values_refuse_what_no_file_format_can_store():
+    from redactor_common.cli import values
+
+    assert values.check_text("title", "  Dune  ") == "Dune"
+    assert values.check_text("description", "line one\nline two\ttab", multiline=True) == "line one\nline two\ttab"
+    for bad, multiline in (("bad\x01char", False), ("bad\x01char", True), ("a\ufffeb", True), ("two\nlines", False), ("tab\there", False)):
+        with pytest.raises(cli.CliError, match="control character"):
+            values.check_text("title", bad, multiline=multiline)
+    assert values.is_ascii_number("007") and not values.is_ascii_number("\u00b2") and not values.is_ascii_number("\u0663")
+    assert not values.is_ascii_number("") and not values.is_ascii_number("1.5")

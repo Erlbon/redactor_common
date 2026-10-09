@@ -24,8 +24,11 @@ rows have their own shape, see redact_items()).
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
+import time
 from typing import Any, Callable, Iterable, Sequence
 
 from redactor_common.cli import EXIT_OK, EXIT_PARTIAL, CliError, Output
@@ -33,7 +36,7 @@ from redactor_common.core.move_plan import execute_move, plan_moves
 from redactor_common.core.os_utils import rename_no_clobber
 from redactor_common.core.pipeline import FileStatus, Recipe, Step, run_recipe
 from redactor_common.core.rename_pattern import render_filename, unique_path
-from redactor_common.core.trash import move_to_trash
+from redactor_common.core.trash import TrashError, move_to_trash
 
 ItemPath = Callable[[Any], str]
 Values = Callable[[Any], dict]
@@ -63,24 +66,72 @@ def add_pattern_options(parser: argparse.ArgumentParser, pattern_required: bool)
         "-p", "--pattern", required=pattern_required, metavar="PATTERN",
         help="filename pattern with %%field%% tokens, e.g. \"%%artist%% - %%title%%\"",
     )
-    parser.add_argument("--zero-pad", type=int, default=0, metavar="N", help="pad the number to N digits (001)")
-    parser.add_argument("--ascii", action="store_true", help="ASCII-safe names (é -> e, æ -> ae, ...)")
+    parser.add_argument(
+        "--zero-pad", type=int, default=None, metavar="N",
+        help="pad the number to N digits (001); default: the choice saved in the app's Rename dialog",
+    )
+    parser.add_argument(
+        "--ascii", action="store_true",
+        help="ASCII-safe names (é -> e, æ -> ae, ...); also on when the app's Rename dialog has it saved",
+    )
     parser.add_argument("-n", "--dry-run", action="store_true", help="show what would happen, change nothing")
 
 
 def trash_to(folder: str) -> Callable[[str], None]:
-    """A trash function that moves a file into `folder` (created if needed; numbered if the name is taken)."""
-    os.makedirs(folder, exist_ok=True)
+    """A trash function that moves a file into `folder` (numbered if the name is taken). The folder is created
+    when the first file arrives, so a dry run or a --list-steps leaves nothing behind. A failure is a TrashError,
+    like the Recycle Bin's, so the callers that expect one (a repair, a commit) handle it."""
 
     def trash(path: str) -> None:
         stem, ext = os.path.splitext(os.path.basename(path))
-        target, n = os.path.join(folder, stem + ext), 2
-        while os.path.lexists(target):
-            target = os.path.join(folder, f"{stem} ({n}){ext}")
-            n += 1
-        shutil.move(path, target)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            target, n = os.path.join(folder, stem + ext), 2
+            while os.path.lexists(target):
+                target = os.path.join(folder, f"{stem} ({n}){ext}")
+                n += 1
+            shutil.move(path, target)
+        except OSError as exc:
+            raise TrashError(f"couldn't move it to {folder}: {exc}") from exc
 
     return trash
+
+
+def trash_with_retries(trash: Callable[[str], None] = move_to_trash, attempts: int = 8, delay: float = 0.25) -> Callable[[str], None]:
+    """`trash` tried again for a moment when it fails: on Windows an antivirus scan or the search indexer can hold
+    a file for an instant. A file that is gone after a failed attempt was already taken (the shell can report an
+    error after doing the move). A lasting failure still raises TrashError."""
+
+    def wrapper(path: str) -> None:
+        for attempt in range(attempts):
+            try:
+                trash(path)
+                return
+            except TrashError:
+                if not os.path.exists(path):
+                    return
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(delay)
+
+    return wrapper
+
+
+def check_pattern_tokens(pattern: str, items: Sequence[Any], values_for: Values) -> None:
+    """A usage error for a %token% no item has a value for (a typo such as %tittle% would silently render as
+    nothing). Skipped when there are no items."""
+    tokens = set(re.findall(r"%(\w+)%", pattern))
+    if not tokens or not items:
+        return
+    known: set[str] = set()
+    for item in items:
+        known |= set(values_for(item))
+    unknown = sorted(tokens - known)
+    if unknown:
+        raise CliError(
+            f"unknown token {', '.join('%' + t + '%' for t in unknown)} in the pattern. Tokens: "
+            + ", ".join(f"%{k}%" for k in sorted(known))
+        )
 
 
 def _same_path(a: str, b: str) -> bool:
@@ -101,6 +152,9 @@ def rename_items(
     ("song.mp3" to "Song.mp3") is a rename. `on_renamed(item, new_path)` lets the app keep its in-memory
     item in step. `companions(old, new)` lists the other files that belong to the item by name (a video's
     poster and subtitles) as (old, new) pairs; they are renamed with it, and never replace an existing file."""
+    if "/" in pattern or "\\" in pattern:
+        raise CliError("a rename pattern cannot contain / or \\ (folders are made by the move command)")
+    check_pattern_tokens(pattern, items, values_for)
     taken: set[str] = set()
     failed = 0
     for index, item in enumerate(items, start=1):
@@ -176,17 +230,19 @@ def move_items(
     items: Sequence[Any], *, root: str, pattern: str, values_for: Values, path_of: ItemPath,
     skip_reason: SkipReason, out: Output, dry_run: bool, copy: bool, ascii_only: bool,
     companions: Callable[[Any], list[Any]] | None = None,
-    trash: Callable[[str], None] = move_to_trash,
+    trash: Callable[[str], None] | None = None,
 ) -> int:
     """Moves (or copies) each item to root/pattern. Returns how many failed. Nothing is overwritten (a taken
     name gets (2)). `companions(planned_move)` lists the PlannedMoves of the other files that belong to the
     item by name (a video's poster and subtitles); they travel with it into the same folders. `trash` is
-    what takes the original after a verified copy across volumes (the Recycle Bin unless the caller says
-    otherwise)."""
+    what takes the original after a verified copy across volumes (the Recycle Bin, with retries, unless the
+    caller says otherwise)."""
+    trash = trash or trash_with_retries()
     if not root:
         raise CliError("no library folder: give --root FOLDER (or set one in the app's Rename / Export / Move window)")
     if not os.path.isdir(root):
         raise CliError(f"the library folder does not exist: {root}")
+    check_pattern_tokens(pattern, items, values_for)
     reasons = [skip_reason(item) for item in items]  # once per item: a caller's rule may be costly
     movable = [item for item, reason in zip(items, reasons) if not reason]
     plans = plan_moves(movable, root, pattern, values_for, path_of, copy=copy, ascii_only=ascii_only)
@@ -204,7 +260,7 @@ def move_items(
             failed += 1
         elif plan.is_noop:
             row["status"] = "unchanged"
-        elif "empty" in plan.warning:  # the planner would call it "untitled"; a batch should not do that silently
+        elif plan.nameless:  # the planner would call it "untitled"; a batch should not do that silently
             row["status"], row["message"] = "skipped", "the pattern gives an empty name for this file"
         else:
             row["new_path"] = plan.new_path
@@ -258,11 +314,21 @@ def add_redact_options(parser: argparse.ArgumentParser) -> None:
 
 
 def read_recipe_file(path: str) -> str:
+    """The text of a recipe file, checked: it must be a JSON object with the keys a saved recipe has. Recipe
+    parsing otherwise turns anything unreadable into the DEFAULT recipe, which would run steps the file never
+    asked for."""
     try:
         with open(path, encoding="utf-8") as handle:
-            return handle.read()
+            text = handle.read()
     except OSError as exc:
         raise CliError(f"cannot read the recipe file: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise CliError(f"the recipe file is not valid JSON ({exc})") from exc
+    if not isinstance(data, dict) or not ({"order", "enabled", "options"} & set(data)):
+        raise CliError("the recipe file is not a recipe (a JSON object with order, enabled and options)")
+    return text
 
 
 def parse_threshold(raw: Any) -> float:
