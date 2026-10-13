@@ -264,6 +264,7 @@ def standard_file_items(
     *,
     open_files: Callable | None = None,
     open_folder: Callable | None = None,
+    include_subfolders: Callable | None = None,
     save: Callable | None = None,
     save_all: Callable | None = None,
     rename_file: Callable | None = None,
@@ -285,13 +286,18 @@ def standard_file_items(
     """The File menu in the fixed group order: open | save | rename |
     settings | remove/clear/delete | Exit.
 
+    "Include Subfolders" is a core, checkable item right under Open Folder: one setting every app honours
+    when it opens or refreshes a folder (the app keeps the value; see gui/folder_options.py).
+
     Core actions (everything up to exit_slot) are always present; a None slot
     shows the action greyed out. Optional ones - import_and_convert,
     save_as, delete_files - are omitted when None (not every app has them).
     The extra_* lists append app-specific items to a group."""
     return _groups(
         [_std("open_files", labels.OPEN_FILES, open_files, keys.OPEN_FILES),
-         _std("open_folder", labels.OPEN_FOLDER, open_folder, keys.OPEN_FOLDER)]
+         _std("open_folder", labels.OPEN_FOLDER, open_folder, keys.OPEN_FOLDER),
+         _std("include_subfolders", labels.INCLUDE_SUBFOLDERS, include_subfolders, checkable=True,
+              tooltip="Also look in the subfolders when opening a folder")]
         + ([_std("import_convert", labels.IMPORT_AND_CONVERT, import_and_convert)] if import_and_convert else [])
         + list(extra_open),
         [_std("save", labels.SAVE, save, keys.SAVE)]

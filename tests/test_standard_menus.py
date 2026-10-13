@@ -98,7 +98,7 @@ def test_label_helpers():
 
 def test_file_menu_mnemonics_are_unique():
     file_labels = [getattr(labels, n) for n in (
-        "OPEN_FILES", "OPEN_FOLDER", "IMPORT_AND_CONVERT", "SAVE", "SAVE_AS", "SAVE_ALL", "RENAME_FILE",
+        "OPEN_FILES", "OPEN_FOLDER", "INCLUDE_SUBFOLDERS", "IMPORT_AND_CONVERT", "SAVE", "SAVE_AS", "SAVE_ALL", "RENAME_FILE",
         "UNDO_LAST_RENAME", "RENAME_EXPORT_MOVE", "EXPORT_SETTINGS", "IMPORT_SETTINGS",
         "REMOVE_FROM_LIST", "CLEAR_LIST", "DELETE_FILES", "EXIT")]
     letters = [labels.mnemonic_letter(t) for t in file_labels]
@@ -129,7 +129,7 @@ def test_heading_order_and_keys(built):
 def test_file_menu_group_order_and_optional_items(built):
     _, menus, _ = built
     assert titles(menus["File"]) == [
-        labels.OPEN_FILES, labels.OPEN_FOLDER, labels.SAVE, labels.SAVE_AS, labels.SAVE_ALL,
+        labels.OPEN_FILES, labels.OPEN_FOLDER, labels.INCLUDE_SUBFOLDERS, labels.SAVE, labels.SAVE_AS, labels.SAVE_ALL,
         labels.RENAME_FILE, labels.UNDO_LAST_RENAME, labels.RENAME_EXPORT_MOVE,
         labels.EXPORT_SETTINGS, labels.IMPORT_SETTINGS, labels.REMOVE_FROM_LIST, labels.CLEAR_LIST,
         labels.EXIT]  # no Import and Convert / Delete Files: optional and not given

@@ -23,10 +23,12 @@ independently, in slightly different shapes, at different call sites:
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QProgressDialog, QWidget
+
+from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
 
 T = TypeVar("T")
 
@@ -213,3 +215,39 @@ class ProgressReporter:
 
     def __exit__(self, *_exc) -> None:
         self.close()
+
+
+BUSY_SHOW_AFTER_MS = 300  # a call that finishes sooner never flashes a dialog
+
+
+def run_busy(
+    parent: QWidget,
+    label: str,
+    fn: Callable[..., T],
+    *args: Any,
+    cancellable: bool = False,
+    title: str | None = None,
+    on_cancel: Any = None,
+    **kwargs: Any,
+) -> T:
+    """Runs ONE slow call (a folder walk, an ffprobe, a lookup, a conversion) on a worker thread under an
+    indeterminate progress dialog, and returns its result as if it had been an ordinary blocking call. The
+    window keeps painting, and the dialog (fixed width, like run_with_progress) appears only after
+    BUSY_SHOW_AFTER_MS. An exception in `fn` is re-raised here. With `cancellable`, Cancel abandons the call
+    and `on_cancel` is returned (the work already running is not interrupted: give long ffmpeg-style calls their
+    own cancel event as well).
+
+    `fn` runs OFF the GUI thread: it must not touch widgets. Use run_with_progress() for loops over many items
+    (it can show a real count and cancel between items); use this for the single long call."""
+    dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, 0, parent)
+    dialog.setWindowModality(Qt.WindowModality.WindowModal)
+    dialog.setMinimumDuration(BUSY_SHOW_AFTER_MS)
+    if title:
+        dialog.setWindowTitle(title)
+    dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
+    try:
+        return call_in_background(fn, *args, cancel_signal=dialog.canceled if cancellable else None, **kwargs)
+    except BackgroundCancelled:
+        return on_cancel
+    finally:
+        dialog.close()
