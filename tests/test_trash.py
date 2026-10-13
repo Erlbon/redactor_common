@@ -24,5 +24,6 @@ def test_shell_path_unc_form():
 def test_move_to_trash_passes_the_plain_path(monkeypatch):
     seen = []
     monkeypatch.setitem(sys.modules, "send2trash", types.SimpleNamespace(send2trash=seen.append))
+    monkeypatch.setattr(trash, "trash_is_reliable", lambda p, drive_type=None: True)
     trash.move_to_trash(EXT + "D:/Download" + chr(92) + "a.cbz")
     assert seen == [os.path.normpath("D:/Download/a.cbz")]

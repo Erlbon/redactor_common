@@ -460,6 +460,32 @@ class LookupDialogBase(QDialog):
             except BackgroundCancelled:
                 return None
 
+    # ------------------------------------------------------------------
+    # Public API for subclasses that re-render rows after a view option
+    # changed (e.g. mp3redactor's "include styles" checkbox): no need to
+    # reach into the private row/detail bookkeeping.
+
+    def row_results(self) -> dict[int, LookupResult]:
+        """The current LookupResult per table row (live dict, read-only use)."""
+        return self._row_results
+
+    def current_detail_row(self) -> int:
+        """The row shown in the detail panel, or -1 when none is selected."""
+        return self._current_detail_row
+
+    def refresh_row(self, row: int, result: LookupResult) -> None:
+        """Store `result` as the row's result and redraw its table cells
+        (checkbox, summary). Does not touch the detail panel."""
+        self._row_results[row] = result
+        self._update_row_cells(row, self.items[row], result)
+
+    def rerender_detail(self) -> None:
+        """Redraw the detail panel for the currently selected row from its
+        stored result (no-op when no row is selected)."""
+        row = self._current_detail_row
+        if row >= 0:
+            self._render_detail(row, self._row_results.get(row))
+
     def _update_row_cells(self, row: int, item: object, result: LookupResult) -> None:
         """Refreshes one row's table cells from an already-computed
         LookupResult -- split out of `_process_row()` so picking an

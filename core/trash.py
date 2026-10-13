@@ -15,6 +15,10 @@ kept") instead of an ImportError at startup.
 from __future__ import annotations
 
 import os
+import shutil
+import sys
+import time
+from typing import Callable
 
 
 class TrashError(Exception):
@@ -35,8 +39,115 @@ def shell_path(path: str) -> str:
     return os.path.normpath(path)
 
 
-def move_to_trash(path: str) -> None:
+# Shared settings key (QSettings, General group) for the folder an app
+# moves an original into when the Recycle Bin is not reliable for its
+# drive. Empty/unset = no fallback: move_to_trash() then refuses with a
+# TrashError and the caller keeps the original where it is. Only
+# videoredactor wires a UI for it (its Library safety "quarantine folder");
+# the other apps show the TrashError message and keep the file.
+RECYCLE_FALLBACK_FOLDER_KEY = "recycle_fallback_folder"
+
+_DRIVE_FIXED = 3  # winapi DRIVE_FIXED
+
+
+def _is_unc(path: str) -> bool:
+    p = str(path).replace("/", chr(92))
+    return p.startswith(chr(92) * 2)
+
+
+def _windows_drive_type(path: str) -> int | None:
+    """GetDriveTypeW for the path's root (Windows only; None elsewhere or
+    when the call fails)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        root = os.path.splitdrive(os.path.abspath(path))[0]
+        if not root:
+            return None
+        return int(ctypes.windll.kernel32.GetDriveTypeW(root + chr(92)))  # type: ignore[attr-defined]
+    except Exception:
+        return None
+
+
+def trash_is_reliable(path: str, drive_type: Callable[[str], int | None] | None = None) -> bool:
+    """Whether send2trash can be trusted to put `path` in a Recycle Bin the
+    user can get it back from. False for UNC paths and, on Windows, for
+    any drive that is not a fixed local disk (mapped network drives,
+    removable media: the shell deletes permanently there with no
+    warning). On other platforms a file under a remote mount point
+    (/mnt, /media, /Volumes, /net, /run/user/.../gvfs) is treated as
+    unreliable; everything else is trusted. `drive_type` can be injected
+    for tests (it returns the winapi drive-type number, or None when
+    unknown; unknown counts as unreliable on Windows)."""
     path = shell_path(path)
+    if _is_unc(path):
+        return False
+    if sys.platform == "win32":
+        kind = (drive_type or _windows_drive_type)(path)
+        return kind == _DRIVE_FIXED
+    if drive_type is not None:
+        kind = drive_type(path)
+        if kind is not None:
+            return kind == _DRIVE_FIXED
+    top = os.path.abspath(path).split("/")
+    first = top[1] if len(top) > 1 else ""
+    if first in ("mnt", "media", "Volumes", "net"):
+        return False
+    if "gvfs" in top or "smb-share:" in path:
+        return False
+    return True
+
+
+def move_to_fallback_folder(path: str, folder: str) -> str:
+    """Move `path` into `folder` under a dated subfolder that mirrors the
+    file's drive-relative path (so D:/Video/a.mkv on 2026-10-13 becomes
+    <folder>/2026-10-13/Video/a.mkv). Never overwrites: a name that is
+    taken gets a " (2)", " (3)"... suffix. Returns the new path. Raises
+    TrashError (file untouched) when the folder is not set or the move
+    fails."""
+    path = shell_path(path)
+    folder = str(folder or "").strip()
+    if not folder:
+        raise TrashError("no fallback folder is set, so the original was kept")
+    drive, rel = os.path.splitdrive(os.path.abspath(path))
+    rel = rel.lstrip(chr(92) + "/")
+    if _is_unc(path):
+        # //server/share/dir/file -> share/dir/file
+        parts = [p for p in rel.replace(chr(92), "/").split("/") if p]
+        rel = "/".join(parts[1:]) if len(parts) > 1 else rel
+    dated = os.path.join(folder, time.strftime("%Y-%m-%d"))
+    target = os.path.normpath(os.path.join(dated, rel))
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        stem, ext = os.path.splitext(target)
+        n = 2
+        while os.path.lexists(target):
+            target = f"{stem} ({n}){ext}"
+            n += 1
+        if os.path.lexists(target):
+            raise FileExistsError(target)
+        shutil.move(path, target)
+    except OSError as exc:
+        raise TrashError(f"couldn't move it to the fallback folder {folder}: {exc}") from exc
+    return target
+
+
+def move_to_trash(path: str, fallback_folder: str | None = None) -> None:
+    """Send `path` to the Recycle Bin. On a drive where the bin is not
+    reliable (see trash_is_reliable) the file is NOT touched and a
+    TrashError is raised, unless `fallback_folder` is given: then it is
+    moved there (move_to_fallback_folder) instead."""
+    path = shell_path(path)
+    if not trash_is_reliable(path):
+        if fallback_folder:
+            move_to_fallback_folder(path, fallback_folder)
+            return
+        raise TrashError(
+            "the Recycle Bin is not available on this drive (network share or removable "
+            "disk: the shell would delete permanently), so the original was kept"
+        )
     try:
         from send2trash import send2trash
     except ImportError as exc:
