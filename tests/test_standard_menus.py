@@ -302,6 +302,17 @@ def test_lint_duplicate_shortcut():
     assert any("shortcut Ctrl+O bound more than once" in p for p in problems)
 
 
+def test_lint_rejects_ctrl_alt_shortcuts():
+    from redactor_common.gui.menu_lint import is_ctrl_alt
+
+    assert is_ctrl_alt("Ctrl+Alt+1") and is_ctrl_alt("Alt+Ctrl+Z") and is_ctrl_alt("Ctrl+Shift+Alt+K")
+    assert is_ctrl_alt("Ctrl+K, Ctrl+Alt+S")  # any step of a chord
+    assert not is_ctrl_alt("Ctrl+Shift+1") and not is_ctrl_alt("Alt+F4") and not is_ctrl_alt("F2") and not is_ctrl_alt("")
+    spec = _spec_with_file([MenuAction("a", "&Open Files…", _noop, shortcut="Ctrl+Alt+1")])
+    problems = lint_menu_bar(spec)
+    assert any("Ctrl+Alt is AltGr" in p for p in problems)
+
+
 def test_lint_platform_standard_shortcuts():
     spec = _spec_with_file([
         MenuAction("sa", "Save A&ll", _noop, shortcut="Ctrl+Shift+S"),  # video's old binding

@@ -14,6 +14,8 @@ Checks (every problem is one human-readable string):
 - at most MAX_HEADINGS top-level headings
 - mnemonic letters unique among the headings and within every menu/submenu
 - the same keyboard shortcut is not bound to two different actions
+- no Ctrl+Alt shortcut at all: on a Norwegian (and most European) keyboard the right Alt key is AltGr, which
+  Windows reports as Ctrl+Alt, so such a shortcut fires when typing @ $ { [ ] } or the euro sign
 - platform/family standard shortcuts (Ctrl+Shift+S is Save As, Ctrl+O is not
   Open Folder, F1 is not About, ...)
 - canonical labels: a shared action spelled with a different mnemonic than
@@ -148,6 +150,15 @@ _CANONICAL = {
 _ALT = {labels.plain_label(v): v for n, v in vars(labels).items() if n.endswith("_ALT")}
 
 
+def is_ctrl_alt(sequence: str) -> bool:
+    """True if a shortcut text uses Ctrl and Alt together (in any order, any chord step)."""
+    for step in (sequence or "").split(","):
+        parts = {p.strip().lower() for p in step.split("+") if p.strip()}
+        if "ctrl" in parts and "alt" in parts:
+            return True
+    return False
+
+
 def _walk(nodes: list[_Node], trail: str):
     for n in nodes:
         here = labels.plain_label(n.text)
@@ -209,6 +220,10 @@ def lint_menu_bar(target, *, max_headings: int = MAX_HEADINGS, check_canonical: 
             plain = labels.plain_label(n.text)
             for seq in n.shortcuts:
                 bound.setdefault(seq, []).append(f"{trail} > {plain}")
+                if is_ctrl_alt(seq):
+                    problems.append(
+                        f"{trail} > {plain} is bound to {seq}: Ctrl+Alt is AltGr on European keyboards, "
+                        "use Ctrl+Shift+<key> or a function key")
                 rule = _SHORTCUT_RULES.get(seq)
                 if rule and not rule[0](plain):
                     problems.append(f"{trail} > {plain} is bound to {seq}: {rule[1]}")
