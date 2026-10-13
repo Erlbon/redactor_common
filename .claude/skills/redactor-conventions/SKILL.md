@@ -86,7 +86,21 @@ one of these four repos, check: did this batch of commits bump
 its own commit, before considering the work done -- don't defer it to
 "whenever a release happens next."
 
-## Progress feedback is mandatory for any loop over the library
+## Progress feedback is mandatory for EVERYTHING that can take a moment
+
+**The owner's rule (2026-10-13): everything slow gets a progress dialog, not only loops over books.** A folder
+scan, a load, an ffprobe or ffmpeg call, a conversion, a network lookup, a reload after a save: if it can make the
+window look frozen, it shows a progress dialog, with a working Cancel wherever the work can be stopped.
+
+- A loop over items: `redactor_common.gui.progress.run_with_progress()` (a real count, cancel between items).
+- ONE long call (a folder walk, a probe, a lookup): `redactor_common.gui.progress.run_busy(parent, label, fn, ...)`
+  runs it on a worker thread under an indeterminate dialog; `fn` must not touch widgets.
+- A long external process (ffmpeg): hand it a cancel event wired to the dialog's Cancel and kill it on close.
+- Only exception: a live-typing preview whose per-item work is cheap pure string logic, confirmed by a timing check.
+
+The rest of this section is the original per-book-loop rule, which still applies in full.
+
+## Progress feedback for any loop over the library
 
 **Any code that loops over more than a handful of books -- scanning to
 build a dialog's preview, applying a batch change, checking each one
