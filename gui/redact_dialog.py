@@ -178,6 +178,7 @@ def run_redact(
     header: str = "",
     extra_notes: list[str] | None = None,
     env: Any = None,
+    on_cancel: Callable[[], None] | None = None,
 ) -> RedactReport | None:
     """Run `recipe` on `items` under a cancellable progress dialog (one
     label per file), then show the results dialog. Returns the report,
@@ -186,7 +187,10 @@ def run_redact(
 
     `header` / `extra_notes` go to the results dialog (see
     RedactResultsDialog). `env` is handed to every enabled step's
-    prepare(items, env) once, before the first file (Step.prepare)."""
+    prepare(items, env) once, before the first file (Step.prepare).
+    `on_cancel` runs as soon as Cancel is clicked (see
+    run_with_progress), so a step's long external process can be
+    stopped mid-file."""
     items = list(items)
     if not items:
         return None
@@ -213,6 +217,7 @@ def run_redact(
         threshold=1,
         cancellable=True,
         label_for=lambda item: f"{title}: {_safe_describe(describe, item)}",
+        on_cancel=on_cancel,
     )
     report.duration = time.monotonic() - started
     if not finished:

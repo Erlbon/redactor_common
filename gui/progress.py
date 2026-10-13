@@ -90,6 +90,7 @@ def run_with_progress(
     cancellable: bool = True,
     update_every: int = 1,
     label_for: Callable[[T], str] | None = None,
+    on_cancel: Callable[[], None] | None = None,
 ) -> bool:
     """Runs `step(item, index)` for each item in `items`, showing a
     QProgressDialog only if len(items) >= threshold (items is consumed
@@ -112,11 +113,19 @@ def run_with_progress(
     follows it). Without this, epub and video had each independently
     hand-rolled their own near-identical copy of this whole function
     just to get per-item filenames in the dialog.
+
+    `on_cancel`: runs the moment Cancel is clicked (the dialog's
+    `canceled` signal), before the current item has finished -- a step
+    that runs a long external process (ffmpeg) in the background can
+    hand its cancel event's `set` here so Cancel stops that process
+    instead of only skipping the items not yet started.
     """
     items = list(items)
     dialog = None
     if len(items) >= threshold:
         dialog = _make_dialog(parent, label, len(items), cancellable)
+        if cancellable and on_cancel is not None:
+            dialog.canceled.connect(on_cancel)
 
     try:
         for index, item in enumerate(items):
