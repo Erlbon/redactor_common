@@ -58,6 +58,15 @@ def _elide_label(text: str, max_length: int = _MAX_LABEL_LENGTH) -> str:
     return text[: max_length - 1].rstrip() + "…"
 
 
+def _close_quietly(dialog: QProgressDialog) -> None:
+    """Closes `dialog` WITHOUT emitting `canceled`: QProgressDialog emits it on every close, so a hook connected
+    to it (a worker's cancel event, an on_cancel callback) would otherwise fire on a normal, finished run."""
+    block = getattr(dialog, "blockSignals", None)
+    if block is not None:
+        block(True)
+    dialog.close()
+
+
 def _make_dialog(
     parent: QWidget, label: str, total: int, cancellable: bool, title: str | None = None
 ) -> QProgressDialog:
@@ -142,7 +151,7 @@ def run_with_progress(
         # Also on an exception from step(): a window-modal dialog left
         # open would block the whole window behind the crash message.
         if dialog is not None:
-            dialog.close()
+            _close_quietly(dialog)
 
 
 class ProgressReporter:
@@ -216,7 +225,7 @@ class ProgressReporter:
     def close(self) -> None:
         if self._dialog is not None:
             self._dialog.setValue(self.total)
-            self._dialog.close()
+            _close_quietly(self._dialog)
             self._dialog = None
 
     def __enter__(self) -> "ProgressReporter":
@@ -259,4 +268,4 @@ def run_busy(
     except BackgroundCancelled:
         return on_cancel
     finally:
-        dialog.close()
+        _close_quietly(dialog)

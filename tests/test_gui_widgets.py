@@ -273,9 +273,12 @@ def test_progress_reporter_dialog_fixed_width_and_cancel():
         reporter.set_label("x" * 500)
         assert len(dialog.labelText()) <= 70
         reporter.connect_cancel(lambda: cancelled.append(True))
-        dialog.cancel()
+        from PyQt6.QtWidgets import QPushButton
+
+        dialog.findChild(QPushButton).click()  # the user's click on Cancel (closing a finished run is NOT a cancel)
         assert reporter.should_cancel() is True
-    assert cancelled == [True]
+        assert cancelled == [True]
+    assert cancelled == [True]  # and the normal close on exit did not fire it a second time
     assert reporter.dialog is None  # closed on exit
 
 

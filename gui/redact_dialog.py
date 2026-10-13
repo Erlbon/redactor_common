@@ -59,6 +59,7 @@ from redactor_common.core.pipeline import (
     ordered_keys,
     run_recipe_on_item,
 )
+from redactor_common.gui.background_call import call_in_background
 from redactor_common.gui.menu_builder import MenuAction
 from redactor_common.gui.progress import run_with_progress
 from redactor_common.gui.standard_shortcuts import REDACT
@@ -179,6 +180,7 @@ def run_redact(
     extra_notes: list[str] | None = None,
     env: Any = None,
     on_cancel: Callable[[], None] | None = None,
+    threaded: bool = True,
 ) -> RedactReport | None:
     """Run `recipe` on `items` under a cancellable progress dialog (one
     label per file), then show the results dialog. Returns the report,
@@ -190,7 +192,19 @@ def run_redact(
     prepare(items, env) once, before the first file (Step.prepare).
     `on_cancel` runs as soon as Cancel is clicked (see
     run_with_progress), so a step's long external process can be
-    stopped mid-file."""
+    stopped mid-file.
+
+    `threaded` (default on): each file's whole recipe (make_context, every
+    step, finalize, the after-save steps) runs on a worker thread while the
+    GUI thread keeps painting and the dialog's Cancel stays clickable, so one
+    slow file (a big save, a conversion, an ffmpeg call, a network lookup)
+    never freezes the window. The item is always waited for, never abandoned
+    mid-write; Cancel stops BETWEEN files, or sooner through `on_cancel`.
+    Consequences for the app: steps and contexts must not touch widgets, and
+    a step helper that hands slow calls to the GUI thread (call_in_background
+    passed as an env 'background'/'net' hook) must be left at its direct
+    default, because that helper only works ON the GUI thread. Pass
+    threaded=False for the old one-file-at-a-time-on-the-GUI-thread run."""
     items = list(items)
     if not items:
         return None
@@ -202,12 +216,13 @@ def run_redact(
     report.run_notes = run.notes
 
     def do_one(item: Any, _index: int) -> None:
-        report.entries.append(
-            run_recipe_on_item(
-                item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label,
-                run=run,
-            )
-        )
+        args = (item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label)
+        if threaded:
+            # No cancel_signal: Cancel must never abandon a file that is being written.
+            entry = call_in_background(run_recipe_on_item, *args, run=run)
+        else:
+            entry = run_recipe_on_item(*args, run=run)
+        report.entries.append(entry)
 
     finished = run_with_progress(
         parent,

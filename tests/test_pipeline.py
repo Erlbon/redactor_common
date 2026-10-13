@@ -485,3 +485,102 @@ def test_recipe_editor_smoke(qapp):
     back = dlg.recipe()
     assert back.order == ["fix", "noop", "guess"] and back.enabled["noop"]
     assert back.options["fix"] == {"level": 2} and back.confidence_threshold == 0.9
+
+
+def test_run_redact_runs_each_file_off_the_gui_thread_and_keeps_the_gui_alive(qapp):
+    import threading
+
+    from PyQt6.QtCore import QTimer
+
+    from redactor_common.gui.redact_dialog import run_redact
+
+    main = threading.get_ident()
+    seen = []
+    ticks = []
+
+    class Slow(Step):
+        key = "slow"
+        label = "Slow"
+
+        def run(self, ctx):
+            seen.append(threading.get_ident())
+            import time
+
+            time.sleep(0.35)  # a slow file: the GUI thread must keep running its timers meanwhile
+            return StepResult.applied("done")
+
+    timer = QTimer()
+    timer.timeout.connect(lambda: ticks.append(1))
+    timer.start(20)
+    steps = [Slow()]
+    report = run_redact(None, ["a", "b"], Recipe.default_for(steps), steps, Ctx, show_results=False)
+    timer.stop()
+    assert len(report.entries) == 2 and not report.cancelled
+    assert seen and all(t != main for t in seen)
+    assert len(ticks) >= 5  # the event loop ran while the files were being processed
+
+
+def test_run_redact_threaded_false_keeps_the_old_gui_thread_run(qapp):
+    import threading
+
+    from redactor_common.gui.redact_dialog import run_redact
+
+    seen = []
+
+    class Here(Step):
+        key = "here"
+        label = "Here"
+
+        def run(self, ctx):
+            seen.append(threading.get_ident())
+            return StepResult.applied("ok")
+
+    steps = [Here()]
+    run_redact(None, ["a"], Recipe.default_for(steps), steps, Ctx, show_results=False, threaded=False)
+    assert seen == [threading.get_ident()]
+
+
+def test_run_redact_threaded_reports_a_step_that_raises_without_losing_the_other_files(qapp):
+    from redactor_common.gui.redact_dialog import run_redact
+
+    steps = [Fix(), Boom()]
+    report = run_redact(None, ["a", "b", "c"], Recipe.default_for(steps), steps, Ctx, show_results=False)
+    assert len(report.entries) == 3 and not report.cancelled
+
+
+def test_run_redact_cancel_between_files_waits_for_the_file_in_hand(qapp):
+    from redactor_common.gui.redact_dialog import run_redact
+
+    done = []
+    state = {"cancel": None}
+
+    class Mark(Step):
+        key = "mark"
+        label = "Mark"
+
+        def run(self, ctx):
+            done.append(ctx.item)
+            return StepResult.applied("x")
+
+    cancelled_after_first = []
+
+    def cancel_hook():
+        cancelled_after_first.append(1)
+
+    steps = [Mark()]
+    report = run_redact(None, ["a", "b"], Recipe.default_for(steps), steps, Ctx, show_results=False, on_cancel=cancel_hook)
+    assert done == ["a", "b"] and report.entries and not cancelled_after_first  # no Cancel pressed: both ran
+
+
+def test_on_cancel_does_not_fire_on_a_normal_finish(qapp):
+    from PyQt6.QtWidgets import QWidget
+
+    from redactor_common.gui.progress import ProgressReporter, run_with_progress
+
+    fired = []
+    parent = QWidget()
+    assert run_with_progress(parent, [1, 2, 3], lambda item, i: None, "Working...", threshold=1, on_cancel=lambda: fired.append("rwp"))
+    with ProgressReporter(parent, 3, "Working...", threshold=1) as reporter:
+        reporter.connect_cancel(lambda: fired.append("reporter"))
+        reporter.set_value(3)
+    assert fired == []  # QProgressDialog emits canceled on close; a finished run is not a cancel
