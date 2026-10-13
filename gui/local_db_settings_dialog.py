@@ -32,7 +32,6 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -45,6 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.local_db import LocalDatabaseError
+from redactor_common.gui.progress import run_busy
 
 
 class LocalDatabaseSettingsDialog(QDialog):
@@ -114,19 +114,21 @@ class LocalDatabaseSettingsDialog(QDialog):
         if path:
             self.path_edit.setText(path)
 
-    def check_result(self) -> tuple[bool, str]:
-        """(ok, message) for the current path -- what Check File shows."""
+    def check_result(self, path: str | None = None) -> tuple[bool, str]:
+        """(ok, message) for `path` (default: the path now typed) -- what Check File shows. The check itself
+        runs off the GUI thread from _run_check(), so it only reads `path`, never a widget."""
+        if path is None:
+            path = self.path_edit.text()
         try:
-            return True, self._check(self.path_edit.text().strip())
+            return True, self._check(path.strip())
         except self._error_types as exc:
             return False, str(exc)
 
     def _run_check(self) -> None:
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            ok, message = self.check_result()
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Opening a big database file can take a while (a 5 GB SQLite file, a network share): run it under a
+        # progress dialog on a worker thread, not on the GUI thread. The `check` callable must not touch widgets.
+        path = self.path_edit.text()
+        ok, message = run_busy(self, "Checking the database...", self.check_result, path, title="Check File")
         (QMessageBox.information if ok else QMessageBox.warning)(self, "Check File", message)
 
     def accept(self) -> None:
