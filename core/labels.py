@@ -35,7 +35,7 @@ MENU_HELP = "&Help"
 # --- File ---------------------------------------------------------------------
 OPEN_FILES = "&Open Files…"
 OPEN_FOLDER = "Open &Folder…"
-INCLUDE_SUBFOLDERS = "Include Su&bfolders"
+INCLUDE_SUBFOLDERS = "I&nclude Subfolders"
 IMPORT_AND_CONVERT = "Import and Con&vert…"
 SAVE = "&Save"
 SAVE_AS = "Save &As…"

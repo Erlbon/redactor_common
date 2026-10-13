@@ -21,7 +21,7 @@ def test_include_subfolders_is_a_core_checkable_item_under_open_folder():
     keys = [getattr(i, "key", None) for i in items]
     assert keys[:3] == ["open_files", "open_folder", "include_subfolders"]
     item = items[2]
-    assert item.checkable and item.enabled and item.text == "Include Su&bfolders"
+    assert item.checkable and item.enabled and item.text == "I&nclude Subfolders"
     greyed = standard_file_items()[2]  # an app that has not wired it yet: present but disabled
     assert greyed.key == "include_subfolders" and not greyed.enabled
 
