@@ -25,7 +25,7 @@ def test_show_media_preview_accepts_a_pathlib_path(tmp_path, monkeypatch):
     seen = {}
 
     class _Stub:
-        def __init__(self, path, video=False, parent=None):
+        def __init__(self, path, video=False, parent=None, autoplay=False):
             seen["path"] = path
 
         def show(self):

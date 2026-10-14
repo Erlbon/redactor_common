@@ -63,7 +63,7 @@ def multimedia_available() -> bool:
 
 
 class MediaPreviewDialog(QDialog):
-    def __init__(self, path: str, video: bool = False, parent=None) -> None:
+    def __init__(self, path: str, video: bool = False, parent=None, autoplay: bool = False) -> None:
         super().__init__(parent)
         from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
@@ -71,7 +71,7 @@ class MediaPreviewDialog(QDialog):
         self._path = path
         self._video = video
         self._scrubbing = False
-        self.setWindowTitle(f"Preview - {os.path.basename(path)}")
+        self.setWindowTitle(f"Player - {os.path.basename(path)}")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.resize(820, 560) if video else self.resize(520, 190)
@@ -146,6 +146,8 @@ class MediaPreviewDialog(QDialog):
         self.player.mediaStatusChanged.connect(self._on_media_status)
 
         self.player.setSource(QUrl.fromLocalFile(path))
+        if autoplay:
+            self.player.play()
 
     # --- transport -------------------------------------------------------------------------------
 
@@ -253,7 +255,7 @@ class MediaPreviewDialog(QDialog):
 _open_windows: list[MediaPreviewDialog] = []
 
 
-def show_media_preview(parent, path: str, video: bool = False) -> MediaPreviewDialog | None:
+def show_media_preview(parent, path: str, video: bool = False, autoplay: bool = True) -> MediaPreviewDialog | None:
     """Open the preview window for `path` (not modal; kept alive until closed).
     Returns it, or None after telling the user why not (missing file, no QtMultimedia)."""
     path = os.fspath(path)  # callers hand over str or pathlib.Path; QUrl.fromLocalFile() takes only str
@@ -263,7 +265,7 @@ def show_media_preview(parent, path: str, video: bool = False) -> MediaPreviewDi
     if not multimedia_available():
         QMessageBox.information(parent, "Preview", "This build has no media playback support (QtMultimedia).")
         return None
-    dialog = MediaPreviewDialog(path, video=video, parent=parent)
+    dialog = MediaPreviewDialog(path, video=video, parent=parent, autoplay=autoplay)
     _open_windows.append(dialog)
     dialog.destroyed.connect(lambda *_: _open_windows.remove(dialog) if dialog in _open_windows else None)
     dialog.show()
