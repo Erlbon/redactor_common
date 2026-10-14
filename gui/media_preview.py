@@ -67,6 +67,7 @@ class MediaPreviewDialog(QDialog):
         super().__init__(parent)
         from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+        path = os.fspath(path)
         self._path = path
         self._video = video
         self._scrubbing = False
@@ -255,6 +256,7 @@ _open_windows: list[MediaPreviewDialog] = []
 def show_media_preview(parent, path: str, video: bool = False) -> MediaPreviewDialog | None:
     """Open the preview window for `path` (not modal; kept alive until closed).
     Returns it, or None after telling the user why not (missing file, no QtMultimedia)."""
+    path = os.fspath(path)  # callers hand over str or pathlib.Path; QUrl.fromLocalFile() takes only str
     if not os.path.isfile(path):
         QMessageBox.information(parent, "Preview", f"The file no longer exists:\n{path}")
         return None

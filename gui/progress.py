@@ -64,6 +64,13 @@ def _close_quietly(dialog: QProgressDialog) -> None:
     block = getattr(dialog, "blockSignals", None)
     if block is not None:
         block(True)
+    # reset() also stops the dialog's own show-after-minimumDuration timer. Without it, work that ends after
+    # the dialog was due (about 300 ms) but before it was actually shown leaves that timer running: it shows
+    # the dialog AFTER the work is done and nothing ever closes it (a "Scanning for MP3 files..." box stuck
+    # on screen for good, 2026-10-14).
+    reset = getattr(dialog, "reset", None)
+    if reset is not None:
+        reset()
     dialog.close()
 
 
