@@ -25,6 +25,11 @@ class TrashError(Exception):
     pass
 
 
+class TrashUnavailable(TrashError):
+    """The Recycle Bin cannot be used for this file at all (a drive where it is not reliable, send2trash not
+    installed): trying again would only fail the same way, so trash_with_retries() does not."""
+
+
 def shell_path(path: str) -> str:
     """The plain form of a path the Windows shell accepts: no extended-length
     prefix and one kind of slash. send2trash fails a path like
@@ -144,14 +149,14 @@ def move_to_trash(path: str, fallback_folder: str | None = None) -> None:
         if fallback_folder:
             move_to_fallback_folder(path, fallback_folder)
             return
-        raise TrashError(
+        raise TrashUnavailable(
             "the Recycle Bin is not available on this drive (network share or removable "
             "disk: the shell would delete permanently), so the original was kept"
         )
     try:
         from send2trash import send2trash
     except ImportError as exc:
-        raise TrashError(
+        raise TrashUnavailable(
             "the 'send2trash' package isn't installed (pip install send2trash), "
             "so the original was kept"
         ) from exc
@@ -159,3 +164,62 @@ def move_to_trash(path: str, fallback_folder: str | None = None) -> None:
         send2trash(str(path))
     except OSError as exc:
         raise TrashError(f"couldn't move it to the Recycle Bin: {exc}") from exc
+
+
+# --- retrying -----------------------------------------------------------------------------------------------
+#
+# On Windows an antivirus scan, the search indexer or the app's own background cover/thumbnail scan can hold a
+# file open for an instant, which fails the move to the Recycle Bin. Promoted 2026-10-14 from
+# cli/commands.trash_with_retries (still importable from there) and cbzredactor's _trash_retrying.
+#
+# How a caller uses it:
+#   - instead of move_to_trash(path):      move_to_trash_retrying(path)
+#   - where a trash callable is passed on:  execute_move(..., trash=trash_with_retries())
+#                                           commit_in_place(..., trash=trash_with_retries())
+#   - around another trash function:        trash_with_retries(trash_to(folder))
+
+DEFAULT_TRASH_ATTEMPTS = 8
+DEFAULT_TRASH_RETRY_DELAY = 0.25  # seconds; 8 attempts = under two seconds of waiting
+
+
+def trash_with_retries(
+    trash: Callable[[str], None] | None = None,
+    attempts: int = DEFAULT_TRASH_ATTEMPTS,
+    delay: float = DEFAULT_TRASH_RETRY_DELAY,
+    sleep: Callable[[float], None] | None = None,
+) -> Callable[[str], None]:
+    """`trash` (default: move_to_trash, looked up when called, so a test's monkeypatch of this module's
+    move_to_trash applies) wrapped to be tried again for a moment when it fails with a TrashError. The path is
+    given to it in its plain shell form (shell_path). A file that is gone after a failed attempt was already
+    taken (the shell can report an error after doing the move): that counts as done. TrashUnavailable (the
+    bin can't be used here at all) is raised at once; any other lasting failure raises the last TrashError.
+    `sleep` is injectable for tests (default: time.sleep, looked up when called)."""
+    attempts = max(1, int(attempts))
+
+    def wrapper(path: str) -> None:
+        plain = shell_path(path)
+        for attempt in range(attempts):
+            try:
+                (trash or move_to_trash)(plain)
+                return
+            except TrashUnavailable:
+                raise
+            except TrashError:
+                if not os.path.lexists(plain):
+                    return
+                if attempt == attempts - 1:
+                    raise
+                (sleep or time.sleep)(delay)
+
+    return wrapper
+
+
+def move_to_trash_retrying(
+    path: str,
+    fallback_folder: str | None = None,
+    attempts: int = DEFAULT_TRASH_ATTEMPTS,
+    delay: float = DEFAULT_TRASH_RETRY_DELAY,
+) -> None:
+    """move_to_trash(path, fallback_folder) with trash_with_retries()'s retries: the drop-in for a direct
+    move_to_trash() call on a file the app itself may still be reading."""
+    trash_with_retries(lambda p: move_to_trash(p, fallback_folder), attempts=attempts, delay=delay)(path)

@@ -16,17 +16,38 @@ consuming project keeps its own <Source>LookupError subclass and its
 own parsing. What's shared here is purely mechanical: making one HTTP
 GET, and turning whatever can go wrong into the exception type the
 caller already wanted to raise anyway.
+
+Wave 1 of the 2026-10 consolidation added the rest of what the apps
+still copied:
+  - Throttle: one minimum gap between requests, thread-safe, with an
+    injectable clock/sleep (MusicBrainz, Discogs, AcoustID, AniList/
+    MangaUpdates each had a copy).
+  - throttled(): wraps a fetch so every call waits on a Throttle first.
+  - fetch_json()/fetch_bytes() `retry_429=(1.0, 2.0)`: retry an HTTP 429
+    after each delay before giving up (epubredactor's Google Books and
+    Open Library `_fetch_with_retry` twins), and `status_errors`: raise a
+    specific exception class for a status code (Discogs' and GCD's
+    RateLimited/Auth errors), so a caller can tell "slow down" or "bad
+    login" from any other failure without its own wrapper.
+  - make_default_fetch(opener=..., max_bytes=...): a custom urllib
+    opener (Discogs' redirect handler that never carries the token to
+    another host) and a per-source response-size cap.
+  - redact_url()/redact_text(): no error message ever carries a URL's
+    query string (where API keys travel) or a value the caller names.
 """
 
 from __future__ import annotations
 
 import http.client
 import json
+import re
 import socket
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Callable, Mapping, Optional, Type, Union
+from typing import Callable, Iterable, Mapping, Optional, Sequence, Type, Union
 
 DEFAULT_TIMEOUT = 8.0
 # Bigger than any cover image or metadata JSON; stops a misbehaving
@@ -50,10 +71,107 @@ class LookupError(Exception):
     without also catching every other source's errors by accident."""
 
 
-def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT) -> FetchFn:
+# -- keeping secrets out of messages -------------------------------------------
+
+# A URL's query string (and fragment), up to the next whitespace or quote
+# -- where API keys travel (?api_key=..., &client=..., &token=...). Any
+# scheme, since the "only http and https" refusal names the other ones.
+_URL_QUERY_RE = re.compile(r"""([a-z][a-z0-9+.-]*://[^\s?#'"<>]*)[?#][^\s'"<>]*""", re.IGNORECASE)
+REDACTED = "***"
+
+
+def redact_url(url: str) -> str:
+    """`url` without its query string or fragment ("...?***"), for a
+    message or a log line: the query is where most APIs take the key."""
+    return _URL_QUERY_RE.sub(lambda m: f"{m.group(1)}?{REDACTED}", url or "")
+
+
+def redact_text(text: object, secrets: Iterable[str] = ()) -> str:
+    """str(text) with every URL query string and every non-empty value in
+    `secrets` (a token, a password) replaced by ***. Used for every error
+    message this module builds, so an exception text that echoes the
+    request URL (urllib's "unknown url type: '...?key=...'") is safe to
+    show in a dialog or write to a crash log."""
+    result = redact_url(str(text))
+    for secret in secrets:
+        if secret:
+            result = result.replace(secret, REDACTED)
+    return result
+
+
+# -- pacing --------------------------------------------------------------------
+
+class Throttle:
+    """One minimum gap between requests, whichever thread makes them.
+
+    wait() sleeps until `interval` seconds have passed since the previous
+    wait() returned; the first call never waits. Thread-safe: concurrent
+    callers queue on one lock, so a process-wide Throttle shared by every
+    request to a service keeps that service's pace even with a worker
+    thread and the GUI both asking. `clock` and `sleep` are injectable so
+    tests never really wait.
+
+        _throttle = Throttle(1.1)   # MusicBrainz: at most ~1 request/second
+        _throttle.wait()
+    """
+
+    def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep):
+        self.interval = float(interval)
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._last: Optional[float] = None
+
+    def __repr__(self) -> str:
+        return f"Throttle({self.interval!r})"
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self._clock()
+            if self._last is not None:
+                delay = self.interval - (now - self._last)
+                if delay > 0:
+                    self._sleep(delay)
+                    now = self._clock()
+            self._last = now
+
+    def reset(self) -> None:
+        """Forget the previous request, so the next wait() returns at once."""
+        with self._lock:
+            self._last = None
+
+
+def throttled(fetch: FetchFn, throttle: Throttle) -> FetchFn:
+    """A fetch that waits on `throttle` before every call to `fetch` (what
+    mp3redactor's MusicBrainz `_default_fetch` did by hand)."""
+
+    def _fetch(url: RequestLike) -> bytes:
+        throttle.wait()
+        return fetch(url)
+
+    return _fetch
+
+
+# -- the default fetch ---------------------------------------------------------
+
+def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT,
+                       opener=None, max_bytes: Optional[int] = None) -> FetchFn:
     """Returns a fetch(url) -> bytes callable using a fixed User-Agent.
     The request-building mechanics are identical across sources; only
-    the User-Agent string needs to vary (and, for some APIs, must)."""
+    the User-Agent string needs to vary (and, for some APIs, must).
+
+    `opener`: an object with urllib's OpenerDirector.open(request,
+    timeout=) API, e.g. urllib.request.build_opener(SomeRedirectHandler)
+    (Discogs: never carry the token to another host on a redirect).
+    None uses urllib.request.urlopen.
+    `max_bytes`: the largest response accepted (default
+    MAX_RESPONSE_BYTES); a bigger one raises OSError("the response was
+    too large") instead of being read into memory.
+
+    Only http and https URLs are fetched (ValueError otherwise; the
+    message never contains the URL's query string)."""
+    limit = MAX_RESPONSE_BYTES if max_bytes is None else int(max_bytes)
 
     def _fetch(url: RequestLike) -> bytes:
         if isinstance(url, urllib.request.Request):
@@ -65,10 +183,14 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT) -> Fet
         # urlopen would also follow file: and ftp: URLs; a cover URL taken
         # from an API response must never be able to read a local file.
         if urllib.parse.urlsplit(request.full_url).scheme.lower() not in _ALLOWED_SCHEMES:
-            raise ValueError(f"Only http and https URLs are allowed: {request.full_url}")
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = response.read(MAX_RESPONSE_BYTES + 1)
-        if len(data) > MAX_RESPONSE_BYTES:
+            raise ValueError(f"Only http and https URLs are allowed: {redact_url(request.full_url)}")
+        if opener is not None:
+            response_cm = opener.open(request, timeout=timeout)
+        else:
+            response_cm = urllib.request.urlopen(request, timeout=timeout)
+        with response_cm as response:
+            data = response.read(limit + 1)
+        if len(data) > limit:
             raise OSError("the response was too large")
         return data
 
@@ -96,6 +218,38 @@ def build_request(
     )
 
 
+def _fetch_with_retry(url: RequestLike, fetch: FetchFn, retry_429: Sequence[float],
+                      sleep: Callable[[float], None]) -> bytes:
+    """fetch(url), retrying an HTTP 429 once after each delay in
+    `retry_429`; the last 429 (or any other error) propagates unchanged.
+    A 429 is usually a short-lived limit, not a real failure."""
+    remaining = list(retry_429 or ())
+    while True:
+        try:
+            return fetch(url)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and remaining:
+                sleep(remaining.pop(0))
+                continue
+            raise
+
+
+def _status_error(
+    exc: urllib.error.HTTPError,
+    default_cls: Type[Exception],
+    default_message: str,
+    status_messages: Mapping[int, str] | None,
+    status_errors: Mapping[int, Type[Exception]] | None,
+    secrets: Iterable[str],
+) -> Exception:
+    """The exception to raise for an HTTP error: the class from
+    `status_errors` for this code (else `default_cls`), with the message
+    from `status_messages` (else `default_message`), redacted."""
+    cls = (status_errors or {}).get(exc.code, default_cls)
+    message = (status_messages or {}).get(exc.code, default_message)
+    return cls(redact_text(message, secrets))
+
+
 def fetch_json(
     url: RequestLike,
     fetch: FetchFn,
@@ -103,6 +257,10 @@ def fetch_json(
     source_name: str = "the lookup service",
     ignore_404: bool = False,
     status_messages: Mapping[int, str] | None = None,
+    status_errors: Mapping[int, Type[Exception]] | None = None,
+    retry_429: Sequence[float] = (),
+    sleep: Callable[[float], None] = time.sleep,
+    secrets: Iterable[str] = (),
 ) -> Optional[dict]:
     """Runs one GET via `fetch`, parses the JSON body, and translates
     every way that can fail into `error_cls` with a friendly message --
@@ -125,17 +283,31 @@ def fetch_json(
     e.g. {401: "TMDB rejected the API key (401 Unauthorized)."}.
     `error_cls` may be any Exception subclass taking a message, so a
     project can keep an existing error type that predates this module.
+
+    `status_errors`: a specific exception class for specific HTTP codes,
+    e.g. {429: DiscogsRateLimited, 401: GcdAuthError}, raised with the
+    `status_messages` text for that code (or the default message), so the
+    caller can catch "slow down" or "bad login" on its own. Applied after
+    any 429 retries are used up.
+
+    `retry_429`: delays in seconds, e.g. (1.0, 2.0): an HTTP 429 is
+    retried after each one in turn before it counts as an error. Default
+    () retries nothing. `sleep` is injectable for tests.
+
+    `secrets`: values (a token, a password) to replace with *** in any
+    message. URL query strings are always redacted from messages.
     """
     try:
-        raw = fetch(url)
+        raw = _fetch_with_retry(url, fetch, retry_429, sleep)
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and ignore_404:
             return None
-        if status_messages and exc.code in status_messages:
-            raise error_cls(status_messages[exc.code]) from exc
-        raise error_cls(f"{source_name} returned an error (HTTP {exc.code}): {exc.reason}") from exc
+        raise _status_error(
+            exc, error_cls, f"{source_name} returned an error (HTTP {exc.code}): {exc.reason}",
+            status_messages, status_errors, secrets,
+        ) from exc
     except _FETCH_ERRORS as exc:
-        raise error_cls(f"Could not reach {source_name}: {exc}") from exc
+        raise error_cls(redact_text(f"Could not reach {source_name}: {exc}", secrets)) from exc
 
     try:
         return json.loads(raw)
@@ -150,21 +322,28 @@ def fetch_bytes(
     what: str = "the file",
     status_messages: Mapping[int, str] | None = None,
     require_data: bool = False,
+    status_errors: Mapping[int, Type[Exception]] | None = None,
+    retry_429: Sequence[float] = (),
+    sleep: Callable[[float], None] = time.sleep,
+    secrets: Iterable[str] = (),
 ) -> bytes:
     """Runs one GET via `fetch` and returns the raw response bytes
     (e.g. a cover image) -- same HTTPError/URLError translation as
     fetch_json(), just without the JSON-parsing step. `what` names the
     thing being downloaded in the error message (e.g. "cover image").
     `status_messages` overrides the message for specific HTTP codes;
-    `require_data` treats an empty response body as a failure too."""
+    `require_data` treats an empty response body as a failure too.
+    `status_errors`, `retry_429`, `sleep` and `secrets` work as in
+    fetch_json()."""
     try:
-        data = fetch(url)
+        data = _fetch_with_retry(url, fetch, retry_429, sleep)
     except urllib.error.HTTPError as exc:
-        if status_messages and exc.code in status_messages:
-            raise error_cls(status_messages[exc.code]) from exc
-        raise error_cls(f"Could not download {what} (HTTP {exc.code}): {exc.reason}") from exc
+        raise _status_error(
+            exc, error_cls, f"Could not download {what} (HTTP {exc.code}): {exc.reason}",
+            status_messages, status_errors, secrets,
+        ) from exc
     except _FETCH_ERRORS as exc:
-        raise error_cls(f"Could not download {what}: {exc}") from exc
+        raise error_cls(redact_text(f"Could not download {what}: {exc}", secrets)) from exc
     if require_data and not data:
         raise error_cls(f"Downloading {what} returned no data.")
     return data

@@ -185,10 +185,17 @@ def _read_fallback(app: str) -> dict:
 def _write_fallback(app: str, values: dict) -> None:
     path = fallback_path(app)
     payload = json.dumps({"note": FALLBACK_NOTE, "secrets": values}, indent=2)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Temp file in the same folder + replace: never a half-written file,
-    # and the 0600 mode is set at creation, before any secret is written.
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        # A folder that can't be created (a file in the way, no permission)
+        # is the same "can't store it" as a failed write, not a raw OSError.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Temp file in the same folder + replace: never a half-written file,
+        # and the 0600 mode is set at creation, before any secret is written.
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    except OSError as exc:
+        raise SecretStoreUnavailable(
+            f"Could not write the fallback secrets file for {app} ({type(exc).__name__})."
+        ) from None
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             if sys.platform != "win32":
@@ -296,6 +303,84 @@ def delete_secret(app: str, name: str) -> None:
     if name in values:
         del values[name]
         _write_fallback(app, values)
+
+
+# -- the "may I use an unencrypted file?" consent ---------------------------
+#
+# Every app asked the same question the same way (mp3/cbz gui/secret_prompts,
+# videoredactor's API Keys dialog) and re-applied the remembered answer at
+# startup in its own settings code. The flow lives here, Qt-free; the
+# question itself is redactor_common.gui.secret_prompts.
+
+def bind_fallback_preference(load: Callable[[], object],
+                             save: Callable[[bool], object]) -> Callable[[], None]:
+    """Startup wiring for the remembered consent. Applies load() now
+    (set_allow_unencrypted_fallback(bool(load())); a load that raises
+    counts as "no") and returns the `remember` callable to hand to
+    save_with_consent()/save_with_fallback_prompt(): it persists a yes via
+    save(True) and switches the process-wide opt-in on. Only a yes is ever
+    remembered -- a "no" is asked again next time.
+
+        remember = secret_store.bind_fallback_preference(
+            lambda: settings.allow_unencrypted_fallback,
+            lambda on: (setattr(settings, "allow_unencrypted_fallback", on), save_settings(settings)))
+    """
+    try:
+        allowed = bool(load())
+    except Exception:
+        allowed = False
+    set_allow_unencrypted_fallback(allowed)
+
+    def remember() -> None:
+        set_allow_unencrypted_fallback(True)
+        save(True)
+
+    return remember
+
+
+def save_with_consent(
+    save: Callable[[Optional[bool]], object],
+    ask: Callable[[], bool],
+    remember: Optional[Callable[[], None]] = None,
+    on_error: Optional[Callable[[SecretStoreUnavailable], None]] = None,
+) -> bool:
+    """Run a save that writes secrets, asking for the unencrypted fallback
+    only when it is needed. Returns True when the save happened.
+
+    1. save(None) -- uses the keyring, or the fallback if already allowed.
+    2. On SecretStoreUnavailable: ask(); a no returns False (the caller
+       keeps its dialog open with what was typed; nothing is lost).
+    3. A yes: remember() (persist the answer; it should also switch the
+       process-wide opt-in on, as bind_fallback_preference's does), then
+       the process-wide opt-in is set anyway, then save(True).
+    4. If that second save fails too (the fallback file can't be written),
+       on_error(exc) is told and False is returned -- it never propagates.
+
+    `save` receives the allow_unencrypted_fallback value to pass on to
+    set_secret() (None = the process-wide setting; True = allowed). A
+    `remember` that raises is reported through on_error like a failed save."""
+    try:
+        save(None)
+        return True
+    except SecretStoreUnavailable:
+        pass
+    if not ask():
+        return False
+    try:
+        if remember is not None:
+            remember()
+    except Exception as exc:  # the consent could not be stored; still don't crash
+        if on_error is not None:
+            on_error(SecretStoreUnavailable(f"Could not remember the choice ({type(exc).__name__})."))
+        return False
+    set_allow_unencrypted_fallback(True)
+    try:
+        save(True)
+    except SecretStoreUnavailable as exc:
+        if on_error is not None:
+            on_error(exc)
+        return False
+    return True
 
 
 def migrate_legacy_secret(app: str, name: str, read_legacy: Callable[[], str],

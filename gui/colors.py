@@ -53,4 +53,9 @@ HIGHLIGHT_TEXT_COLOR = QColor("#000000")
 
 FOCUS_BORDER_COLOR = "#ffb400"
 
+# Text colors for a found / missing indicator (gui/tool_path_row.py's "✓ found" / "✗ missing"), as CSS
+# color strings for a QLabel stylesheet. mp3's values; video had used #2a8f2a / #b02a2a for the same thing.
+FOUND_TEXT_COLOR = "#2e7d32"    # green
+MISSING_TEXT_COLOR = "#c62828"  # red
+
 TABLE_SELECTION_STYLESHEET = f"QTableWidget::item:focus {{ border: 2px solid {FOCUS_BORDER_COLOR}; }}"

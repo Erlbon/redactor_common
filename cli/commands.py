@@ -6,7 +6,8 @@ Redactor app and are written once:
 
   - add_pattern_options(): -p/--pattern, --zero-pad, --ascii, -n/--dry-run
   - rename_items(), move_items(): plan from each item's fields, never overwrite, skip an item the pattern has
-    no name for; finish_run() ends them with the summary and the exit code
+    no name for; finish_run() ends them with the summary and the exit code. Both take on_moved(old, new),
+    called after each file that really changed path (what History/journals follow)
   - add_redact_options(), parse_threshold(), build_recipe(), list_steps(), redact_items(): run the app's
     Redact recipe
   - trash_to(): a trash function that moves originals into a folder instead of the Recycle Bin
@@ -28,7 +29,7 @@ import json
 import os
 import re
 import shutil
-import time
+import time  # noqa: F401 -- tests patch commands.time.sleep for trash_with_retries' waits
 from typing import Any, Callable, Iterable, Sequence
 
 from redactor_common.cli import EXIT_OK, EXIT_PARTIAL, CliError, Output
@@ -36,9 +37,10 @@ from redactor_common.core.move_plan import execute_move, plan_moves
 from redactor_common.core.os_utils import rename_no_clobber
 from redactor_common.core.pipeline import FileStatus, Recipe, Step, run_recipe
 from redactor_common.core.rename_pattern import render_filename, unique_path
-from redactor_common.core.trash import TrashError, move_to_trash
+from redactor_common.core.trash import TrashError, move_to_trash, trash_with_retries  # noqa: F401 (re-exported)
 
 ItemPath = Callable[[Any], str]
+MovedHook = Callable[[str, str], None]  # (old_path, new_path) after a file really moved
 Values = Callable[[Any], dict]
 SkipReason = Callable[[Any], str]
 
@@ -97,24 +99,8 @@ def trash_to(folder: str) -> Callable[[str], None]:
     return trash
 
 
-def trash_with_retries(trash: Callable[[str], None] = move_to_trash, attempts: int = 8, delay: float = 0.25) -> Callable[[str], None]:
-    """`trash` tried again for a moment when it fails: on Windows an antivirus scan or the search indexer can hold
-    a file for an instant. A file that is gone after a failed attempt was already taken (the shell can report an
-    error after doing the move). A lasting failure still raises TrashError."""
-
-    def wrapper(path: str) -> None:
-        for attempt in range(attempts):
-            try:
-                trash(path)
-                return
-            except TrashError:
-                if not os.path.exists(path):
-                    return
-                if attempt == attempts - 1:
-                    raise
-                time.sleep(delay)
-
-    return wrapper
+# trash_with_retries() lives in core/trash.py since 2026-10-14 (the GUI needs it too); it is imported above
+# and stays importable from here: `from redactor_common.cli.commands import trash_with_retries`.
 
 
 def check_pattern_tokens(pattern: str, items: Sequence[Any], values_for: Values) -> None:
@@ -146,12 +132,16 @@ def rename_items(
     out: Output, dry_run: bool, ascii_only: bool,
     on_renamed: Callable[[Any, str], None] | None = None,
     companions: Callable[[str, str], list[tuple[str, str]]] | None = None,
+    on_moved: MovedHook | None = None,
 ) -> int:
     """Renames each item in its own folder to `pattern` rendered from its values. Returns how many failed.
     A name that is taken gets (2), (3)...; nothing is overwritten. A change of letter case alone
     ("song.mp3" to "Song.mp3") is a rename. `on_renamed(item, new_path)` lets the app keep its in-memory
-    item in step. `companions(old, new)` lists the other files that belong to the item by name (a video's
-    poster and subtitles) as (old, new) pairs; they are renamed with it, and never replace an existing file."""
+    item in step; `on_moved(old_path, new_path)` (the same hook move_items() takes) is for what follows a
+    file by its path, such as History entries. Both are called right after each real rename, before the
+    item's row is recorded; never for a dry run, a skip or a failure, and not for companions.
+    `companions(old, new)` lists the other files that belong to the item by name (a video's poster and
+    subtitles) as (old, new) pairs; they are renamed with it, and never replace an existing file."""
     if "/" in pattern or "\\" in pattern:
         raise CliError("a rename pattern cannot contain / or \\ (folders are made by the move command)")
     check_pattern_tokens(pattern, items, values_for)
@@ -176,13 +166,13 @@ def rename_items(
                 if os.path.abspath(new_path) == os.path.abspath(path):
                     row["status"], row["new_path"] = "unchanged", ""
                 else:
-                    failed += _rename_one(item, path, new_path, row, dry_run, on_renamed, companions)
+                    failed += _rename_one(item, path, new_path, row, dry_run, on_renamed, companions, on_moved)
         out.record(row)
         say(out, row)
     return failed
 
 
-def _rename_one(item, path, new_path, row, dry_run, on_renamed, companions) -> int:
+def _rename_one(item, path, new_path, row, dry_run, on_renamed, companions, on_moved=None) -> int:
     """Renames one file (and its companions) and fills in its row. Returns 1 if the rename failed."""
     extra = companions(path, new_path) if companions else []
     note = f"+{len(extra)} companion file(s)" if extra else ""
@@ -212,6 +202,8 @@ def _rename_one(item, path, new_path, row, dry_run, on_renamed, companions) -> i
         row["message"] = "; ".join(filter(None, [note, *problems]))
     if on_renamed is not None:
         on_renamed(item, new_path)
+    if on_moved is not None:
+        on_moved(path, new_path)
     return 0
 
 
@@ -231,12 +223,16 @@ def move_items(
     skip_reason: SkipReason, out: Output, dry_run: bool, copy: bool, ascii_only: bool,
     companions: Callable[[Any], list[Any]] | None = None,
     trash: Callable[[str], None] | None = None,
+    on_moved: MovedHook | None = None,
 ) -> int:
     """Moves (or copies) each item to root/pattern. Returns how many failed. Nothing is overwritten (a taken
     name gets (2)). `companions(planned_move)` lists the PlannedMoves of the other files that belong to the
     item by name (a video's poster and subtitles); they travel with it into the same folders. `trash` is
     what takes the original after a verified copy across volumes (the Recycle Bin, with retries, unless the
-    caller says otherwise)."""
+    caller says otherwise). `on_moved(old_path, new_path)` (the same hook rename_items() takes) is called
+    right after each item that really moved, before its row is recorded: never for a copy, a dry run, a
+    skip or a failure, nor for a cross-volume move whose original could not be binned (both files exist,
+    so whatever follows the file stays with the original), and not for companions."""
     trash = trash or trash_with_retries()
     if not root:
         raise CliError("no library folder: give --root FOLDER (or set one in the app's Rename / Export / Move window)")
@@ -264,13 +260,13 @@ def move_items(
             row["status"], row["message"] = "skipped", "the pattern gives an empty name for this file"
         else:
             row["new_path"] = plan.new_path
-            failed += _move_one(plan, row, dry_run, copy, companions, trash)
+            failed += _move_one(plan, row, dry_run, copy, companions, trash, on_moved)
         out.record(row)
         say(out, row)
     return failed
 
 
-def _move_one(plan, row, dry_run: bool, copy: bool, companions, trash) -> int:
+def _move_one(plan, row, dry_run: bool, copy: bool, companions, trash, on_moved=None) -> int:
     """Moves (or copies) one planned file and its companions and fills in its row. Returns 1 on failure."""
     extra = companions(plan) if companions else []
     problems = [plan.warning] if plan.warning else []
@@ -295,6 +291,8 @@ def _move_one(plan, row, dry_run: bool, copy: bool, companions, trash) -> int:
         if done.warning:
             problems.append(done.warning)
     row["message"] = "; ".join(filter(None, [*problems, note]))
+    if on_moved is not None and not copy and not getattr(result, "original_kept", False):
+        on_moved(plan.old_path, plan.new_path)
     return 0
 
 
