@@ -355,3 +355,24 @@ def test_too_large_response_becomes_error_cls():
     fetch = make_default_fetch("UA", opener=_FakeOpener(b"x" * 11), max_bytes=10)
     with pytest.raises(_SourceError, match="Could not reach Discogs"):
         fetch_json("https://x/", fetch, _SourceError, source_name="Discogs")
+
+
+def test_unreachable_message_is_the_apps_wording_with_the_detail_and_without_secrets():
+    import urllib.error
+
+    from redactor_common.core import lookup_client as lc
+
+    def down(request):
+        raise urllib.error.URLError("getaddrinfo failed for ?key=SECRET123")
+
+    with pytest.raises(lc.LookupError) as info:
+        lc.fetch_json("https://example.org/x?key=SECRET123", down, source_name="Google Books",
+                      unreachable_message="Could not reach Google Books: {detail} (check your internet connection)",
+                      secrets=["SECRET123"])
+    text = str(info.value)
+    assert text.startswith("Could not reach Google Books:") and text.endswith("(check your internet connection)")
+    assert "SECRET123" not in text
+    with pytest.raises(lc.LookupError, match="Could not reach the lookup service:"):
+        lc.fetch_json("https://example.org/x", down)  # the default wording is unchanged
+    with pytest.raises(lc.LookupError, match="Could not download the cover: .*offline"):
+        lc.fetch_bytes("https://example.org/c", lambda r: (_ for _ in ()).throw(urllib.error.URLError("offline")), what="the cover")

@@ -36,17 +36,21 @@ _TITLE = "No Secure Storage Available"
 _ERROR_TITLE = "Couldn't Save"
 
 
-def fallback_question(noun: str = DEFAULT_NOUN) -> str:
+def fallback_question(noun: str = DEFAULT_NOUN, plural: bool | None = None) -> str:
     """The question's text. `noun` names what is being saved: "key",
-    "key or token", "key or password", "API keys"..."""
+    "key or token", "key or password", "API keys"... `plural` picks "them" for "it"; None guesses from the
+    noun ("API keys" is plural, "key or token" is not)."""
     noun = (noun or DEFAULT_NOUN).strip()
+    if plural is None:
+        plural = noun.lower().endswith("s") and not noun.lower().endswith("ss")
+    it, they, read = ("them", "They", "read them") if plural else ("it", "It", "read it")
     return (
         "This computer has no usable secure credential store (such as Windows "
         f"Credential Manager, macOS Keychain or the Linux Secret Service), so the {noun} "
         "can't be stored safely.\n\n"
-        "It can instead be saved in a plain, UNENCRYPTED file in your user "
-        "profile folder. Anyone who can read your files could read it.\n\n"
-        "Save it in an unencrypted file, and remember that choice?"
+        f"{they} can instead be saved in a plain, UNENCRYPTED file in your user "
+        f"profile folder. Anyone who can read your files could {read}.\n\n"
+        f"Save {it} in an unencrypted file, and remember that choice?"
     )
 
 

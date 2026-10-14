@@ -228,14 +228,17 @@ def _wildcard_matches(argument: str) -> list[str]:
 
 
 def expand_paths(
-    paths: Iterable[str], extensions: Iterable[str], recursive: bool = True
+    paths: Iterable[str], extensions: Iterable[str], recursive: bool = True,
+    skip: "Callable[[str], bool] | None" = None,
 ) -> tuple[list[str], list[str]]:
     """(files, missing). Each argument may be a file (kept whatever its extension: the user named it), a
     folder (every file with one of `extensions` inside it, subfolders too when `recursive`; symlinked and
     junctioned folders inside it are not followed) or a wildcard pattern (its matches are filtered by
     `extensions` like a folder's files; matched folders are searched). An argument that names an existing
     file or folder is always taken literally, so "[" in a real name is not a wildcard. Absolute paths,
-    de-duplicated, in natural order. `missing` lists arguments that matched nothing."""
+    de-duplicated, in natural order. `missing` lists arguments that matched nothing. `skip(name)` (e.g.
+    core.temp_names.is_app_temp_name) drops files found by a folder or wildcard whose bare name it accepts, so
+    an app's own leftovers never become work; a file named on the command line is always kept."""
     wanted = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
     files: dict[str, str] = {}
     missing: list[str] = []
@@ -247,6 +250,10 @@ def expand_paths(
     def wanted_extension(name: str) -> bool:
         return not wanted or os.path.splitext(name)[1].lower() in wanted
 
+    def listed(name: str) -> bool:
+        """A file found by searching (not named): wanted extension and not skipped."""
+        return wanted_extension(name) and not (skip is not None and skip(os.path.basename(name)))
+
     for argument in paths:
         literal = os.path.lexists(argument)
         pattern = not literal and any(c in argument for c in "*?[")
@@ -254,7 +261,7 @@ def expand_paths(
         found = False
         for candidate in candidates:
             if os.path.isfile(candidate):
-                if not pattern or wanted_extension(candidate):  # a file named on purpose is kept
+                if not pattern or listed(candidate):  # a file named on purpose is kept
                     add(candidate)
                     found = True
             elif os.path.isdir(candidate):
@@ -263,12 +270,12 @@ def expand_paths(
                     for root, dirs, names in os.walk(candidate):
                         dirs[:] = sorted((d for d in dirs if not _is_link(os.path.join(root, d))), key=natural_key)
                         for name in names:
-                            if wanted_extension(name):
+                            if listed(name):
                                 add(os.path.join(root, name))
                 else:
                     for name in os.listdir(candidate):
                         full = os.path.join(candidate, name)
-                        if os.path.isfile(full) and wanted_extension(name):
+                        if os.path.isfile(full) and listed(name):
                             add(full)
         if not found:
             missing.append(argument)

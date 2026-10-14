@@ -138,7 +138,8 @@ def run_database_build(
     said no, cancelled, or the build failed (the error was shown).
 
     confirm: question text first ("{name}" = the file's name, "{dest}" =
-        its path); REPLACING_NOTE is appended when `dest` exists.
+        its path); REPLACING_NOTE is appended when `dest` exists, or put
+        where "{replacing}" stands in the text (nothing when `dest` is new).
     before(dest): runs after the user agreed, before the build (save the
         settings, so the sources are remembered even if it is cancelled).
     error_types: shown as a warning besides DumpImportError; anything
@@ -146,8 +147,11 @@ def run_database_build(
     show_summary: the result's describe() (or str()) in an information box."""
     if confirm is not None:
         text = confirm.replace("{name}", os.path.basename(dest)).replace("{dest}", dest)
-        if os.path.exists(dest):
-            text += REPLACING_NOTE
+        note = REPLACING_NOTE if os.path.exists(dest) else ""
+        if "{replacing}" in text:
+            text = text.replace("{replacing}", note)  # the app decides where the note goes
+        else:
+            text += note
         answer = QMessageBox.question(parent, confirm_title, text)
         if answer != QMessageBox.StandardButton.Yes:
             return None
@@ -184,6 +188,7 @@ class LocalDatabaseSettingsDialog(QDialog):
         browse_for_destination: bool = False,
         show_status: bool = False,
         free_space_warning: Optional[tuple[int, str]] = None,
+        space_label_placement: str = "above",
         status_debounce_ms: int = 400,
     ):
         super().__init__(parent)
@@ -224,7 +229,10 @@ class LocalDatabaseSettingsDialog(QDialog):
         if free_space_warning is not None:
             self.space_label = QLabel()
             self.space_label.setWordWrap(True)
-            outer.addWidget(self.space_label)
+            if space_label_placement == "above":
+                outer.addWidget(self.space_label)
+            # "manual": the app puts `space_label` where it wants (inside its own section, via add_section()
+            # or its own layout); the dialog only keeps its text current.
 
         self._actions = QHBoxLayout()
         check_button = QPushButton("Check File")

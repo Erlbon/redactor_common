@@ -242,3 +242,15 @@ def test_prompt_remember_is_optional(boxes):
     save, _ = _save()
     assert sp.save_with_fallback_prompt(None, save) is True
     assert ss.allow_unencrypted_fallback_enabled()
+
+
+def test_the_question_reads_right_for_one_key_and_for_several():
+    from redactor_common.gui.secret_prompts import fallback_question
+
+    one = fallback_question("key or token")
+    assert "Save it in an unencrypted file" in one and "could read it." in one and "It can instead be saved" in one
+    many = fallback_question("API keys")
+    assert "Save them in an unencrypted file" in many and "could read them." in many and "They can instead be saved" in many
+    assert "Save it in" in fallback_question("API keys", plural=False)  # an explicit choice wins
+    assert "Save them in" in fallback_question("passphrase", plural=True)
+    assert "Save it in" in fallback_question("password")  # "ss" is not a plural

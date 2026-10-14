@@ -8,7 +8,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox, QVBoxLayout, QWidget  # noqa: E402
 
 from redactor_common.core.dump_import import DumpImportError, ImportCancelled  # noqa: E402
 from redactor_common.core.local_db import LocalDatabaseError  # noqa: E402
@@ -238,3 +238,26 @@ def test_build_button_still_works(tmp_path):
     dialog = _dialog(tmp_path, build=lambda d: str(tmp_path / "made.db"), build_label="Build…")
     dialog.build_button.click()
     assert dialog.path_edit.text() == str(tmp_path / "made.db")
+
+
+def test_the_free_space_label_can_be_placed_by_the_app(tmp_path):
+    above = _dialog(tmp_path, default_path=str(tmp_path / "x.db"), free_space_warning=(1, "w"))
+    assert above.space_label.parent() is above
+    manual = _dialog(tmp_path, default_path=str(tmp_path / "x.db"), free_space_warning=(1, "w"), space_label_placement="manual")
+    assert manual.space_label is not None and manual.space_label.text().startswith("Free space")  # text kept current
+    holder = QWidget()
+    layout = QVBoxLayout(holder)
+    layout.addWidget(manual.space_label)  # the app's own section
+    assert manual.space_label.parent() is holder
+
+
+def test_the_replacing_note_goes_where_the_app_puts_the_placeholder(tmp_path, boxes):
+    dest = tmp_path / "old.db"
+    dest.write_text("good", encoding="utf-8")
+    boxes["answer"] = QMessageBox.StandardButton.No
+    dialog = _dialog(tmp_path, path=str(dest))
+    dialog.run_build("T", "L", lambda *a: pytest.fail("built"), confirm="Build {name}?{replacing} It takes a while.")
+    assert boxes["question"][0][1] == "Build old.db?" + mod.REPLACING_NOTE + " It takes a while."
+    fresh = _dialog(tmp_path, path=str(tmp_path / "new.db"))
+    fresh.run_build("T", "L", lambda *a: pytest.fail("built"), confirm="Build {name}?{replacing} Go?")
+    assert boxes["question"][1][1] == "Build new.db? Go?"  # nothing is replaced: no note

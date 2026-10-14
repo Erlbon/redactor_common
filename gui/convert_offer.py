@@ -42,6 +42,7 @@ NEVER = "never"
 
 DETAILS_LIMIT = 200  # paths listed under Show Details; the rest is "... and N more"
 DONT_ASK_TEXT = "Don't ask again for this folder"
+DONT_ASK_MANY_TEXT = "Don't ask again for these folders"
 
 
 class Remember(NamedTuple):
@@ -125,9 +126,10 @@ def offer_conversion(
     loaded_count: int,
     kind_label: str,
     target_label: str,
-    remember_key: str | os.PathLike | None = None,
+    remember_key: str | os.PathLike | Sequence[str | os.PathLike] | None = None,
     remember: Remember | tuple[Callable[[str], bool], Callable[[str], None]] | None = None,
     *,
+    text: str | None = None,
     noun: str = "file",
     converter: str = "",
     question: str | None = None,
@@ -152,18 +154,26 @@ def offer_conversion(
     Richer boxes (cbzredactor's Convert Now / Add Unconverted / Skip): `extra_buttons` are (label, result)
     pairs added between the yes and no buttons, `default` is the result whose button is the default, and
     `options` are the caller's own widgets (checkboxes such as "Dry run first") shown under the text; the
-    caller reads them after this returns."""
+    caller reads them after this returns.
+
+    `text` replaces the whole message (an app whose wording does not fit offer_text(): it can list files
+    inline itself). `remember_key` may be one folder or a sequence of folders (several opened at once): the
+    offer is skipped (NEVER) only when ALL of them were declined before, and the checkbox then reads "Don't
+    ask again for these folders" and records every one."""
     if not found:
         return NO
     store = Remember(*remember) if remember is not None else None
-    key = folder_key(remember_key) if remember_key is not None and store is not None else None
-    if key is not None and store.is_declined(key):
+    keys: list[str] = []
+    if remember_key is not None and store is not None:
+        many = remember_key if isinstance(remember_key, (list, tuple, set, frozenset)) else [remember_key]
+        keys = [folder_key(k) for k in many]
+    if keys and all(store.is_declined(k) for k in keys):
         return NEVER
 
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Question)
     box.setWindowTitle(title or f"Convert to {target_label}?")
-    box.setText(offer_text(found, loaded_count, kind_label, target_label, noun, converter, question))
+    box.setText(text if text is not None else offer_text(found, loaded_count, kind_label, target_label, noun, converter, question))
     box.setDetailedText(details_text(found))
 
     results: dict[int, str] = {}
@@ -182,8 +192,8 @@ def offer_conversion(
 
     dont_ask = None
     widgets = list(options)
-    if key is not None:
-        dont_ask = QCheckBox(DONT_ASK_TEXT)
+    if keys:
+        dont_ask = QCheckBox(DONT_ASK_MANY_TEXT if len(keys) > 1 else DONT_ASK_TEXT)
         dont_ask.setObjectName("convert_offer_dont_ask")
         widgets.append(dont_ask)
     if widgets:
@@ -201,7 +211,8 @@ def offer_conversion(
     clicked = box.clickedButton()
     answer = results.get(id(clicked), NO) if clicked is not None else NO
     if dont_ask is not None and dont_ask.isChecked() and answer in (YES, NO):
-        store.decline(key)
+        for key in keys:
+            store.decline(key)
         if answer == NO:
             answer = NEVER
     return answer

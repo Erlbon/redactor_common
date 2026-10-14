@@ -2,6 +2,7 @@
 the spellings each app's own *cli/fields.py and *cli/main.py accepted."""
 
 import json
+import os
 
 import pytest
 
@@ -232,3 +233,22 @@ def test_main_closes_the_output_file_even_when_the_handler_fails(tmp_path):
 def test_build_parser_makes_a_fresh_parser_each_time():
     build_parser, _ = make_main("demo", "1", "Demo", [_add_info])
     assert build_parser() is not build_parser()
+
+
+def test_expand_paths_skip_drops_leftovers_found_by_searching_but_keeps_named_files(tmp_path):
+    from redactor_common.cli import expand_paths
+    from redactor_common.core.temp_names import is_app_temp_name
+
+    (tmp_path / "sub").mkdir()
+    for name in ("a.mkv", "a.redact-orig.mkv", "sub/b.mkv", "sub/b.redact-part.mkv"):
+        (tmp_path / name).write_text("x")
+    files, _ = expand_paths([str(tmp_path)], [".mkv"], skip=is_app_temp_name)
+    assert [os.path.basename(f) for f in files] == ["a.mkv", "b.mkv"]
+    flat, _ = expand_paths([str(tmp_path)], [".mkv"], recursive=False, skip=is_app_temp_name)
+    assert [os.path.basename(f) for f in flat] == ["a.mkv"]
+    wild, _ = expand_paths([str(tmp_path / "*.mkv")], [".mkv"], skip=is_app_temp_name)
+    assert [os.path.basename(f) for f in wild] == ["a.mkv"]
+    named, _ = expand_paths([str(tmp_path / "a.redact-orig.mkv")], [".mkv"], skip=is_app_temp_name)
+    assert [os.path.basename(f) for f in named] == ["a.redact-orig.mkv"]  # the user named it: kept
+    everything, _ = expand_paths([str(tmp_path)], [".mkv"])
+    assert len(everything) == 4  # no skip: unchanged behaviour

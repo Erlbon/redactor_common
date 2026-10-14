@@ -207,3 +207,26 @@ def test_find_convertible_runs_the_walk_under_run_busy(monkeypatch, tmp_path):
     found = convert_offer.find_convertible(None, [tmp_path], [".flac"], skip=lambda n: n.startswith(".scratch"))
     assert [os.path.basename(p) for p in found] == ["a.flac"]
     assert labels and "convert" in labels[0]
+
+
+def test_full_text_override_replaces_the_message_but_keeps_the_details(monkeypatch):
+    answer = Answer(monkeypatch, "Convert")
+    offer_conversion(None, FOUND, 0, "CBZ", "CBZ", text="3 file(s) are not real CBZ files:\n  a\n  b\n\nConvert them?")
+    assert answer.box.text().startswith("3 file(s) are not real CBZ files:")
+    assert FOUND[0] in answer.box.detailedText()
+
+
+def test_several_folders_are_remembered_together_and_skipped_only_when_all_were_declined(monkeypatch, tmp_path):
+    store, remember = memory()
+    folders = [str(tmp_path / "a"), str(tmp_path / "b")]
+    answer = Answer(monkeypatch, "Not Now", tick=["Don't ask again for these folders"])
+    assert offer_conversion(None, FOUND, 0, "MP3", "MP3", remember_key=folders, remember=remember) == NEVER
+    assert len(store) == 2  # every folder recorded
+    # both declined: nothing is shown any more
+    quiet = Answer(monkeypatch, "Convert")
+    assert offer_conversion(None, FOUND, 0, "MP3", "MP3", remember_key=folders, remember=remember) == NEVER
+    assert quiet.boxes == []
+    # one new folder among them: the offer comes back (the declined one is not enough)
+    again = Answer(monkeypatch, "Convert")
+    offer_conversion(None, FOUND, 0, "MP3", "MP3", remember_key=[folders[0], str(tmp_path / "c")], remember=remember)
+    assert again.boxes and "Don't ask again for these folders" in again.checkboxes

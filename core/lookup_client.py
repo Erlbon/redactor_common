@@ -261,6 +261,7 @@ def fetch_json(
     retry_429: Sequence[float] = (),
     sleep: Callable[[float], None] = time.sleep,
     secrets: Iterable[str] = (),
+    unreachable_message: str | None = None,
 ) -> Optional[dict]:
     """Runs one GET via `fetch`, parses the JSON body, and translates
     every way that can fail into `error_cls` with a friendly message --
@@ -296,6 +297,10 @@ def fetch_json(
 
     `secrets`: values (a token, a password) to replace with *** in any
     message. URL query strings are always redacted from messages.
+
+    `unreachable_message`: the text for "the service could not be reached at all" (no internet, a timeout,
+    DNS), with `{detail}` standing for the underlying error, e.g. "Could not reach Google Books: {detail}
+    (check your internet connection)". Default: "Could not reach <source_name>: <detail>".
     """
     try:
         raw = _fetch_with_retry(url, fetch, retry_429, sleep)
@@ -307,7 +312,8 @@ def fetch_json(
             status_messages, status_errors, secrets,
         ) from exc
     except _FETCH_ERRORS as exc:
-        raise error_cls(redact_text(f"Could not reach {source_name}: {exc}", secrets)) from exc
+        text = (unreachable_message or "Could not reach " + source_name + ": {detail}").replace("{detail}", str(exc))
+        raise error_cls(redact_text(text, secrets)) from exc
 
     try:
         return json.loads(raw)
@@ -326,6 +332,7 @@ def fetch_bytes(
     retry_429: Sequence[float] = (),
     sleep: Callable[[float], None] = time.sleep,
     secrets: Iterable[str] = (),
+    unreachable_message: str | None = None,
 ) -> bytes:
     """Runs one GET via `fetch` and returns the raw response bytes
     (e.g. a cover image) -- same HTTPError/URLError translation as
@@ -333,8 +340,8 @@ def fetch_bytes(
     thing being downloaded in the error message (e.g. "cover image").
     `status_messages` overrides the message for specific HTTP codes;
     `require_data` treats an empty response body as a failure too.
-    `status_errors`, `retry_429`, `sleep` and `secrets` work as in
-    fetch_json()."""
+    `status_errors`, `retry_429`, `sleep`, `secrets` and `unreachable_message` (default "Could not download
+    <what>: {detail}") work as in fetch_json()."""
     try:
         data = _fetch_with_retry(url, fetch, retry_429, sleep)
     except urllib.error.HTTPError as exc:
@@ -343,7 +350,8 @@ def fetch_bytes(
             status_messages, status_errors, secrets,
         ) from exc
     except _FETCH_ERRORS as exc:
-        raise error_cls(redact_text(f"Could not download {what}: {exc}", secrets)) from exc
+        text = (unreachable_message or "Could not download " + what + ": {detail}").replace("{detail}", str(exc))
+        raise error_cls(redact_text(text, secrets)) from exc
     if require_data and not data:
         raise error_cls(f"Downloading {what} returned no data.")
     return data
