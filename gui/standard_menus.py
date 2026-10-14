@@ -404,11 +404,13 @@ def standard_tools_items(
     columns: Callable | None = None,
     genres: Callable | None = None,
     languages: Callable | None = None,
+    history: Callable | None = None,
 ) -> MenuItems:
     """The Tools menu (ALL settings live here): Preferences | API Keys,
     External Tools, app-specific settings entries | Columns / Genres /
-    Languages. Every shared entry is omitted when its slot is None (epub has
-    no API keys today; cbz has no Preferences dialog yet)."""
+    Languages | History (the operations journal, gui/history_dialog.py).
+    Every shared entry is omitted when its slot is None (epub has no API keys
+    today; cbz has no Preferences dialog yet)."""
     return _groups(
         [MenuAction(KEY_PREFERENCES, labels.PREFERENCES, preferences, shortcut=keys.PREFERENCES)]
         if preferences else [],
@@ -418,6 +420,8 @@ def standard_tools_items(
         ([_std("columns", labels.COLUMNS, columns)] if columns else [])
         + ([_std("genres", labels.GENRES, genres)] if genres else [])
         + ([_std("languages", labels.LANGUAGES, languages)] if languages else []),
+        [_std("history", labels.HISTORY, history, tooltip="Every tag change this program made, with the old values")]
+        if history else [],
     )
 
 
