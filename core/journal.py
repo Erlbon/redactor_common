@@ -16,8 +16,15 @@ per line, minutes over a Save All of thousands of files):
     {"t": "op", "id": ..., "ts": ..., "path": ..., "kind": ..., "changes": {field: [old, new]}, ...}
     {"t": "done", "id": ..., "ok": true|false, "err": ""}        written after the file operation finished
     {"t": "restored", "id": <the op restored>, "by": <the restore op>}
+    {"t": "moved", "from": <old path>, "to": <new path>, "ts": ...}   a rename or move of the FILE (see below)
 The "op" line is written BEFORE the file is touched and the "done" line after, so a crash in between leaves a
 "pending" entry: the History dialog shows it, and the user knows that save may or may not have happened.
+
+A renamed or moved file: entries are filed under the path the file had when the change was made. record_move(old,
+new) notes a later rename or move, and reading applies it to every earlier entry of that file (also chains of
+moves and moves back), so Restore always finds the file where it is NOW. Entry.original_path keeps the path the
+change was made at. Apps call it from their rename / move code (RenameLog's on_move hook covers all of those in
+one place).
 
 Retention: the newest `max_lines` operations, none older than `max_days` (defaults 50,000 / 90 days), pruned
 when the journal is opened and every PRUNE_EVERY appends; a prune rewrites the file through a temp file.
@@ -67,6 +74,7 @@ class Entry:
     status: str = STATUS_PENDING
     error: str = ""
     restored_by: str = ""
+    original_path: str = ""  # where the file was when the change was made (path is where it is now)
 
     @property
     def restorable(self) -> bool:
@@ -164,6 +172,22 @@ class Journal:
         self.finish(entry_id)
         return entry_id
 
+    def record_move(self, old_path: str, new_path: str) -> None:
+        """Notes that the file at `old_path` is now at `new_path` (a rename or a move), so earlier entries of that
+        file follow it. A no-op when old and new are the same path."""
+        self.record_moves([(old_path, new_path)])
+
+    def record_moves(self, pairs: Iterable[tuple[str, str]]) -> None:
+        lines = [
+            {"t": "moved", "from": os.fspath(old), "to": os.fspath(new), "ts": round(self._clock(), 3)}
+            for old, new in pairs if os.fspath(old) != os.fspath(new)
+        ]
+        if not lines:
+            return
+        with self._lock:
+            for line in lines:
+                self._append(line)
+
     def mark_restored(self, entry_id: str, restore_id: str | None) -> None:
         with self._lock:
             self._append({"t": "restored", "id": entry_id, "by": restore_id or ""})
@@ -187,7 +211,7 @@ class Journal:
         wanted = (text or "").casefold()
         result = []
         for entry in reversed(entries):
-            if path is not None and os.path.normcase(entry.path) != os.path.normcase(os.fspath(path)):
+            if path is not None and _path_key(entry.path) != _path_key(os.fspath(path)):
                 continue
             if wanted and wanted not in entry.path.casefold() and not any(wanted in n.casefold() for n in entry.changes):
                 continue
@@ -200,6 +224,7 @@ class Journal:
         if not os.path.isfile(self.path):
             return []
         by_id: dict[str, Entry] = {}
+        by_path: dict[str, list[Entry]] = {}  # normalised current path -> its entries (so a move is O(1))
         order: list[Entry] = []
         with open(self.path, encoding="utf-8", newline="") as f:
             for raw in f:
@@ -221,8 +246,17 @@ class Journal:
                         cover_changed=bool(line.get("cover")), truncated=list(line.get("truncated") or []),
                         note=str(line.get("note", "")),
                     )
+                    entry.original_path = entry.path
                     by_id[entry.id] = entry
+                    by_path.setdefault(_path_key(entry.path), []).append(entry)
                     order.append(entry)
+                elif kind == "moved":
+                    moved = by_path.pop(_path_key(str(line.get("from", ""))), [])
+                    if moved:
+                        target = str(line.get("to", ""))
+                        for entry in moved:
+                            entry.path = target
+                        by_path.setdefault(_path_key(target), []).extend(moved)
                 elif kind == "done" and line.get("id") in by_id:
                     target = by_id[line["id"]]
                     target.status = STATUS_OK if line.get("ok") else STATUS_FAILED
@@ -276,12 +310,20 @@ class Journal:
                         line = json.loads(raw)
                     except ValueError:
                         continue
-                    if isinstance(line, dict) and line.get("id") in keep_ids:
+                    if not isinstance(line, dict):
+                        continue
+                    # A move older than the cutoff can only concern entries older than it, which are dropped.
+                    keep_move = line.get("t") == "moved" and float(line.get("ts", 0)) >= cutoff
+                    if line.get("id") in keep_ids or keep_move:
                         out.write(raw if raw.endswith("\n") else raw + "\n")
                 out.flush()
                 os.fsync(out.fileno())
             replace_with_retry(tmp, self.path)
             return dropped
+
+
+def _path_key(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path)) if path else ""
 
 
 def default_journal_path(app_slug: str, folder: str) -> str:

@@ -229,3 +229,76 @@ def test_fsync_only_when_durable(tmp_path, monkeypatch):
     safe = j.Journal(str(tmp_path / "d.jsonl"), durable=True)
     safe.record("a.mp3", j.KIND_SAVE, {"t": ("a", "b")})
     assert len(calls) == 2  # the op line and the done line
+
+
+def test_a_renamed_or_moved_file_keeps_its_entries(tmp_path):
+    journal, clock = make(tmp_path)
+    a = journal.record("C:/lib/a.mkv", j.KIND_SAVE, {"title": ("1", "2")})
+    clock.now += 1
+    journal.record_move("C:/lib/a.mkv", "C:/lib/Show/a.mkv")
+    clock.now += 1
+    later = journal.record("C:/lib/Show/a.mkv", j.KIND_SAVE, {"title": ("2", "3")})
+    journal.record_move("C:/lib/Show/a.mkv", "C:/lib/Show/Season 1/a.mkv")
+    entries = {e.id: e for e in journal.entries()}
+    assert entries[a].path == entries[later].path == "C:/lib/Show/Season 1/a.mkv"
+    assert entries[a].original_path == "C:/lib/a.mkv" and entries[later].original_path == "C:/lib/Show/a.mkv"
+    # path filter and text filter follow the new location
+    assert len(journal.entries(path="C:/lib/Show/Season 1/a.mkv")) == 2 and journal.entries(path="C:/lib/a.mkv") == []
+    assert len(journal.entries(text="season 1")) == 2
+
+
+def test_a_move_only_affects_entries_made_before_it_and_a_move_back_returns_them(tmp_path):
+    journal, _ = make(tmp_path)
+    before = journal.record("C:/lib/a.mkv", j.KIND_SAVE, {"t": ("a", "b")})
+    journal.record_move("C:/lib/a.mkv", "C:/lib/b.mkv")
+    after = journal.record("C:/lib/a.mkv", j.KIND_SAVE, {"t": ("b", "c")})  # a DIFFERENT file now sits at the old name
+    entries = {e.id: e for e in journal.entries()}
+    assert entries[before].path == "C:/lib/b.mkv" and entries[after].path == "C:/lib/a.mkv"
+    journal.record_move("C:/lib/b.mkv", "C:/lib/a.mkv")  # moved back: both are at a.mkv again
+    assert {e.path for e in journal.entries()} == {"C:/lib/a.mkv"}
+
+
+def test_record_moves_ignores_identical_pairs_and_writes_nothing_for_them(tmp_path):
+    journal, _ = make(tmp_path)
+    journal.record_moves([("C:/x/a.mkv", "C:/x/a.mkv")])
+    assert not os.path.exists(journal.path)
+    journal.record_moves([("C:/x/a.mkv", "C:/x/b.mkv"), ("C:/x/c.mkv", "C:/x/d.mkv")])
+    assert len(open(journal.path, encoding="utf-8").read().splitlines()) == 2
+
+
+def test_prune_keeps_recent_moves_so_retained_entries_still_follow_their_file(tmp_path):
+    journal, clock = make(tmp_path, max_days=10)
+    journal.record("C:/lib/old.mkv", j.KIND_SAVE, {"t": ("a", "b")})
+    journal.record_move("C:/lib/old.mkv", "C:/lib/older.mkv")
+    clock.now += 20 * DAY
+    kept = journal.record("C:/lib/new.mkv", j.KIND_SAVE, {"t": ("a", "b")})
+    journal.record_move("C:/lib/new.mkv", "C:/lib/Show/new.mkv")
+    journal.prune()
+    raw = [json.loads(l) for l in open(journal.path, encoding="utf-8").read().splitlines()]
+    assert [l["t"] for l in raw].count("moved") == 1  # the old move went with its dropped entry, the recent one stays
+    assert [e.path for e in journal.entries()] == ["C:/lib/Show/new.mkv"] and journal.entries()[0].id == kept
+
+
+def test_rename_log_tells_the_journal_about_renames_and_undos(tmp_path):
+    from redactor_common.core.rename_log import RenameLog
+
+    seen = []
+    log = RenameLog(str(tmp_path / "rl.json"), on_move=lambda pairs: seen.append(pairs))
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_text("x")
+    a.rename(b)
+    log.record("Rename", [(str(a), str(b))])
+    assert seen == [[(str(a), str(b))]]
+    log.undo_last()
+    assert seen[1] == [(str(b), str(a))] and a.exists()  # the undo moved it back: new -> old
+
+
+def test_a_failing_move_hook_never_breaks_the_rename_log(tmp_path):
+    from redactor_common.core.rename_log import RenameLog
+
+    def boom(pairs):
+        raise RuntimeError("journal folder is read-only")
+
+    log = RenameLog(str(tmp_path / "rl.json"), on_move=boom)
+    log.record("Rename", [("a", "b")])
+    assert log.last_batch() is not None

@@ -34,7 +34,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from redactor_common.core.os_utils import rename_no_clobber, replace_with_retry
 
@@ -64,9 +64,23 @@ class UndoResult:
 
 
 class RenameLog:
-    def __init__(self, path: str, max_batches: int = MAX_BATCHES):
+    def __init__(
+        self, path: str, max_batches: int = MAX_BATCHES,
+        on_move: Callable[[list[tuple[str, str]]], None] | None = None,
+    ):
         self.path = path
         self.max_batches = max_batches
+        # Called with the (old, new) pairs after every recorded rename/move batch and after an undo (new, old):
+        # the apps hand it the operations journal's record_moves so its entries follow the renamed file.
+        # A failing hook never breaks a rename.
+        self.on_move = on_move
+
+    def _notify(self, pairs: list[tuple[str, str]]) -> None:
+        if self.on_move is not None and pairs:
+            try:
+                self.on_move(list(pairs))
+            except Exception:  # noqa: BLE001 -- bookkeeping must not break the rename that already happened
+                pass
 
     def _read(self) -> list[RenameBatch]:
         try:
@@ -131,6 +145,7 @@ class RenameLog:
             trashed=[(str(old), str(new)) for old, new in trashed or []], root=root,
         ))
         self._write(batches)
+        self._notify(pairs)
 
     def last_batch(self) -> Optional[RenameBatch]:
         batches = self._read()
@@ -176,6 +191,7 @@ class RenameLog:
                 continue
             result.restored.append((new, old))
         self._write(batches)
+        self._notify([(new, old) for new, old in result.restored])
         result.created_dirs = [d for d in reversed(batch.created_dirs) if os.path.isdir(d)]
         return result
 

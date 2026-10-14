@@ -58,7 +58,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core import labels, preferences
-from redactor_common.core.preferences import PrefSection, PrefSpec, PreferencesBackend
+from redactor_common.core.preferences import PrefAction, PrefSection, PrefSpec, PreferencesBackend
 from redactor_common.gui import standard_shortcuts as keys
 from redactor_common.gui.menu_builder import MenuAction
 from redactor_common.gui.standard_menus import KEY_PREFERENCES, ROLE_BY_KEY
@@ -204,6 +204,9 @@ class PreferencesDialog(QDialog):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         outer.addLayout(form)
+        self.action_buttons: list[QPushButton] = getattr(self, "action_buttons", [])
+        for action in section.actions:
+            outer.addWidget(self._make_action_button(action))
         outer.addStretch(1)
 
         for spec in section.specs:
@@ -241,6 +244,31 @@ class PreferencesDialog(QDialog):
                 form.addRow(label, container)
                 row.widgets = [label, container]
         return page
+
+    def _make_action_button(self, action: PrefAction) -> QWidget:
+        """A push button (with its help text) for a PrefAction: acts immediately, holds no value."""
+        container = QWidget()
+        box = QVBoxLayout(container)
+        box.setContentsMargins(0, 6, 0, 0)
+        box.setSpacing(2)
+        button = QPushButton(action.label)
+        button.clicked.connect(lambda _checked=False, a=action: a.callback(self))
+        button.setAccessibleName(action.label)
+        self.action_buttons.append(button)
+        row = QHBoxLayout()
+        row.addWidget(button)
+        row.addStretch(1)
+        box.addLayout(row)
+        if action.help:
+            help_label = QLabel(action.help)
+            help_label.setWordWrap(True)
+            help_label.setIndent(4)
+            palette = help_label.palette()
+            palette.setColor(QPalette.ColorRole.WindowText, palette.color(QPalette.ColorRole.PlaceholderText))
+            help_label.setPalette(palette)
+            box.addWidget(help_label)
+            button.setAccessibleDescription(action.help)
+        return container
 
     def _make_row(self, spec: PrefSpec) -> _Row:
         kind = spec.kind

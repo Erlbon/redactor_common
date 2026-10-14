@@ -94,16 +94,30 @@ class PrefSpec:
 
 
 @dataclass(frozen=True)
+class PrefAction:
+    """A button on a preferences page that DOES something instead of holding a value (Delete History...,
+    Clear Cache...). It has no key and is never read or saved: the dialog shows `label` as a push button with
+    `help` under it, and calls `callback(parent_widget)` when it is clicked (the callback asks its own
+    confirmation and reports its own result). Qt-free here: `callback` is any callable."""
+
+    label: str
+    callback: Any
+    help: str = ""
+
+
+@dataclass(frozen=True)
 class PrefSection:
-    """A titled group of specs: one tab/page of the dialog."""
+    """A titled group of specs: one tab/page of the dialog. `actions` are buttons shown below the controls."""
 
     key: str
     title: str
     specs: tuple[PrefSpec, ...]
     description: str = ""
+    actions: tuple[PrefAction, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "specs", tuple(self.specs))
+        object.__setattr__(self, "actions", tuple(self.actions))
 
 
 @runtime_checkable

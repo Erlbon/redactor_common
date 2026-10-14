@@ -438,3 +438,31 @@ def test_preferences_menu_action():
     assert action.role == QAction.MenuRole.PreferencesRole
     action.slot()
     assert called == [1]
+
+
+def test_a_pref_action_is_a_button_that_acts_and_never_becomes_a_setting(qapp=None):
+    from PyQt6.QtWidgets import QApplication as _QA
+
+    from redactor_common.core.preferences import PrefAction
+
+    _QA.instance() or _QA([])
+    clicks = []
+    section = PrefSection(
+        "history", "History",
+        (PrefSpec("history_enabled", "Keep a history of tag changes", "bool", False),),
+        actions=(PrefAction("Delete History...", lambda parent: clicks.append(parent), help="Removes the journal file."),),
+    )
+    backend = MemoryBackend()
+    dialog = PreferencesDialog([section], backend)
+    assert [b.text() for b in dialog.action_buttons] == ["Delete History..."]
+    dialog.action_buttons[0].click()
+    assert clicks == [dialog]  # the callback gets the dialog as its parent widget
+    assert backend.writes == []  # a click is not a change to a setting
+    dialog.set_value("history_enabled", True)
+    dialog.apply()
+    assert backend.writes == [{"history_enabled": True}]  # the action added no key to what is saved
+
+
+def test_sections_without_actions_are_unchanged():
+    section = PrefSection("s", "S", (PrefSpec("k", "K", "bool", False),))
+    assert section.actions == ()
