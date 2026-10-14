@@ -218,3 +218,14 @@ def test_tools_menu_history_item_is_optional_and_labelled():
     assert not [i for i in standard_tools_items(preferences=lambda: None) if getattr(i, "key", None) == "history"]
     item = [i for i in standard_tools_items(history=lambda: None) if getattr(i, "key", None) == "history"][0]
     assert item.text == labels.HISTORY == "&History…" and item.enabled
+
+
+def test_fsync_only_when_durable(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "fsync", lambda fd: calls.append(fd))
+    quick = j.Journal(str(tmp_path / "q.jsonl"))
+    quick.record("a.mp3", j.KIND_SAVE, {"t": ("a", "b")})
+    assert calls == []  # a Save All of thousands of files must not pay an fsync per line
+    safe = j.Journal(str(tmp_path / "d.jsonl"), durable=True)
+    safe.record("a.mp3", j.KIND_SAVE, {"t": ("a", "b")})
+    assert len(calls) == 2  # the op line and the done line

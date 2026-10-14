@@ -10,7 +10,9 @@ and for each tag field that changed its OLD and NEW value as text. It deliberate
 other binary data (a changed cover is noted as such, not stored: whole images would make the journal huge) and
 it is not a backup of the file: replaced or converted files are covered by the Recycle Bin / quarantine.
 
-File format: one JSON object per line, UTF-8, each line flushed and fsynced as it is written:
+File format: one JSON object per line, UTF-8, each line flushed to the OS as it is written (so it survives the app
+crashing or being killed; `durable=True` also fsyncs every line, which survives a power cut but costs milliseconds
+per line, minutes over a Save All of thousands of files):
     {"t": "op", "id": ..., "ts": ..., "path": ..., "kind": ..., "changes": {field: [old, new]}, ...}
     {"t": "done", "id": ..., "ok": true|false, "err": ""}        written after the file operation finished
     {"t": "restored", "id": <the op restored>, "by": <the restore op>}
@@ -99,8 +101,10 @@ class Journal:
         max_lines: int = DEFAULT_MAX_LINES,
         max_days: float = DEFAULT_MAX_DAYS,
         clock: Callable[[], float] = time.time,
+        durable: bool = False,
     ):
         self.path = path
+        self.durable = durable
         self.max_lines = max_lines
         self.max_days = max_days
         self._clock = clock
@@ -169,7 +173,8 @@ class Journal:
         with open(self.path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(line, ensure_ascii=False, separators=(",", ":")) + "\n")
             f.flush()
-            os.fsync(f.fileno())
+            if self.durable:
+                os.fsync(f.fileno())
         self._appends += 1
 
     # -- reading ----------------------------------------------------------------------------------
