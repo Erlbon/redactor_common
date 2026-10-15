@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-15#06`.
+Currently: `2026-10-15#07`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
