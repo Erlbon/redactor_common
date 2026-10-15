@@ -115,6 +115,7 @@ from redactor_common.core.error_summary import summarize_errors
 from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
 from redactor_common.gui.image_label import AspectRatioImageLabel
 from redactor_common.gui.progress import ProgressReporter
+from redactor_common.gui.table_columns import make_columns_resizable
 
 BOOK_COL, FOUND_COL, APPLY_COL = range(3)
 # Halved from the old single-cover (220, 320) -- two now sit side by
@@ -244,7 +245,6 @@ class LookupDialogBase(QDialog):
         self.table.setHorizontalHeaderLabels([self._item_noun.capitalize(), "Found", "Apply"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.horizontalHeader().setSectionResizeMode(FOUND_COL, QHeaderView.ResizeMode.Stretch)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         splitter.addWidget(self.table)
 
@@ -420,7 +420,7 @@ class LookupDialogBase(QDialog):
                     self.table.setRowCount(row)
                     break
 
-        self.table.resizeColumnsToContents()
+        make_columns_resizable(self.table, wide_column=FOUND_COL)
         self._refresh_status()
         if self.table.rowCount() > 0:
             self.table.selectRow(0)

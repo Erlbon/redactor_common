@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.journal import KIND_RESTORE, Entry, Journal
 from redactor_common.gui.progress import run_busy
+from redactor_common.gui.table_columns import make_columns_resizable
 
 MAX_ROWS = 2000  # the newest entries; the filter reaches the rest
 KIND_LABELS = {"save": "Save", "redact": "Redact", "restore": "Restore"}
@@ -98,8 +99,7 @@ class HistoryDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._columns_sized = False  # the starting widths are set once, after the first fill; later reloads keep the user's
         self.table.itemSelectionChanged.connect(self._show_detail)
         layout.addWidget(self.table, 3)
 
@@ -139,6 +139,9 @@ class HistoryDialog(QDialog):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 self.table.setItem(row, column, item)
+        if not self._columns_sized and self.entries:
+            make_columns_resizable(self.table, wide_column=2)
+            self._columns_sized = True
         self.status_label.setText(f"{len(self.entries)} change(s)" + (f" matching '{text}'" if text else ""))
         self.detail.clear()
         self.restore_button.setEnabled(False)
