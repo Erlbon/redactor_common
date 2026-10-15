@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QTextDocument
 from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QTextBrowser, QVBoxLayout
 
 
@@ -50,7 +50,14 @@ def _read_text_file(path: str) -> str:
 def _markdown_browser(markdown_text: str) -> QTextBrowser:
     browser = QTextBrowser()
     browser.setOpenExternalLinks(True)  # links open in the system browser, not in-app
-    browser.setMarkdown(markdown_text or "*(nothing to show)*")
+    # MarkdownNoHTML: raw HTML is shown as the text it is. With Qt's default a bare <multiple values> in a
+    # changelog line (not in backticks) was read as an HTML tag and swallowed the rest of the entry, which came
+    # out as broken blocks and lines of spaces (mp3redactor 2026-09-04#08, 2026-10-15). Nobody's About, Credits
+    # or Changelog file uses real HTML tags; links are Markdown links and still work.
+    browser.document().setMarkdown(
+        markdown_text or "*(nothing to show)*",
+        QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.MarkdownFeature.MarkdownNoHTML,
+    )
     return browser
 
 
