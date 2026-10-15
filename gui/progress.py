@@ -23,9 +23,10 @@ independently, in slightly different shapes, at different call sites:
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Iterable, TypeVar
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import QApplication, QProgressDialog, QWidget
 
 from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
@@ -275,4 +276,48 @@ def run_busy(
     except BackgroundCancelled:
         return on_cancel
     finally:
+        _close_quietly(dialog)
+
+
+def run_work_with_progress(
+    parent: QWidget,
+    label: str,
+    work: Callable[[Callable[[int, int], None], threading.Event], T],
+    total: int,
+    cancellable: bool = True,
+    title: str | None = None,
+    poll_ms: int = 100,
+) -> T:
+    """Runs `work(progress, cancel)` on a worker thread under a progress dialog with a real count, and returns
+    its result as if it had been an ordinary call.
+
+    `progress(done, total)` may be called from the worker (it only stores the numbers; the dialog is updated
+    from the GUI thread by a timer, so the worker never touches a widget). `cancel` is a threading.Event set
+    when the user clicks Cancel: the work should notice it between steps and return what it has (the call does
+    not return before the work does, so partial results are kept; a long single step delays the end of the
+    dialog, which then reads "Cancelling..."). An exception in `work` is re-raised here.
+
+    Unlike run_busy(), the dialog is shown at once (the caller uses it for work known to be slow)."""
+    state = {"done": 0, "total": max(total, 1)}
+    cancel = threading.Event()
+
+    def progress(done: int, tot: int) -> None:
+        state["done"], state["total"] = int(done), max(int(tot), 1)
+
+    dialog = _make_dialog(parent, label, max(total, 1), cancellable, title)
+    if cancellable:
+        dialog.canceled.connect(lambda: (cancel.set(), dialog.setLabelText("Cancelling...")))
+    timer = QTimer(dialog)
+
+    def tick() -> None:
+        if dialog.maximum() != state["total"]:
+            dialog.setMaximum(state["total"])
+        dialog.setValue(min(state["done"], dialog.maximum() - 1))
+
+    timer.timeout.connect(tick)
+    timer.start(poll_ms)
+    try:
+        return call_in_background(work, progress, cancel)
+    finally:
+        timer.stop()
         _close_quietly(dialog)
