@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-14#06`.
+Currently: `2026-10-15#04`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -423,6 +423,31 @@ def find_fn(books, progress, cancelled):
 run_find_duplicates(window, loaded_books, find_fn, COLUMNS, dismiss_store=store,
                     on_select_in_list=window.reselect_books, on_trashed=window.remove_books)
 ```
+
+## Notes writer
+
+`core/notes.py`, `core/note_convert.py`, `core/note_text.py` (all Qt-free) create the Markdown *folder notes*
+the Pluteus media server shows beside a folder: `artist.md`, `album.md`, `author.md`, `series.md`, `about.md`.
+The contract is Pluteus's own `docs/notes-format.md` and `docs/library-layout.md`; the front matter written
+here is checked against Pluteus's own parser (`pluteus/markdown.py` `front_matter`) in `tests/test_notes.py`.
+
+Rules: UTF-8 without BOM, LF newlines, at most 64 KB; every created note says `status: draft`; **an existing
+note is never overwritten**, and ANY recognised `.md` note (any letter case, any of the five names) in the
+folder blocks a write, because Pluteus shows the first one in its priority order and a new note must not hide
+a person's own. `.nfo` / `.opf` sidecars do not block (Pluteus shows our `.md` instead of them).
+
+| API | What it does |
+|---|---|
+| `NoteFrontMatter(title, years, genres, tags, links, audience, status='draft').render()` | the `---` block. Quotes only where needed (a leading `[ - # ' "` etc., `: `, ` #`); a list whose items hold a comma/bracket is written as a `- item` block (Pluteus splits inline lists on commas); a value holding both quote kinds gets its `"` turned into `”` (Pluteus has no escapes) |
+| `parse_front_matter(text)` -> `(meta, body)` | reads a block back exactly like Pluteus; `NoteFrontMatter.from_meta(meta)` |
+| `render_note(front, body_markdown)` | the whole note text |
+| `NOTE_KINDS`, `note_file_name(kind)`, `note_path(folder, kind)` | kind -> `artist.md`... |
+| `existing_note(folder)` / `existing_sidecar(folder)` | the `.md` note Pluteus would show (case-insensitive, priority order) / an `artist.nfo`, `album.nfo`, `metadata.opf` |
+| `write_note(folder, kind, text, dry_run=False)` -> `NoteWriteResult(status, path, message, dry_run)` | the safe writer; status `written`, `exists` (path = the existing note), `too_large`, `error`; never raises for an expected condition. Writes a hidden `.<stem>.<hex>.redact-part.md` temp (skipped by the apps' leftover filters), fsyncs, then **hard-links** it into place (atomic, refuses an existing name on Windows too); where hard links do not exist it falls back to an exclusive create of the target plus `os.replace` over that reservation. The temp is removed on every path |
+| `from_opf(x)`, `from_nfo(x)`, `from_comicinfo(x)` -> `NoteConversion(draft, message)` | `x` is a path, the XML text or bytes. `draft` is a `NoteDraft(front, body, source, kind)` (`.render()` adds a "Draft. Taken from ..." footer). DTD/entity declarations are refused (no expansion attacks), input over 2 MB is refused, namespaces ignored, broken XML gives `draft=None` plus a message |
+| `clean_discogs_markup`, `html_to_markdown`, `wikipedia_credit`, `musicbrainz_credit`, `discogs_credit`, `credit_footer`, `wiki_link`, `safe_folder_label` | text helpers: Discogs `[a=Name (2)]`/`[url=..]` markup to Markdown, credit lines and the closing italic footer, `[[wiki links]]`, a filesystem-safe label |
+
+Callers decide the content and ask the user first; this module does no look-ups and has no GUI.
 
 ## Secrets
 
