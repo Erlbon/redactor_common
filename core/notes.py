@@ -26,11 +26,12 @@ turned into typographic ones, and a list whose items contain a comma or bracket 
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import secrets
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass, field, replace
+from typing import Callable, Optional
 
 from redactor_common.core import temp_names
 
@@ -47,6 +48,20 @@ STATUS_WRITTEN = "written"
 STATUS_EXISTS = "exists"
 STATUS_TOO_LARGE = "too_large"
 STATUS_ERROR = "error"
+STATUS_CHANGED = "changed"  # replace_note(): the note is not what the caller saw (edited meanwhile, or gone)
+
+# The shape of what an app wrote, stamped into the front matter (see "stamps" below). The first released shapes
+# (before the stamp existed) are format 1 and carry no key at all; a stamped note starts at 2.
+CURRENT_NOTE_FORMAT = 2
+STAMP_KEYS = ("generator", "note-format", "body-sha")
+
+# The state of an existing note (note_status): what an app may do with it.
+STATE_CURRENT = "current"                      # stamped, the current format, untouched: nothing to do
+STATE_OUTDATED = "outdated-untouched"          # stamped, an older format, nobody edited it: may be refreshed
+STATE_EDITED = "edited"                        # stamped but the hash differs: a person edited it. NEVER touched
+STATE_LEGACY = "legacy"                        # no stamp, our 'Draft.' footer and status: draft (first releases)
+STATE_FOREIGN = "foreign"                      # anything else: not ours. NEVER touched
+REPLACEABLE_STATES = (STATE_OUTDATED, STATE_LEGACY)
 
 
 # ---- front matter ----------------------------------------------------------------------------------------------
@@ -99,6 +114,11 @@ class NoteFrontMatter:
     links: list[str] = field(default_factory=list)
     audience: str = ""
     status: str = DEFAULT_STATUS
+    # The stamp (all optional, plain ``key: value`` lines Pluteus ignores): who wrote the note, in which shape, and a
+    # hash of the note as written so a later run can tell whether a person edited it. render_note() fills body_sha.
+    generator: str = ""  # e.g. 'mp3redactor 2026-10-15#08'
+    note_format: int = 0  # 0 = no stamp (the first released shapes are format 1 and have no key); 2 and up are stamped
+    body_sha: str = ""  # note_hash() of the note as written, 16 hex characters
 
     def render(self) -> str:
         """The block, ``---`` line to ``---`` line, with a trailing newline. Key order is fixed: title, years,
@@ -121,6 +141,13 @@ class NoteFrontMatter:
         if audience:
             lines.append(f"audience: {_scalar(audience)}")
         lines.append(f"status: {_scalar(_one_line(self.status) or DEFAULT_STATUS)}")
+        generator = _one_line(self.generator)
+        if generator:
+            lines.append(f"generator: {_scalar(generator)}")
+        if self.note_format:
+            lines.append(f"note-format: {int(self.note_format)}")
+        if self.body_sha:
+            lines.append(f"body-sha: {_one_line(self.body_sha)}")
         lines.append("---")
         return "\n".join(lines) + "\n"
 
@@ -137,8 +164,13 @@ class NoteFrontMatter:
             value = meta.get(key, [])
             return list(value) if isinstance(value, list) else ([value] if value else [])
 
+        try:
+            note_format = int(text("note-format") or 0)
+        except ValueError:
+            note_format = 0
         return cls(title=text("title"), years=text("years"), genres=items("genres"), tags=items("tags"),
-                   links=items("links"), audience=text("audience"), status=text("status") or DEFAULT_STATUS)
+                   links=items("links"), audience=text("audience"), status=text("status") or DEFAULT_STATUS,
+                   generator=text("generator"), note_format=note_format, body_sha=text("body-sha"))
 
 
 def _clean_items(values: object) -> list[str]:
@@ -207,7 +239,25 @@ def parse_front_matter(text: str) -> tuple[dict, str]:
 def render_note(front: NoteFrontMatter, body_markdown: str) -> str:
     """The whole note text: the front matter block, a blank line, the body, one trailing newline. LF only."""
     body = body_markdown.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
-    return front.render() + ("\n" + body + "\n" if body else "")
+    tail = "\n" + body + "\n" if body else ""
+    if (front.generator or front.note_format) and not front.body_sha:
+        front = replace(front, body_sha=note_hash(front.render() + tail))
+    return front.render() + tail
+
+
+# ---- stamps: telling an old note of ours from one a person edited ----------------------------------------------
+
+def note_hash(text: str) -> str:
+    """The stamp's hash: the first 16 hex characters of the SHA-256 of the note as stored (normalize_note_text) with
+    the ``body-sha`` line left out. It covers the whole note, front matter included, so changing the body, the
+    status (draft -> reviewed), the genres or anything else counts as an edit; only the stamp line itself is free."""
+    lines = normalize_note_text(text).split("\n")
+    if lines and lines[0].rstrip() == "---":
+        for number in range(1, min(len(lines), 80)):
+            if lines[number].strip() in ("---", "..."):
+                lines[1:number] = [l for l in lines[1:number] if not re.match(r"^body-sha\s*:", l)]
+                break
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
 # ---- file names and finding existing notes -----------------------------------------------------------------------
@@ -275,6 +325,7 @@ class NoteWriteResult:
     path: str = ""
     message: str = ""
     dry_run: bool = False
+    replaced: str = ""  # replace_note(): the old note that went to the Recycle Bin
 
     @property
     def ok(self) -> bool:
@@ -381,3 +432,149 @@ def write_note(folder: str | os.PathLike, kind: str, text: str, *, dry_run: bool
         except OSError:
             pass
     return NoteWriteResult(STATUS_WRITTEN, target, f"Wrote {len(data)} bytes to {target}")
+
+
+# ---- what an existing note is, and replacing an old one of ours ------------------------------------------------------
+
+@dataclass
+class NoteState:
+    """What note_status() found. `kind` is one of the STATE_* constants. `sha` is the note_hash() of the file as it
+    is now (what replace_note() checks again before it touches anything); `stored_sha` is what the stamp says."""
+
+    kind: str
+    path: str = ""
+    generator: str = ""
+    note_format: int = 0  # 0: no stamp
+    sha: str = ""
+    stored_sha: str = ""
+    text: str = ""
+    message: str = ""
+
+    @property
+    def replaceable(self) -> bool:
+        return self.kind in REPLACEABLE_STATES
+
+
+_LEGACY_FOOTER = re.compile(r"^\*Draft\.\s.*\*$")
+
+
+def note_status(path: str | os.PathLike, current_format: int = CURRENT_NOTE_FORMAT) -> NoteState:
+    """The state of the note file at `path` (see the STATE_* constants):
+
+    - stamped (generator / note-format / body-sha keys): ``current`` when the hash matches and the format is
+      `current_format` or newer; ``outdated-untouched`` when the hash matches and the format is older (nobody
+      edited it); ``edited`` when the hash differs or is missing (a person edited it);
+    - not stamped: ``legacy`` when it has our closing footer (a ``---`` line then ``*Draft. ...*``) and
+      ``status: draft`` (written by the first releases: nobody can tell whether it was edited), else ``foreign``.
+
+    A file that cannot be read as UTF-8 text, or is over the size limit, is ``foreign``."""
+    path = os.fspath(path)
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_NOTE_BYTES + 1)
+        if len(raw) > MAX_NOTE_BYTES:
+            return NoteState(STATE_FOREIGN, path, message="over the size limit")
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return NoteState(STATE_FOREIGN, path, message=f"not readable as text: {exc}")
+    meta, _body = parse_front_matter(text)
+    sha = note_hash(text)
+    stamped = any(key in meta for key in STAMP_KEYS)
+    if stamped:
+        try:
+            fmt = int(str(meta.get("note-format") or 0))
+        except ValueError:
+            fmt = 0
+        generator = str(meta.get("generator") or "")
+        stored = str(meta.get("body-sha") or "")
+        state = STATE_EDITED
+        if stored and stored == sha:
+            state = STATE_CURRENT if fmt >= current_format else STATE_OUTDATED
+        return NoteState(state, path, generator, fmt, sha, stored, text)
+    lines = [l for l in text.replace("\r\n", "\n").split("\n") if l.strip()]
+    legacy = (str(meta.get("status", "")).strip().lower() == "draft" and len(lines) >= 2
+              and lines[-2].strip() == "---" and bool(_LEGACY_FOOTER.match(lines[-1].strip())))
+    return NoteState(STATE_LEGACY if legacy else STATE_FOREIGN, path, sha=sha, text=text)
+
+
+def find_note(folder: str | os.PathLike, kind: str) -> Optional[str]:
+    """The existing note file of exactly this `kind` in `folder` (any letter case), or None."""
+    return _files_by_lower_name(folder).get(note_file_name(kind))
+
+
+def replace_note(
+    folder: str | os.PathLike, kind: str, new_text: str, *, expect: NoteState | str,
+    dry_run: bool = False, trash: Optional[Callable[[str], None]] = None,
+) -> NoteWriteResult:
+    """Replaces the existing note of `kind` in `folder` with `new_text`: ONLY when it is still what the caller saw.
+
+    `expect` is the NoteState the caller looked at (or just its ``sha``). Refused, and nothing touched, when:
+    the note is gone, or its hash is no longer `expect`'s (a person edited it since: status 'changed'); its state
+    is not ``outdated-untouched`` or ``legacy`` (``edited``, ``foreign`` and ``current`` notes are never replaced:
+    status 'exists'); or `new_text` is too large.
+
+    The new note is written to a hidden temp file first (so a failure leaves the old one alone), the old note is
+    checked once more, then moved to the Recycle Bin (core/trash.py trash_with_retries; `trash` is the test
+    seam) and the new one linked into place with the same no-overwrite machinery as write_note(). The result is
+    like write_note()'s; ``replaced`` holds the path of the old note that went to the Recycle Bin."""
+    folder_s = os.fspath(folder)
+    try:
+        file_name = note_file_name(kind)
+    except ValueError as exc:
+        return NoteWriteResult(STATUS_ERROR, "", str(exc), dry_run)
+    target = os.path.join(folder_s, file_name)
+    old = find_note(folder_s, kind)
+    if old is None:
+        return NoteWriteResult(STATUS_CHANGED, target, f"There is no {file_name} to replace any more.", dry_run)
+    seen = expect.sha if isinstance(expect, NoteState) else str(expect)
+    state = note_status(old)
+    if not seen or state.sha != seen:
+        return NoteWriteResult(STATUS_CHANGED, old, "The note was changed since it was looked at: left alone.", dry_run)
+    if not state.replaceable:
+        return NoteWriteResult(STATUS_EXISTS, old, f"The note is {state.kind}: it is never replaced.", dry_run)
+    data = normalize_note_text(new_text).encode("utf-8")
+    if len(data) > MAX_NOTE_BYTES:
+        return NoteWriteResult(STATUS_TOO_LARGE, target,
+                               f"The note is {len(data)} bytes; the limit is {MAX_NOTE_BYTES}.", dry_run)
+    if not data:
+        return NoteWriteResult(STATUS_ERROR, target, "The note is empty.", dry_run)
+    if dry_run:
+        return NoteWriteResult(STATUS_WRITTEN, target, f"Would replace {old} ({len(data)} bytes)", True, replaced=old)
+
+    from redactor_common.core.trash import TrashError, trash_with_retries
+
+    mover = trash or trash_with_retries()
+    temp = _temp_path(folder_s, file_name)
+    try:
+        try:
+            fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            return NoteWriteResult(STATUS_ERROR, target, f"The new note could not be written: {exc}")
+        if note_status(old).sha != seen:  # the last look before the old note goes
+            return NoteWriteResult(STATUS_CHANGED, old, "The note was changed meanwhile: left alone.")
+        try:
+            mover(old)
+        except TrashError as exc:
+            return NoteWriteResult(STATUS_ERROR, old, f"The old note could not be moved to the Recycle Bin, so it "
+                                                      f"was kept: {exc}")
+        if os.path.lexists(old):
+            return NoteWriteResult(STATUS_ERROR, old, "The old note is still there after the move: left alone.")
+        try:
+            _link_or_reserve(temp, target)
+        except FileExistsError:
+            return NoteWriteResult(STATUS_EXISTS, target, f"A note appeared at {target} meanwhile: left alone.",
+                                   replaced=old)
+        except OSError as exc:
+            return NoteWriteResult(STATUS_ERROR, target,
+                                   f"The old note is in the Recycle Bin but the new one could not be written: {exc}",
+                                   replaced=old)
+    finally:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+    return NoteWriteResult(STATUS_WRITTEN, target, f"Replaced {old}: the old note is in the Recycle Bin.", replaced=old)

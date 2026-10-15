@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-15#04`.
+Currently: `2026-10-15#06`.
 
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
@@ -446,6 +446,20 @@ a person's own. `.nfo` / `.opf` sidecars do not block (Pluteus shows our `.md` i
 | `write_note(folder, kind, text, dry_run=False)` -> `NoteWriteResult(status, path, message, dry_run)` | the safe writer; status `written`, `exists` (path = the existing note), `too_large`, `error`; never raises for an expected condition. Writes a hidden `.<stem>.<hex>.redact-part.md` temp (skipped by the apps' leftover filters), fsyncs, then **hard-links** it into place (atomic, refuses an existing name on Windows too); where hard links do not exist it falls back to an exclusive create of the target plus `os.replace` over that reservation. The temp is removed on every path |
 | `from_opf(x)`, `from_nfo(x)`, `from_comicinfo(x)` -> `NoteConversion(draft, message)` | `x` is a path, the XML text or bytes. `draft` is a `NoteDraft(front, body, source, kind)` (`.render()` adds a "Draft. Taken from ..." footer). DTD/entity declarations are refused (no expansion attacks), input over 2 MB is refused, namespaces ignored, broken XML gives `draft=None` plus a message |
 | `clean_discogs_markup`, `html_to_markdown`, `wikipedia_credit`, `musicbrainz_credit`, `discogs_credit`, `credit_footer`, `wiki_link`, `safe_folder_label` | text helpers: Discogs `[a=Name (2)]`/`[url=..]` markup to Markdown, credit lines and the closing italic footer, `[[wiki links]]`, a filesystem-safe label |
+
+**Stamps and updating old notes (2026-10-15).** A note can carry three more plain `key: value` front matter lines (Pluteus
+ignores unknown keys; `tests/test_notes_stamp.py` checks the real Pluteus parser): `generator: mp3redactor 2026-10-15#08`
+(who wrote it), `note-format: 2` (the shape; the first released shapes are format 1 and have no key at all) and
+`body-sha: <16 hex>` (`note_hash()`: SHA-256 of the note as stored, front matter included, the `body-sha` line itself
+left out, CRLF/LF and the trailing newline normalised; so changing the body, `status: draft` -> `reviewed`, the genres
+or anything else counts as an edit). `NoteFrontMatter(generator=..., note_format=...)` and `render_note()` write the
+stamp (the hash is computed there); a note without those two fields is rendered exactly as before.
+
+| API | What it does |
+|---|---|
+| `note_status(path, current_format=CURRENT_NOTE_FORMAT)` -> `NoteState(kind, path, generator, note_format, sha, stored_sha, text)` | `current` (stamped, hash matches, format is current or newer), `outdated-untouched` (stamped, hash matches, older format: nobody edited it), `edited` (stamped but the hash differs or is missing: a person edited it, NEVER touched), `legacy` (no stamp but the closing `---` / `*Draft. ...*` footer and `status: draft`: written by the first releases, nobody can tell whether it was edited), `foreign` (anything else, also unreadable / oversized files: never touched). `STATE_*` constants, `NoteState.replaceable` is true for `outdated-untouched` and `legacy` only. `CURRENT_NOTE_FORMAT` (2) is only the default: an app passes its own |
+| `find_note(folder, kind)` | the existing note file of exactly that kind (any letter case) or None |
+| `replace_note(folder, kind, new_text, *, expect, dry_run=False, trash=None)` -> `NoteWriteResult` | replaces the old note only when it is still what the caller saw (`expect` = the `NoteState` or its `sha`): status `changed` when it is gone or edited meanwhile, `exists` for an `edited` / `foreign` / `current` note (never replaced), `too_large`, `error`. Order: new note to a hidden temp file, a last look at the old one, the old one to the Recycle Bin (`core/trash.py` `trash_with_retries`; `trash` is the test seam; a Recycle Bin failure keeps the old note and writes nothing), the new one linked into place with write_note()'s no-overwrite machinery. `result.replaced` is the old note's path |
 
 Callers decide the content and ask the user first; this module does no look-ups and has no GUI.
 
