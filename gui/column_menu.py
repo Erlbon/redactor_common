@@ -35,7 +35,7 @@ table_settings.py itself uses.
 
 from __future__ import annotations
 
-from typing import Callable, Hashable
+from typing import Callable, Hashable, Sequence
 
 from PyQt6.QtWidgets import QMenu, QTableWidget, QWidget
 
@@ -51,6 +51,7 @@ def show_column_header_context_menu(
     is_visible: Callable[[Hashable, set[Hashable]], bool],
     on_toggle: Callable[[Hashable, bool], None],
     open_column_settings_dialog: Callable[[], None] | None = None,
+    top_actions: Sequence[tuple[str, Callable[[], None], bool]] = (),
 ) -> None:
     """`is_visible` is redactor_common.core.table_settings.is_column_visible
     (or a project's PROTECTED_COLUMNS-bound wrapper around it, same
@@ -63,6 +64,13 @@ def show_column_header_context_menu(
     """
     header = table.horizontalHeader()
     menu = QMenu(window)
+
+    # (label, callback, enabled) entries above the checklist, e.g. "Clear All Filters" (column_filter.py).
+    for label, callback, enabled in top_actions:
+        entry = menu.addAction(label, callback)
+        entry.setEnabled(enabled)
+    if top_actions:
+        menu.addSeparator()
 
     for key in column_order:
         if key in protected_columns:
