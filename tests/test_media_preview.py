@@ -40,7 +40,51 @@ def test_show_media_preview_accepts_a_pathlib_path(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mp, "multimedia_available", lambda: True)
     monkeypatch.setattr(mp, "MediaPreviewDialog", _Stub)
+    monkeypatch.setattr(mp, "_open_windows", [])
     song = tmp_path / "a.mp3"
     song.write_bytes(b"x")
     mp.show_media_preview(None, Path(song))
     assert isinstance(seen["path"], str) and seen["path"] == str(song)
+
+
+def test_opening_a_second_player_closes_the_first(tmp_path, monkeypatch):
+    """Only one player window at a time; the new one opens where the old one was."""
+    events = []
+
+    class _Rect:
+        def __init__(self, tag):
+            self.tag = tag
+
+    class _Noop:
+        def connect(self, *_a):
+            pass
+
+    class _Stub:
+        count = 0
+
+        def __init__(self, path, video=False, parent=None, autoplay=False):
+            _Stub.count += 1
+            self.n = _Stub.count
+            self.destroyed = _Noop()
+
+        def geometry(self):
+            return _Rect(f"geometry of {self.n}")
+
+        def setGeometry(self, rect):
+            events.append(("setGeometry", self.n, rect.tag))
+
+        def close(self):
+            events.append(("close", self.n))
+
+        def show(self):
+            events.append(("show", self.n))
+
+    monkeypatch.setattr(mp, "multimedia_available", lambda: True)
+    monkeypatch.setattr(mp, "MediaPreviewDialog", _Stub)
+    monkeypatch.setattr(mp, "_open_windows", [])
+    song = tmp_path / "a.mp3"
+    song.write_bytes(b"x")
+    mp.show_media_preview(None, song)
+    mp.show_media_preview(None, song)
+    assert events == [("show", 1), ("close", 1), ("setGeometry", 2, "geometry of 1"), ("show", 2)]
+    assert len(mp._open_windows) == 1 and mp._open_windows[0].n == 2

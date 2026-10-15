@@ -265,7 +265,16 @@ def show_media_preview(parent, path: str, video: bool = False, autoplay: bool = 
     if not multimedia_available():
         QMessageBox.information(parent, "Preview", "This build has no media playback support (QtMultimedia).")
         return None
+    # Only one player at a time: two files playing over each other is never what anyone wants. The old window is
+    # closed (which stops it) and the new one opens where it was, at the same size.
+    previous_geometry = None
+    for old in list(_open_windows):
+        previous_geometry = old.geometry()
+        old.close()
+        _open_windows.remove(old)  # it is deleted later; do not count it as open meanwhile
     dialog = MediaPreviewDialog(path, video=video, parent=parent, autoplay=autoplay)
+    if previous_geometry is not None:
+        dialog.setGeometry(previous_geometry)
     _open_windows.append(dialog)
     dialog.destroyed.connect(lambda *_: _open_windows.remove(dialog) if dialog in _open_windows else None)
     dialog.show()
