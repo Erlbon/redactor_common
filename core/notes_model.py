@@ -169,6 +169,34 @@ def summarize(
     return summary
 
 
+# ---- building ----------------------------------------------------------------------------------------------------
+
+Progress = Callable[[int, int, str], None]
+
+
+def build_each(
+    targets: list, build: Callable[[object], Proposal], progress: Optional[Progress] = None,
+    cancel: Optional[Callable[[], bool]] = None, on_proposal: Optional[Callable[[Proposal], None]] = None,
+) -> list[Proposal]:
+    """One Proposal per target, in order, from the app engine's `build(target)`. `progress(done, total, label)` is called
+    before each target; `cancel()` returning True ends the run early (the proposals built so far are returned);
+    `on_proposal(p)` is called as each one is ready (the command line writes it there, so an interrupted run keeps what it
+    did). Network only; this function writes no file."""
+    proposals: list[Proposal] = []
+    for index, target in enumerate(targets):
+        if cancel is not None and cancel():
+            break
+        if progress is not None:
+            progress(index, len(targets), f"{target.kind}: {target.folder.name}")  # type: ignore[attr-defined]
+        proposal = build(target)
+        proposals.append(proposal)
+        if on_proposal is not None:
+            on_proposal(proposal)
+    if progress is not None and len(proposals) == len(targets):
+        progress(len(targets), len(targets), "")
+    return proposals
+
+
 # ---- writing, the journal and its undo ---------------------------------------------------------------------------
 
 def text_sha(text: str) -> str:

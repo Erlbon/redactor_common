@@ -297,3 +297,24 @@ def test_replace_makes_a_resolved_proposal_tickable(tmp_path):
 def test_note_diff_shows_before_and_after():
     assert note_diff("a\n", "a\n") == ""
     assert "+b" in note_diff("a\n", "a\nb\n")
+
+
+def test_body_helpers_skip_empty_parts_and_values():
+    from redactor_common.core.note_text import fact_lines, join_blocks
+
+    assert join_blocks("# T", "", "  ", "text\n") == "# T\n\ntext"
+    assert fact_lines([("Network", "AMC"), ("Status", ""), ("Seasons", "5")]) == "**Network:** AMC  \n**Seasons:** 5"
+
+
+def test_build_each_builds_in_order_reports_progress_and_stops_on_cancel(tmp_path):
+    from redactor_common.core.notes_model import build_each
+
+    targets = [FakeTarget(tmp_path / n) for n in "abc"]
+    seen, steps = [], []
+    got = build_each(targets, lambda t: Proposal(t, Confidence.CONFIDENT), progress=lambda d, n, label: steps.append((d, n, label)),
+                     on_proposal=seen.append)
+    assert [p.target for p in got] == targets and len(seen) == 3
+    assert steps[0] == (0, 3, "series: a") and steps[-1] == (3, 3, "")
+    stop = []
+    got = build_each(targets, lambda t: stop.append(1) or Proposal(t), cancel=lambda: len(stop) >= 2)
+    assert len(got) == 2

@@ -123,6 +123,18 @@ def credit_footer(sources: list[str], draft: bool = True) -> str:
     return "---\n*" + " ".join(parts) + "*"
 
 
+# ---- assembling a body --------------------------------------------------------------------------------------------
+
+def fact_lines(pairs) -> str:
+    """'**Label:** value' lines as Markdown hard breaks, for the non-empty values."""
+    return "  \n".join(f"**{label}:** {value}" for label, value in pairs if value)
+
+
+def join_blocks(*parts: str) -> str:
+    """The non-empty parts of a note body separated by one blank line."""
+    return "\n\n".join(p.strip("\n") for p in parts if p and p.strip())
+
+
 # ---- wiki links and labels -------------------------------------------------------------------------------------------
 
 def wiki_link(name: str, label: str = "") -> str:

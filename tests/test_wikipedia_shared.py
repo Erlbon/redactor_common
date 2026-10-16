@@ -84,3 +84,12 @@ def test_text_helpers():
     assert wp.strip_parenthetical("Vienna (Ultravox album)") == "Vienna"
     assert wp.trim_extract("One. Two. Three.", 10) == "One. Two."
     assert wp.trim_extract("short") == "short"
+
+
+def test_qid_by_statement_finds_the_one_item_with_that_identifier():
+    one = {"query": {"search": [{"title": "Q1079"}]}}
+    two = {"query": {"search": [{"title": "Q1"}, {"title": "Q2"}]}}
+    assert wp.qid_by_statement("P345", "tt0903747", fetcher([("haswbstatement", one)])) == "Q1079"
+    assert wp.qid_by_statement("P345", "tt0903747", fetcher([("haswbstatement", two)])) == ""  # not unique: no evidence
+    assert wp.qid_by_statement("P345", "tt0903747", fetcher([("haswbstatement", {"query": {"search": []}})])) == ""
+    assert wp.qid_by_statement("not-a-property", "x", fetcher([])) == "" and wp.qid_by_statement("P345", " ", fetcher([])) == ""

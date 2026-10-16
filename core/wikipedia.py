@@ -158,6 +158,21 @@ def wikidata_claims(properties: dict[str, str], title: str = "", entity_id: str 
     return found
 
 
+def qid_by_statement(prop: str, value: str, fetch: Callable) -> str:
+    """The Wikidata item that has `prop` = `value` ('P345', 'tt0903747': the item with that IMDb id), or '' when there is
+    none or more than one (an identifier that is not unique is not evidence). One request."""
+    if not re.fullmatch(r"P\d+", prop or "") or not (value or "").strip():
+        return ""
+    url = WIKIDATA_URL + "?" + urlencode({
+        "action": "query", "list": "search", "srsearch": f"haswbstatement:{prop}={value.strip()}", "srlimit": 2,
+        "format": "json",
+    })
+    data = _get(url, fetch) or {}
+    hits = ((data.get("query") or {}).get("search")) or []
+    ids = [str(h.get("title")) for h in hits if isinstance(h, dict) and re.fullmatch(r"Q\d+", str(h.get("title") or ""))]
+    return ids[0] if len(ids) == 1 else ""
+
+
 def fold(text: str) -> str:
     """Case-, accent- and punctuation-insensitive form of a title, for comparing names."""
     text = unicodedata.normalize("NFKD", text or "")
