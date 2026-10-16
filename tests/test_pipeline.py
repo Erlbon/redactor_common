@@ -186,6 +186,21 @@ def test_context_closed():
     assert made[0].closed
 
 
+def test_review_only_suggestion_never_auto_applies():
+    """A review_only suggestion goes to NEEDS REVIEW even at 100% confidence and at threshold 0."""
+
+    class Careful(Guess):
+        def run(self, ctx):
+            return StepResult.suggestion("nb", 1.0, "exact", review_only=True)
+
+    for threshold in (0.9, 0.0):
+        careful = Careful(1.0)
+        (e,) = _run(["f"], [careful], confidence_threshold=threshold).entries
+        assert e.status is FileStatus.NEEDS_REVIEW and careful.applied == []
+        assert e.review[0].confidence == 1.0 and e.applied == []
+    assert StepResult.suggestion("x", 0.5).review_only is False
+
+
 def test_confidence_routing():
     hi, lo = Guess(0.95), Guess(0.5)
     (e,) = _run(["f"], [hi]).entries

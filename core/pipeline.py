@@ -83,6 +83,9 @@ class StepResult:
     # (a save that changed the extension, a rename, a move). The engine
     # exposes it as ctx.saved_path and FileReport.saved_path.
     new_path: str | None = None
+    # SUGGESTION only: never auto-applied, whatever the recipe's threshold (even 0): it always lands in NEEDS
+    # REVIEW. For a step that must never write by itself (a lookup in a sensitive source).
+    review_only: bool = False
 
     @classmethod
     def applied(cls, *changes: str, new_path: str | None = None) -> "StepResult":
@@ -95,8 +98,9 @@ class StepResult:
         return cls(StepStatus.NOTHING, note=note)
 
     @classmethod
-    def suggestion(cls, value: Any, confidence: float, reason: str = "") -> "StepResult":
-        return cls(StepStatus.SUGGESTION, value=value, confidence=float(confidence), reason=reason)
+    def suggestion(cls, value: Any, confidence: float, reason: str = "", review_only: bool = False) -> "StepResult":
+        return cls(StepStatus.SUGGESTION, value=value, confidence=float(confidence), reason=reason,
+                   review_only=review_only)
 
     @classmethod
     def failed(cls, message: str) -> "StepResult":
@@ -819,7 +823,7 @@ def _run_step(
         else:
             if result.note:
                 entry.notes.append(f"{label}: {result.note}")
-            if result.confidence >= threshold:
+            if result.confidence >= threshold and not result.review_only:
                 done = _as_changes(step.apply_suggestion(ctx, result))
                 pct = f"auto-applied at {result.confidence:.0%}"
                 if not done:
