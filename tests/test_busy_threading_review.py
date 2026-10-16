@@ -409,3 +409,37 @@ def test_the_create_notes_review_dialog_and_scope_dialog_are_deleted_after_use(t
     drain()
     assert parent.findChildren(NotesReviewDialog) == [] and parent.findChildren(NotesScopeDialog) == []
     assert dataclass and field and build_each  # (imports kept for readability of the failure above)
+
+
+# -- 4. re-entrancy ---------------------------------------------------------------------------------------------------------
+
+def test_history_filter_enter_then_focus_out_reloads_once(tmp_path):
+    """Enter in the filter field and the focus-out that follows (the window is disabled for the call, which takes the
+    focus away) both end editing: that must be ONE read of the journal, not two nested ones."""
+    from redactor_common.core import journal as j
+    from redactor_common.gui.history_dialog import HistoryDialog
+
+    from tests.test_journal import make
+    journal, _ = make(tmp_path)
+    journal.record(str(tmp_path / "a.mp3"), j.KIND_SAVE, {"title": ("Old", "New")})
+    reads = []
+    real = journal.entries
+
+    def slow_entries(*a, **k):
+        reads.append(1)
+        time.sleep(0.4)
+        return real(*a, **k)
+
+    journal.entries = slow_entries
+    d = HistoryDialog(journal, lambda p, v: "")
+    _KEEP.append(d)
+    d.show()
+    d.filter_edit.setFocus()
+    drain()
+    reads.clear()
+    QTimer.singleShot(150, lambda: QTest.keyClick(d.filter_edit, Qt.Key.Key_Return))  # a second Enter during the call
+    QTest.keyClick(d.filter_edit, Qt.Key.Key_Return)
+    drain()
+    assert len(reads) == 1, f"{len(reads)} journal reads"
+    assert d.isEnabled()
+    d.close()

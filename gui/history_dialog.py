@@ -82,6 +82,7 @@ class HistoryDialog(QDialog):
         self._journal = journal
         self._apply_restore = apply_restore
         self.entries: list[Entry] = []
+        self._reloading = False
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
@@ -123,11 +124,17 @@ class HistoryDialog(QDialog):
     # -- loading ----------------------------------------------------------------------------------
 
     def reload(self) -> None:
+        if self._reloading:
+            return  # Enter and the focus-out that follows both end editing: one read, not a nested second one
         text = self.filter_edit.text().strip()
         # Reading a 50,000-line journal takes a moment: off the GUI thread, under a progress dialog.
-        self.entries = run_busy(
-            self, "Reading the history...", self._journal.entries, limit=MAX_ROWS, text=text, title="History",
-        )
+        self._reloading = True
+        try:
+            self.entries = run_busy(
+                self, "Reading the history...", self._journal.entries, limit=MAX_ROWS, text=text, title="History",
+            )
+        finally:
+            self._reloading = False
         self.table.setRowCount(len(self.entries))
         for row, entry in enumerate(self.entries):
             cells = [
