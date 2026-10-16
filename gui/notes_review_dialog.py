@@ -288,6 +288,8 @@ class NotesReviewDialog(QDialog):
         self._lookup_note = lookup_note  # 'Looked up N folders in H:MM:SS (R requests, C from the cache).'
         self._history_note = history_note  # 'Recorded in Tools > History (it is switched on).'
         self.followup: list[str] = []
+        self._busy = False  # a rebuild is running (run_busy): no second one may start
+        self.status_text = ""
         self.session = session
         self.view = view
         self.index = 0
@@ -380,7 +382,7 @@ class NotesReviewDialog(QDialog):
         self.tree.itemChanged.connect(self._on_tree_check)
         self.list_panel = self._make_panel()
         self.filter_check = QCheckBox("Only uncertain or not found")
-        self.filter_check.toggled.connect(lambda _on: self._fill_tree())
+        self.filter_check.toggled.connect(self._filter_toggled)
         self.tick_all_button = _button("Tick all confident")
         self.untick_all_button = _button("Untick all")
         self.tick_all_button.clicked.connect(self._tick_all)
@@ -558,6 +560,12 @@ class NotesReviewDialog(QDialog):
         self.tree.blockSignals(False)
         self._refresh_list_header()
 
+    def _filter_toggled(self, _on: bool = False) -> None:
+        """Refilling the list (filter toggled, Tick all, Untick all) clears the current row (the tree was cleared with its
+        signals blocked): select one again, the one that was current when it is still listed, else the first."""
+        self._fill_tree()
+        self._select_tree_index(self.index)
+
     def _select_tree_index(self, index: int) -> None:
         for r in range(self.tree.topLevelItemCount()):
             row = self.tree.topLevelItem(r)
@@ -589,12 +597,12 @@ class NotesReviewDialog(QDialog):
 
     def _tick_all(self) -> None:
         self.session.tick_confident()
-        self._fill_tree()
+        self._filter_toggled(False)
 
     def _untick_all(self) -> None:
         for i in range(len(self.session.items)):
             self.session.set_ticked(i, False)
-        self._fill_tree()
+        self._filter_toggled(False)
 
     def _refresh_list_header(self) -> None:
         n = len(self.session.ticked_pending())
@@ -617,10 +625,28 @@ class NotesReviewDialog(QDialog):
     # -- choices -----------------------------------------------------------------------------------------------
 
     def _choose_candidate(self, candidate: Candidate) -> None:
-        proposal = self.session.items[self.index].proposal
-        rebuilt = run_busy(self, "Building the note from your choice...", self._rebuild, proposal, candidate)
-        self.session.replace(self.index, rebuilt)
+        if self._busy or not self.session.items:
+            return  # a second click (or Enter) while the first rebuild is still running
+        # The row the choice was made on, captured BEFORE the call: the selection can move while it runs (2026-10-16
+        # review: row B was overwritten with A's rebuilt note). The window is also disabled during run_busy, so this is
+        # defence in depth.
+        index = max(0, min(self.index, len(self.session.items) - 1))
+        item = self.session.items[index]
+        self._busy = True
+        try:
+            rebuilt = run_busy(self, "Building the note from your choice...", self._rebuild, item.proposal, candidate)
+        finally:
+            self._busy = False
+        if index >= len(self.session.items) or self.session.items[index] is not item:
+            self._say("The row changed while the note was being built: that result was dropped. Choose again.")
+            return
+        self.session.replace(index, rebuilt)
         self._refresh_all()
+
+    def _say(self, text: str) -> None:
+        self.status_text = text
+        self.banner_label.setText(text)
+        self.banner_label.setVisible(True)
 
     def open_current_note(self) -> None:
         item = self.session.items[self.index]

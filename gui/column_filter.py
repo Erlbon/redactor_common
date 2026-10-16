@@ -399,6 +399,8 @@ class ColumnFilterHeader(QHeaderView):
         if popup.contains_edit is not None:
             popup.contains_edit.setFocus()
         menu.exec(origin)
+        self._open_menu = None
+        menu.deleteLater()  # one menu per funnel click was never deleted; the popup widget goes with it
 
     def _clear_from_popup(self, key: Hashable) -> None:
         menu = getattr(self, "_open_menu", None)

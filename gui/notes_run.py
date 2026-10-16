@@ -130,4 +130,5 @@ def run_create_notes(
         size=parse_size(size_text), on_size=(lambda w, h: on_size(f"{w}x{h}")) if on_size else None, open_path=open_path,
         candidate_columns=candidate_columns, lookup_note=lookup_note, history_note=history_note)
     dialog.exec()
+    dialog.deleteLater()  # parented to `parent`: otherwise it (and the whole ReviewSession) lives as long as the window
     return dialog

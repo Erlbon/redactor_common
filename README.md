@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-16#04`.
+Currently: `2026-10-16#06`.
 
 ## Source ids (`core/source_ids.py`)
 

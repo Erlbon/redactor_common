@@ -318,6 +318,9 @@ def ask_scope(parent: QWidget, choices: list[ScopeChoice], include_subfolders: b
     """(folder, kinds, include_outdated): the folder to create notes for ("" = cancelled), what to create and whether to
     also review notes made by an older version (always off at first). `kw` are NotesScopeDialog's keyword arguments."""
     dialog = NotesScopeDialog(parent, choices, include_subfolders, **kw)
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        return "", kw.get("kinds", ""), False
-    return dialog.folder, dialog.kinds, dialog.outdated
+    try:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return "", kw.get("kinds", ""), False
+        return dialog.folder, dialog.kinds, dialog.outdated
+    finally:
+        dialog.deleteLater()  # parented to `parent`: one dialog per call would pile up for the life of the window

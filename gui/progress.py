@@ -73,6 +73,83 @@ def _close_quietly(dialog: QProgressDialog) -> None:
     if reset is not None:
         reset()
     dialog.close()
+    # The dialog is parented to the caller's window, so without this every call left one more hidden
+    # QProgressDialog child behind for the life of the window.
+    delete_later = getattr(dialog, "deleteLater", None)
+    if delete_later is not None:
+        delete_later()
+
+
+class _InputBlock:
+    """Keeps the user out of the app for the whole length of a worker-thread call (run_busy, run_work_with_progress).
+
+    A window-modal QProgressDialog only blocks the parent once it is SHOWN, which is after a short delay; before that, and
+    while the dialog is hidden by a Cancel click, a click, key press or menu action could start a second call or change
+    the rows the first one is working on (2026-10-16 review: a nested second run_busy 100 ms after the first). So the
+    parent's top-level window is disabled from the first moment and restored in __exit__ (also after an exception), together
+    with the keyboard focus and the busy cursor.
+
+    A window that was already disabled by the caller (videoredactor's lookup does that) is left alone and is not
+    re-enabled here: the previous state is what comes back, not blindly True.
+
+    A quick call must not make the window flash grey: repaints are held back until reveal() (called when the dialog is
+    really shown), so a call that ends first never shows the disabled look."""
+
+    def __init__(self, parent: QWidget | None):
+        self._parent = parent
+        self._window: QWidget | None = None
+        self._updates_were_on = True
+        self._revealed = False
+        self._cursor = False
+        self._focus: QWidget | None = None
+
+    def __enter__(self) -> "_InputBlock":
+        window = None
+        if self._parent is not None:
+            try:
+                window = self._parent.window()
+            except RuntimeError:
+                window = None
+        if window is not None and window.isEnabled():
+            self._window = window
+            self._focus = window.focusWidget()  # the window's own idea of it: also right while it is not the active window
+            self._updates_were_on = window.updatesEnabled()
+            window.setUpdatesEnabled(False)
+            window.setEnabled(False)
+        if QApplication.instance() is not None:
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+            self._cursor = True
+        return self
+
+    def allow(self, dialog: QWidget) -> None:
+        """A window (the progress dialog) is a child of the disabled window and would be disabled with it: its Cancel
+        button must stay clickable."""
+        if self._window is not None:
+            dialog.setEnabled(True)
+
+    def reveal(self) -> None:
+        """The dialog is about to be shown: let the disabled window repaint (it now looks inactive behind the dialog)."""
+        if self._window is not None and not self._revealed:
+            self._revealed = True
+            try:
+                self._window.setUpdatesEnabled(self._updates_were_on)
+            except RuntimeError:
+                pass
+
+    def __exit__(self, *_exc) -> None:
+        window, self._window = self._window, None
+        if window is not None:
+            try:
+                window.setEnabled(True)  # before the repaint is released: a quick call never shows the grey look
+                window.setUpdatesEnabled(self._updates_were_on)
+                focus = self._focus
+                if focus is not None and focus.isEnabled() and focus.isVisible():
+                    focus.setFocus(Qt.FocusReason.OtherFocusReason)
+            except RuntimeError:  # the window was deleted during the call
+                pass
+        if self._cursor:
+            QApplication.restoreOverrideCursor()
+            self._cursor = False
 
 
 def _make_dialog(
@@ -244,6 +321,7 @@ class ProgressReporter:
 
 
 BUSY_SHOW_AFTER_MS = 300  # a call that finishes sooner never flashes a dialog
+_NEVER_MS = 24 * 3600 * 1000  # Qt's own show timer is replaced by ours (see run_busy)
 
 
 def run_busy(
@@ -263,20 +341,43 @@ def run_busy(
     and `on_cancel` is returned (the work already running is not interrupted: give long ffmpeg-style calls their
     own cancel event as well).
 
+    The parent's window is disabled for the whole call (see _InputBlock), so nothing can be clicked, typed or
+    started from a menu meanwhile, not even before the dialog has appeared. Because of that `fn` may be sure
+    the rows/widgets it was handed are not changed by the user, but a CALLER must not open a modal dialog from
+    inside `fn` (it runs off the GUI thread anyway).
+
     `fn` runs OFF the GUI thread: it must not touch widgets. Use run_with_progress() for loops over many items
     (it can show a real count and cancel between items); use this for the single long call."""
-    dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, 0, parent)
-    dialog.setWindowModality(Qt.WindowModality.WindowModal)
-    dialog.setMinimumDuration(BUSY_SHOW_AFTER_MS)
-    if title:
-        dialog.setWindowTitle(title)
-    dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
-    try:
-        return call_in_background(fn, *args, cancel_signal=dialog.canceled if cancellable else None, **kwargs)
-    except BackgroundCancelled:
-        return on_cancel
-    finally:
-        _close_quietly(dialog)
+    with _InputBlock(parent) as block:
+        dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, 0, parent)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        # Qt's own show timer starts in the constructor with 4000 ms and ignores setMinimumDuration() while the
+        # dialog's value is still -1, so the dialog came up after ~4 s instead of 300 ms (2026-10-16 review).
+        # The show is driven by our own single-shot timer instead.
+        dialog.setMinimumDuration(_NEVER_MS)
+        if title:
+            dialog.setWindowTitle(title)
+        dialog.setFixedWidth(PROGRESS_DIALOG_WIDTH)
+        block.allow(dialog)
+        running = [True]
+
+        def show_dialog() -> None:
+            if running[0]:
+                block.reveal()
+                dialog.show()
+
+        show_timer = QTimer(dialog)
+        show_timer.setSingleShot(True)
+        show_timer.timeout.connect(show_dialog)
+        show_timer.start(BUSY_SHOW_AFTER_MS)
+        try:
+            return call_in_background(fn, *args, cancel_signal=dialog.canceled if cancellable else None, **kwargs)
+        except BackgroundCancelled:
+            return on_cancel
+        finally:
+            running[0] = False
+            show_timer.stop()
+            _close_quietly(dialog)
 
 
 def run_work_with_progress(
@@ -295,29 +396,21 @@ def run_work_with_progress(
     from the GUI thread by a timer, so the worker never touches a widget). `cancel` is a threading.Event set
     when the user clicks Cancel: the work should notice it between steps and return what it has (the call does
     not return before the work does, so partial results are kept; a long single step delays the end of the
-    dialog, which then reads "Cancelling..."). An exception in `work` is re-raised here.
+    dialog, which then reads "Cancelling..." and stays on screen, modal, until the work has returned). An
+    exception in `work` is re-raised here.
 
-    Unlike run_busy(), the dialog is shown at once (the caller uses it for work known to be slow)."""
-    state = {"done": 0, "total": max(total, 1)}
-    cancel = threading.Event()
+    Unlike run_busy(), the dialog is shown at once (the caller uses it for work known to be slow).
 
-    def progress(done: int, tot: int) -> None:
-        state["done"], state["total"] = int(done), max(int(tot), 1)
+    This is a thin adapter: the implementation is gui/work_progress.run_work_with_progress() (one dialog, one
+    cancel/re-show/close sequence); this keeps the older (parent, label, work(progress, cancel), total) -> T
+    signature that the apps call."""
+    from redactor_common.gui import work_progress
 
-    dialog = _make_dialog(parent, label, max(total, 1), cancellable, title)
-    if cancellable:
-        dialog.canceled.connect(lambda: (cancel.set(), dialog.setLabelText("Cancelling...")))
-    timer = QTimer(dialog)
+    def adapted(progress: "work_progress.WorkProgress") -> T:
+        return work(progress.report, progress.cancelled)
 
-    def tick() -> None:
-        if dialog.maximum() != state["total"]:
-            dialog.setMaximum(state["total"])
-        dialog.setValue(min(state["done"], dialog.maximum() - 1))
-
-    timer.timeout.connect(tick)
-    timer.start(poll_ms)
-    try:
-        return call_in_background(work, progress, cancel)
-    finally:
-        timer.stop()
-        _close_quietly(dialog)
+    result, _cancelled = work_progress.run_work_with_progress(
+        parent, max(total, 1), label, adapted, cancellable=cancellable, title=title,
+        show_after_ms=0, cancelling_text="Cancelling...", dynamic_total=True, refresh_ms=poll_ms,
+    )
+    return result
