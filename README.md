@@ -58,6 +58,15 @@ shows under its own version line, via `component_versions`) and
 
 Currently: `2026-10-16#04`.
 
+## Source ids (`core/source_ids.py`)
+
+The shared vocabulary for "which record in which outside database is this file matched to":
+`SourceRef(service, kind, id)` (validated on construction), `parse_link(url)` (allowlisted hosts only),
+`build_link(ref)`, `normalise_id()`, `wire(ref)` / `from_wire(text)` (one line `service:kind:id`) and
+`format_label(service)`. Services: musicbrainz, discogs, wikipedia, wikidata, theporndb, stashdb, tmdb, imdb,
+tvdb, openlibrary, googlebooks, isfdb, comicvine, gcd. It is a superset of mp3redactor's `core/notes_link.py`
+parser. Adopted by videoredactor first (tags inside the file); mp3/epub/cbz follow.
+
 ## "Move into folders" (third mode of the Rename/Export dialog)
 
 Next to Rename and Export, `RenamePatternDialog` has a third radio that moves files into a
