@@ -72,7 +72,7 @@ def title_from_url(url: str) -> str:
     """'Vienna_(Ultravox_album)' as 'Vienna (Ultravox album)' from an en.wikipedia.org/wiki/ link, else ''."""
     parts = urlsplit(url or "")
     host = (parts.hostname or "").lower()
-    if not host.endswith("wikipedia.org") or not parts.path.startswith("/wiki/"):
+    if not (host == "wikipedia.org" or host.endswith(".wikipedia.org")) or not parts.path.startswith("/wiki/"):
         return ""
     return unquote(parts.path[len("/wiki/"):]).replace("_", " ").strip()
 

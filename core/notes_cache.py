@@ -14,6 +14,12 @@ notes): a per-run memory memo and a persistent disk cache.
 What is stored: public service responses and the names asked about (they are in the URL). Nothing else about the
 user. Errors, 503s and unreadable answers are NEVER stored; a 404 ('no such page') and an empty result list live one
 day, everything else 30 days. A broken cache file is deleted and started again without a word.
+
+A 200 is not always an answer: Wikidata/MediaWiki report maxlag, ratelimited and readonly as HTTP 200 with an
+{"error": ...} body, and a captive portal or firewall answers 200 with an HTML page. `storable()` keeps those out: only a
+non-empty body that parses as JSON and has no top-level 'error'/'errors' key is stored (`expect_json=False` for an
+endpoint that is not JSON: then any non-empty, non-HTML body). An entry that does not pass is also thrown away on READ,
+so a cache file poisoned by an earlier version heals itself.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ MAX_BYTES = 200 * 1024 * 1024
 USED_REFRESH_SECONDS = 3600  # a hit refreshes the entry's 'used' stamp at most this often (one write, not one per read)
 
 __all__ = ["CachedFetch", "RequestStats", "ResponseCache", "default_cache", "clear_default_cache", "looks_empty",
-           "MAX_BYTES", "NEGATIVE_TTL_SECONDS", "TTL_SECONDS"]
+           "storable", "MAX_BYTES", "NEGATIVE_TTL_SECONDS", "TTL_SECONDS"]
 
 
 @dataclass
@@ -57,10 +63,30 @@ def looks_empty(body: bytes) -> bool:
         data = json.loads(body)
     except (ValueError, UnicodeDecodeError):
         return False
+    if isinstance(data, list):
+        return not data
     if not isinstance(data, dict):
         return False
+    if not data:
+        return True
     lists = [v for v in data.values() if isinstance(v, list)]
     return bool(lists) and all(not v for v in lists)
+
+
+def storable(body: bytes, expect_json: bool = True) -> bool:
+    """Is this 200 body a real answer worth keeping? (see the module docstring)"""
+    if not body or not bytes(body).strip():
+        return False
+    head = bytes(body).lstrip()[:200].lower()
+    if head.startswith(b"<"):  # HTML / XML error or captive-portal page
+        return False
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return not expect_json
+    if isinstance(data, dict) and ("error" in data or "errors" in data):
+        return False
+    return True
 
 
 class ResponseCache:
@@ -139,8 +165,9 @@ class ResponseCache:
 
     # -- the API ---------------------------------------------------------------------------------------------
 
-    def get(self, key: str) -> Optional[tuple[int, bytes]]:
-        """(status, body) of a fresh entry (status 404 has no body), else None."""
+    def get(self, key: str, expect_json: bool = True) -> Optional[tuple[int, bytes]]:
+        """(status, body) of a fresh entry (status 404 has no body), else None. A 200 entry that is not a storable
+        answer (stored by an older version: an HTML page, an {"error": ...}) is deleted and counts as a miss."""
         now = self._clock()
 
         def work(db):
@@ -148,6 +175,10 @@ class ResponseCache:
             if row is None:
                 return None
             if row[2] <= now:
+                db.execute("DELETE FROM cache WHERE key=?", (key,))
+                db.commit()
+                return None
+            if int(row[0]) == 200 and not storable(bytes(row[1] or b""), expect_json):
                 db.execute("DELETE FROM cache WHERE key=?", (key,))
                 db.commit()
                 return None
@@ -163,9 +194,11 @@ class ResponseCache:
             self.hits += 1
         return found
 
-    def put(self, key: str, body: bytes, status: int = 200) -> None:
+    def put(self, key: str, body: bytes, status: int = 200, expect_json: bool = True) -> None:
         """Stores a good answer (status 200) or a 'not found' (404). Nothing else is ever stored."""
         if status not in (200, 404):
+            return
+        if status == 200 and not storable(body, expect_json):
             return
         short = status == 404 or looks_empty(body)
         now = self._clock()
@@ -247,7 +280,8 @@ class CachedFetch:
     """`fetch(url) -> bytes` with a memory memo and the disk cache in front of `inner`."""
 
     def __init__(self, inner: Callable, source: str, cache: Optional[ResponseCache] = None,
-                 stats: Optional[RequestStats] = None, phases=None, phase: str = "", secret_params: tuple = ()):
+                 stats: Optional[RequestStats] = None, phases=None, phase: str = "", secret_params: tuple = (), expect_json: bool = True):
+        self.expect_json = expect_json
         self.inner, self.source, self.cache = inner, source, cache
         self.secret_params = tuple(secret_params)  # query parameters (an API key) that are NOT part of the key
         self.stats = stats if stats is not None else RequestStats()
@@ -278,7 +312,7 @@ class CachedFetch:
             self.stats.from_memory += 1
             return self._answer(url, found)
         if self.cache is not None:
-            found = self.cache.get(key)
+            found = self.cache.get(key, self.expect_json)
             if found is not None:
                 self.stats.from_cache += 1
                 with self._lock:
@@ -308,10 +342,12 @@ class CachedFetch:
             self.busy_hook(delay)
 
     def _remember(self, key: str, status: int, body: bytes) -> None:
+        if status == 200 and not storable(body, self.expect_json):
+            return  # an error body or a portal page is not an answer: neither the disk nor this run remembers it
         with self._lock:
             self._memo[key] = (status, body)
         if self.cache is not None:
-            self.cache.put(key, body, status)
+            self.cache.put(key, body, status, self.expect_json)
 
     @staticmethod
     def _answer(url: str, found: tuple[int, bytes]):

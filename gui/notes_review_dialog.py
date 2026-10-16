@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QTextDocument
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton, QSizePolicy,
     QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit, QTreeWidget,
@@ -230,7 +230,11 @@ class ProposalPanel(QWidget):
         text = p.note_text
         self.raw.setPlainText(text)
         if text:
-            self.preview.setMarkdown(self.render_body(text))
+            # MarkdownNoHTML: a note (or a Wikipedia extract in it) containing <b>, <img> or <script> shows that text,
+            # it is not rendered; same flags as the About page.
+            self.preview.document().setMarkdown(
+                self.render_body(text),
+                QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.MarkdownFeature.MarkdownNoHTML)
         else:
             self.preview.setPlainText("No note can be made yet: pick a candidate above." if p.candidates
                                       else "Nothing was found for this folder.")

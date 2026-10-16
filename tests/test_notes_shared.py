@@ -68,8 +68,8 @@ def test_a_broken_cache_file_is_dropped_and_started_again(tmp_path):
     path.write_bytes(b"this is not a database at all" * 50)
     c = ResponseCache(path)
     assert c.get("k") is None
-    c.put("k", b"v")
-    assert c.get("k") == (200, b"v")
+    c.put("k", b"{}")
+    assert c.get("k") == (200, b"{}")
     c.close()
 
 
@@ -79,8 +79,8 @@ def test_the_cache_is_thread_safe(cache):
     def worker(n):
         try:
             for i in range(40):
-                cache.put(f"t{n}-{i}", f"v{n}{i}".encode())
-                assert cache.get(f"t{n}-{i}") == (200, f"v{n}{i}".encode())
+                cache.put(f"t{n}-{i}", f"[{n}, {i}]".encode())
+                assert cache.get(f"t{n}-{i}") == (200, f"[{n}, {i}]".encode())
         except Exception as exc:  # noqa: BLE001
             errors.append(repr(exc))
 
