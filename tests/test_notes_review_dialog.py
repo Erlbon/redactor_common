@@ -18,9 +18,12 @@ from tests.test_notes_shared import FakeTarget  # noqa: E402
 NOTE = "---\ntitle: {name}\n---\n\n# {name}\n\nSome text.\n"
 
 
-@pytest.fixture(scope="module")
+_app = QApplication.instance() or QApplication([])  # held for the life of the process, like the other GUI tests
+
+
+@pytest.fixture
 def app():
-    return QApplication.instance() or QApplication([])
+    return _app
 
 
 @pytest.fixture(autouse=True)

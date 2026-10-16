@@ -27,9 +27,12 @@ def keep() -> QWidget:
     return widget
 
 
-@pytest.fixture(scope="module")
+_app = QApplication.instance() or QApplication([])  # held for the life of the process, like the other GUI tests
+
+
+@pytest.fixture
 def app():
-    return QApplication.instance() or QApplication([])
+    return _app
 
 
 @dataclass
