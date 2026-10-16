@@ -73,12 +73,14 @@ def test_an_uncertain_row_cannot_be_ticked_from_the_list(app, tmp_path):
 
 def test_one_at_a_time_write_skip_and_the_summary(app, tmp_path, quiet_boxes):
     d = dialog(app, [make(tmp_path, "A"), make(tmp_path, "B")], view=VIEW_ONE)
-    assert d.stack.currentIndex() == 0 and d.header_label.text() == "Note 1 of 2"
+    assert d.write_all_button.text() == "Write all remaining confident (2)" and d.write_button.text() == "Write note"
+    assert d.stack.currentIndex() == 0 and d.header_label.text() == "Create notes  1 of 2"
     QTest.mouseClick(d.write_button, Qt.MouseButton.LeftButton)
-    assert (tmp_path / "A" / "series.md").is_file() and d.header_label.text() == "Note 2 of 2"
+    assert (tmp_path / "A" / "series.md").is_file() and d.header_label.text() == "Create notes  2 of 2"
     QTest.mouseClick(d.skip_button, Qt.MouseButton.LeftButton)
     assert not (tmp_path / "B" / "series.md").exists()
     assert quiet_boxes and "Written: 1" in quiet_boxes[-1] and "Skipped: 1" in quiet_boxes[-1]
+    assert d.result() == d.DialogCode.Accepted and not d.isVisible()  # nothing left to decide: the page closed itself
     d.close()
 
 

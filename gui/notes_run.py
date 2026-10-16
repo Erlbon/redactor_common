@@ -128,9 +128,6 @@ def run_create_notes(
         session, choose_view(targets, owner_kinds=owner_kinds, child_kind=child_kind), rebuild, engine.can_choose,
         banner="  ".join(n for n in notes if n) + (f"\n{time_line}" if time_line else ""), parent=parent, title=title,
         size=parse_size(size_text), on_size=(lambda w, h: on_size(f"{w}x{h}")) if on_size else None, open_path=open_path,
-        candidate_columns=candidate_columns)
-    if history_note:
-        dialog.banner_label.setText(dialog.banner_label.text() + "\n" + history_note)
-        dialog.banner_label.setVisible(True)
+        candidate_columns=candidate_columns, lookup_note=lookup_note, history_note=history_note)
     dialog.exec()
     return dialog

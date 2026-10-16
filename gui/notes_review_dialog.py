@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from redactor_common.core.notes import parse_front_matter
+from redactor_common.core.notes import STATE_LEGACY, parse_front_matter
 from redactor_common.core.notes_model import Candidate, Confidence, Proposal
 from redactor_common.core.notes_review import (
     CONFIDENCE_WORDS, ERROR, EXISTS, PENDING, SKIPPED, TOO_LARGE, VIEW_LIST, VIEW_ONE, WRITTEN, ReviewItem,
@@ -281,9 +281,13 @@ class NotesReviewDialog(QDialog):
         banner: str = "", parent=None, title: str = "Create Notes", size: Optional[tuple[int, int]] = None,
         on_size: Optional[Callable[[int, int], None]] = None, open_path: Callable[[str], None] = open_in_system,
         candidate_columns: tuple[str, ...] = ("Name", "Details", "Score", "Source", "Matches"),
+        lookup_note: str = "", history_note: str = "",
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
+        self._lookup_note = lookup_note  # 'Looked up N folders in H:MM:SS (R requests, C from the cache).'
+        self._history_note = history_note  # 'Recorded in Tools > History (it is switched on).'
+        self.followup: list[str] = []
         self.session = session
         self.view = view
         self.index = 0
@@ -450,13 +454,17 @@ class NotesReviewDialog(QDialog):
             return
         self.index = max(0, min(self.index, len(items) - 1))
         item = items[self.index]
-        self.header_label.setText(f"Note {self.index + 1} of {len(items)}")
+        self.header_label.setText(f"Create notes  {self.index + 1} of {len(items)}")
         self.one_panel.show_item(item)
-        self.write_button.setEnabled(item.tickable)
-        self.skip_button.setEnabled(item.state == PENDING)
         self.back_button.setEnabled(self.index > 0)
-        self.write_all_button.setEnabled(any(i.tickable and not i.proposal.is_update for i in items))
-        self.write_button.setText("Replace note" if item.proposal.is_update else "Write note")
+        self.skip_button.setEnabled(item.state == PENDING)
+        self.write_button.setEnabled(item.tickable)
+        self.write_button.setText("Update note" if item.proposal.is_update else "Write note")
+        if item.tickable:
+            self.write_button.setFocus()
+        remaining = sum(1 for i in items if i.tickable)
+        self.write_all_button.setText(f"Write all remaining confident ({remaining})")
+        self.write_all_button.setEnabled(remaining > 0)
 
     def go_back(self) -> None:
         if self.index > 0:
@@ -469,44 +477,66 @@ class NotesReviewDialog(QDialog):
             self._finish()
         else:
             self.index = nxt
-            self._refresh_all()
+            self._show_one()
 
     def skip_current(self) -> None:
         self.session.skip(self.index)
         self._advance()
 
     def _confirm_updates(self, indices: list[int]) -> bool:
-        updates = [i for i in indices if self.session.items[i].proposal.is_update]
-        if not updates:
+        """An UPDATE replaces an existing note: ask once, say where the old one goes. True = go on."""
+        n = sum(1 for i in indices if self.session.items[i].proposal.is_update)
+        if not n:
             return True
-        answer = QMessageBox.question(
-            self, self.windowTitle(),
-            f"Replace {len(updates)} older note(s)? {RECYCLE_NOTE}")
+        legacy = sum(1 for i in indices if self.session.items[i].proposal.is_update
+                     and self.session.items[i].proposal.old_state.kind == STATE_LEGACY)
+        text = f"Replace {n} note{'s' if n != 1 else ''} made by an older version?\n\n{RECYCLE_NOTE}"
+        if legacy:
+            text += (f"\n\n{legacy} of them {'was' if legacy == 1 else 'were'} made by the first versions: "
+                     "it cannot be told whether you edited " + ("it." if legacy == 1 else "them."))
+        answer = QMessageBox.question(self, self.windowTitle(), text,
+                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                      QMessageBox.StandardButton.No)
         return answer == QMessageBox.StandardButton.Yes
 
     def write_current(self) -> None:
         if not self._confirm_updates([self.index]):
             return
-        self.session.write(self.index)
-        self._report_problems([self.session.items[self.index]])
+        self._write_index(self.index)
         self._advance()
 
     def write_remaining(self) -> None:
-        indices = [i for i, it in enumerate(self.session.items) if it.tickable and not it.proposal.is_update]
-        self.session.write_remaining_confident()
-        self._report_problems([self.session.items[i] for i in indices])
-        self._finish()
+        wanted = [i for i, item in enumerate(self.session.items)
+                  if item.tickable and (not item.proposal.is_update or item.ticked)]
+        if not self._confirm_updates(wanted):
+            return
+        results = self.session.write_remaining_confident()
+        self._report_problems(results)
+        if self.view == VIEW_ONE and self.session.next_pending(-1) is None:
+            self._finish()  # nothing left to decide: the summary, then the page closes
+            return
+        self._summary_box()
+        self._refresh_all()
 
-    def _report_problems(self, items) -> None:
-        bad = [it for it in items if it.state in (ERROR, TOO_LARGE, EXISTS)]
-        if bad:
-            QMessageBox.warning(self, self.windowTitle(), "\n".join(f"{it.proposal.folder.name}: {it.message}" for it in bad))
+    def _write_index(self, index: int) -> None:
+        result = self.session.write(index)
+        self._report_problems([result])
+
+    def _report_problems(self, results) -> None:
+        bad = [r for r in results if r.status in ("exists", "too_large", "error", "changed")]
+        if bad and len(results) == 1:  # one note asked for: say at once why it was not written
+            QMessageBox.warning(self, self.windowTitle(),
+                                f"The note was not written.\n\n{bad[0].message or bad[0].status}\n{bad[0].path}")
 
     def _finish(self) -> None:
+        self._summary_box()
+        self.accept()
+
+    def _summary_box(self) -> None:
         totals = self.session.totals()
-        self.last_summary = totals.text()
-        self._refresh_all()
-        QMessageBox.information(self, self.windowTitle(), self.last_summary)
+        self.last_summary = (totals.text() + (f"\n\n{self._lookup_note}" if self._lookup_note else "")
+                             + (f"\n\n{self._history_note}" if self._history_note and totals.written else ""))
+        QMessageBox.information(self, f"{self.windowTitle()}: summary", self.last_summary)
 
     # -- the list ----------------------------------------------------------------------------------------------
 
@@ -579,10 +609,10 @@ class NotesReviewDialog(QDialog):
         indices = self.session.ticked_pending()
         if not self._confirm_updates(indices):
             return
-        self.session.write_ticked()
-        self._report_problems([self.session.items[i] for i in indices])
-        self._fill_tree()
-        self._select_tree_index(self.index)
+        results = self.session.write_ticked()
+        self._report_problems(results)
+        self._summary_box()
+        self._refresh_all()
 
     # -- choices -----------------------------------------------------------------------------------------------
 
@@ -594,20 +624,23 @@ class NotesReviewDialog(QDialog):
 
     def open_current_note(self) -> None:
         item = self.session.items[self.index]
-        path = item.written_path or (item.proposal.path if item.proposal.is_update else "")
-        if path and os.path.isfile(path):
-            self._open_path(path)
+        if item.written_path:
+            self._open_path(item.written_path)
 
     def show_current_folder(self) -> None:
-        self._open_path(str(Path(self.session.items[self.index].proposal.folder)))
+        item = self.session.items[self.index]
+        if item.written_path:
+            self._open_path(str(Path(item.written_path).parent))
 
     # -- closing -----------------------------------------------------------------------------------------------
 
     def reject(self) -> None:
-        pending = sum(1 for it in self.session.items if it.tickable and it.ticked)
-        if pending:
-            answer = QMessageBox.question(self, self.windowTitle(),
-                                          f"{pending} note(s) are ticked but not written. Close without writing them?")
+        waiting = len(self.session.ticked_pending())
+        if waiting:
+            answer = QMessageBox.question(
+                self, self.windowTitle(),
+                f"{waiting} ticked note{'s have' if waiting != 1 else ' has'} not been written. Close anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
             if answer != QMessageBox.StandardButton.Yes:
                 return
         super().reject()
