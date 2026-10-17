@@ -94,3 +94,19 @@ def test_local_db_check_file_runs_off_the_gui_thread(monkeypatch):
     assert shown == ["4 titles"]
     dialog.path_edit.setText("C:/other.db")
     assert dialog.check_result("C:/explicit.db")[0] and seen["path"] == "C:/explicit.db"  # an explicit path wins over the widget
+
+
+def test_a_total_over_two_gigabytes_does_not_overflow_the_progress_dialog():
+    """The deep scan counts bytes: a 4 GB file overflowed QProgressDialog's 32-bit range (owner's crash box, 2026-10-17)."""
+    from redactor_common.gui.work_progress import int_scale, run_work_with_progress
+
+    assert int_scale(1000) == 1 and int_scale(2_000_000_000) == 1 and int_scale(4_500_000_000) == 3
+    total = 5_000_000_000
+
+    def work(progress):
+        progress.set_value(total // 2)
+        progress.set_value(total)
+        return "done"
+
+    result, cancelled = run_work_with_progress(None, total, "Big", work, cancellable=False, show_after_ms=0)
+    assert result == "done" and not cancelled

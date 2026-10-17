@@ -42,6 +42,12 @@ T = TypeVar("T")
 
 SHOW_AFTER_MS = 300
 REFRESH_MS = 100
+_QT_INT_CAP = 2_000_000_000  # QProgressDialog takes C ints: a byte total over 2 GB overflowed (OverflowError, 2026-10-17)
+
+
+def int_scale(total: int) -> int:
+    """The divisor that brings `total` under the 32-bit range QProgressDialog accepts (1 for ordinary totals)."""
+    return 1 if total <= _QT_INT_CAP else -(-total // _QT_INT_CAP)
 _MAX_LABEL_LENGTH = 70
 CANCELLING_TEXT = "Cancelling... (finishing the file in progress)"
 
@@ -118,7 +124,7 @@ def run_work_with_progress(
     the maximum through WorkProgress.report()."""
     progress = WorkProgress(total)
     with _InputBlock(parent) as block:
-        dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, max(total, 0), parent)
+        dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, max(total, 0) // int_scale(total), parent)
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setAutoClose(False)
         dialog.setAutoReset(False)
@@ -128,6 +134,7 @@ def run_work_with_progress(
             dialog.setWindowTitle(title)
         block.allow(dialog)
         running = [True]
+        scale = [int_scale(total)]
 
         def show_dialog() -> None:
             if running[0]:
@@ -146,11 +153,13 @@ def run_work_with_progress(
         def refresh() -> None:
             done, text = progress.snapshot()
             seen = progress.total_seen() if dynamic_total else None
-            if seen is not None and dialog.maximum() != seen:
-                dialog.setMaximum(seen)
+            if seen is not None:
+                scale[0] = int_scale(seen)
+                if dialog.maximum() != seen // scale[0]:
+                    dialog.setMaximum(seen // scale[0])
             maximum = dialog.maximum()
             if maximum > 0:
-                dialog.setValue(min(done, maximum))
+                dialog.setValue(min(done // scale[0], maximum))
             if text and not progress.cancelled.is_set():
                 dialog.setLabelText(_elide(text))
 
