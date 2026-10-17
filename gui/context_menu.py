@@ -50,9 +50,11 @@ from typing import Any, Callable
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QTableWidget, QWidget
 
 from redactor_common.core.os_utils import open_with_default_app, reveal_in_file_manager
-from redactor_common.gui.menu_builder import MenuAction, MenuItems, populate_menu
+from redactor_common.gui.menu_builder import MenuAction, MenuItems, Separator, populate_menu
 
 MAX_OPEN_WITHOUT_ASKING = 5
+NO_CHANGES_TIP = "The selected files have no unsaved changes"
+SAVED_TIP = "Save only the selected files that have unsaved changes (File > Save All saves everything)"
 
 
 def show_table_context_menu(
@@ -62,6 +64,8 @@ def show_table_context_menu(
     get_selected_items: Callable[[], list],
     get_path: Callable[[Any], str],
     extra_items: Callable[[list], MenuItems] | None = None,
+    save_selected: Callable[[list], None] | None = None,
+    is_dirty: Callable[[Any], bool] | None = None,
 ) -> None:
     """Full right-click flow for a project's main table. `window` is
     the main window (menu parent, and what make_action() attaches
@@ -69,6 +73,13 @@ def show_table_context_menu(
     `get_selected_items`/`get_path` are this project's own accessors,
     same "generalized via accessor callables, not tied to one data
     model" pattern the rest of this package uses.
+
+    `save_selected` (None = no such item, so existing callers stay valid)
+    adds "Save Selected (N)" right after the file actions: N is how many of
+    the selected items `is_dirty` calls changed (all of them when is_dirty
+    is None), and the callback receives exactly those items. With N == 0
+    the item is greyed, with the tooltip NO_CHANGES_TIP. File > Save All
+    stays the "everything" command; this one saves only the selection.
     """
     row = table.rowAt(pos.y())
     if row >= 0:
@@ -86,12 +97,28 @@ def show_table_context_menu(
         MenuAction("open_containing_folder", "Open Containing Folder", lambda: _open_containing_folder(items, get_path)),
         MenuAction("copy_path", "Copy Path", lambda: _copy_paths(items, get_path)),
     ]
+    if save_selected is not None:
+        menu_items.extend(save_selected_items(items, save_selected, is_dirty))
     if extra_items:
         menu_items.extend(extra_items(items))
 
     menu = QMenu(window)
     populate_menu(window, menu, menu_items)
     menu.exec(table.viewport().mapToGlobal(pos))
+
+
+def save_selected_items(
+    items: list, save_selected: Callable[[list], None], is_dirty: Callable[[Any], bool] | None = None
+) -> MenuItems:
+    """The "Save Selected (N)" entry (with its separator) for a context menu."""
+    dirty = [item for item in items if is_dirty is None or is_dirty(item)]
+    return [
+        Separator(),
+        MenuAction(
+            "save_selected", f"Save Selected ({len(dirty)})", lambda: save_selected(dirty),
+            tooltip=SAVED_TIP if dirty else NO_CHANGES_TIP, enabled=bool(dirty),
+        ),
+    ]
 
 
 def _open_in_default_app(window: QWidget, items: list, get_path: Callable[[Any], str]) -> None:
