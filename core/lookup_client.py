@@ -422,3 +422,55 @@ def fetch_bytes(
     if require_data and not data:
         raise error_cls(f"Downloading {what} returned no data.")
     return data
+
+
+# -- hostile or odd JSON shapes ----------------------------------------------------------------------------------
+#
+# A server (or a proxy page) can answer 200 with any JSON: [], null, 5, {"results": "x"}, {"results": [1, null, {}]}.
+# These helpers let a parser read what it expects and skip what it does not, instead of an AttributeError / KeyError /
+# TypeError reaching the crash dialog (2026-10-17, review batch 4).
+
+
+def json_object(data: object, error_cls: Type[Exception] = LookupError, source_name: str = "the lookup service") -> dict:
+    """`data` when it is a JSON object; {} for a missing answer (None); anything else (a list, a number, a string)
+    is an unreadable response: `error_cls` with the same message fetch_json uses."""
+    if data is None:
+        return {}
+    if isinstance(data, dict):
+        return data
+    raise error_cls(f"Received an unreadable response from {source_name}.")
+
+
+def as_dict(value: object) -> dict:
+    """`value` when it is an object, else {}."""
+    return value if isinstance(value, dict) else {}
+
+
+def dict_items(value: object) -> list[dict]:
+    """The objects in a list; a non-list gives [] and a non-object entry (1, null, "x", [..]) is skipped."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def as_text(value: object, default: str = "") -> str:
+    """A string as is, a number as text, anything else `default` (never a dict or list where text is shown)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return default
+
+
+def as_int(value: object, default: int = 0) -> int:
+    """An int, or digits in a string, else `default`."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value == value and abs(value) < 1e15:
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default

@@ -234,6 +234,10 @@ def trash_with_fallback(fallback_folder: "Callable[[], str] | str | None" = None
 
     def mover(path: str) -> None:
         folder = fallback_folder() if callable(fallback_folder) else fallback_folder
-        move_to_trash(path, str(folder).strip() if folder else None)
+        folder = str(folder).strip() if folder else ""
+        if folder:
+            move_to_trash(path, folder)
+        else:
+            move_to_trash(path)
 
     return trash_with_retries(mover, **retry_options)
