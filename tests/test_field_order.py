@@ -320,3 +320,10 @@ def test_stale_rows_during_a_rebuild_never_raise_out_of_the_event_filter(qapp):
     assert panel.ctl.eventFilter(panel.container, event) is False  # does not raise
     key = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
     assert panel.ctl.eventFilter(panel.container, key) is False
+
+
+def test_a_controller_torn_down_before_its_last_event_does_not_raise(qapp):
+    panel, _store = make_panel(qapp)
+    ctl = panel.ctl
+    del ctl.__dict__["_container"]  # what a collected Python side looks like to a late Qt event
+    assert ctl.eventFilter(panel.container, QEvent(QEvent.Type.Resize)) is False

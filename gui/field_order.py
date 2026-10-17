@@ -298,8 +298,8 @@ class FieldOrderController(QObject):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         kind = event.type()
-        # Never let a stale row (a widget the panel just deleted while rebuilding its form) raise out of an
-        # event filter: an exception escaping a Qt virtual aborts the whole process.
+        # Never let a stale row (a widget the panel just deleted while rebuilding its form) or a half-torn-down
+        # controller raise out of an event filter: an exception escaping a Qt virtual aborts the whole process.
         try:
             if watched is self._container:
                 if kind in (QEvent.Type.Resize, QEvent.Type.LayoutRequest, QEvent.Type.Show, QEvent.Type.Move):
@@ -310,7 +310,9 @@ class FieldOrderController(QObject):
                         and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
                     if self._move_row_of(watched, -1 if event.key() == Qt.Key.Key_Up else 1):
                         return True
-        except (RuntimeError, KeyError):
+        except (RuntimeError, KeyError, AttributeError):
+            # AttributeError: the Python side of a controller whose panel is being torn down can already be gone
+            # while Qt still delivers a last event to its C++ side.
             return False
         return False
 
