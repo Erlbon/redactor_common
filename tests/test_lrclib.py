@@ -328,7 +328,7 @@ def test_unreachable_message():
 
 def test_http_500_and_bad_json_are_lrclib_errors():
     with pytest.raises(LrclibError, match="HTTP 500"):
-        LrclibClient(fetch=_Fetch(_http(500))).search("a", "b")
+        LrclibClient(fetch=_Fetch(_http(500)), retry_429=()).search("a", "b")
     with pytest.raises(LrclibError, match="unreadable"):
         LrclibClient(fetch=_Fetch(b"<html>")).search("a", "b")
 
@@ -346,3 +346,135 @@ def test_default_fetch_is_throttled(monkeypatch):
     client.search("a", "b")
     client.search("a", "c")
     assert calls == ["wait", "wait"]
+
+
+# -- busy answers (2026-10-17: /api/get answered 503 ServerOverloaded while /api/search worked) -------------
+
+import email.message
+import http.server
+import threading
+
+from redactor_common.core.lrclib import LrclibCancelled, clean_lyrics_text, lyrics_text
+
+_BUSY_BODY = b'{"message":"The server is busy, please retry in a moment","name":"ServerOverloaded","statusCode":503}'
+
+
+def _http_body(code, body=_BUSY_BODY, headers=None):
+    msg = email.message.Message()
+    for k, v in (headers or {}).items():
+        msg[k] = v
+    import io
+    return urllib.error.HTTPError("https://lrclib.net/api/get?artist_name=SECRET", code, "Service Unavailable", msg,
+                                  io.BytesIO(body))
+
+
+def test_503_retried_with_live_status_text_then_succeeds():
+    sleeps, texts = [], []
+    fetch = _Fetch(_http_body(503), _http_body(503), [])
+    LrclibClient(fetch=fetch, sleep=sleeps.append).search("a", "b", on_status=texts.append)
+    assert len(fetch.requests) == 3
+    assert texts[0] == "LRCLIB is busy (HTTP 503), trying again in 2 s..."
+    assert "LRCLIB is busy (HTTP 503), trying again in 1 s..." in texts and texts[2].endswith("in 4 s...")
+    assert abs(sum(sleeps) - 5.5) < 1e-6
+
+
+def test_503_forever_gives_the_clear_message_within_the_cap_and_does_not_hang():
+    sleeps = []
+    fetch = _Fetch(*[_http_body(503) for _ in range(10)])
+    with pytest.raises(LrclibError) as err:
+        LrclibClient(fetch=fetch, sleep=sleeps.append).search("SECRET", "b")
+    text = str(err.value)
+    assert text == ("LRCLIB is busy right now (HTTP 503 'The server is busy'). "
+                    "Nothing is wrong with your file. Try again in a minute.")
+    assert err.value.status == 503 and err.value.busy
+    assert len(fetch.requests) == 3 and sum(sleeps) <= 10.0
+
+
+def test_wait_cap_stops_early():
+    sleeps = []
+    client = LrclibClient(fetch=_Fetch(*[_http_body(503) for _ in range(10)]), sleep=sleeps.append,
+                          retry_429=(6.0, 6.0), max_wait=10.0)
+    with pytest.raises(LrclibError):
+        client.search("a", "b")
+    assert sum(sleeps) == 6.0
+
+
+def test_retry_false_gives_up_at_the_first_busy_answer():
+    fetch = _Fetch(_http_body(503), [])
+    with pytest.raises(LrclibError, match="busy right now"):
+        LrclibClient(fetch=fetch, sleep=lambda s: None).get_by_signature("a", "b", "", 100, retry=False)
+    assert len(fetch.requests) == 1
+
+
+def test_429_respects_retry_after():
+    sleeps = []
+    fetch = _Fetch(_http_body(429, b"{}", {"Retry-After": "2"}), [])
+    LrclibClient(fetch=fetch, sleep=sleeps.append).search("a", "b")
+    assert sleeps == [2.0]
+
+
+def test_429_with_a_long_retry_after_is_not_waited_for():
+    sleeps = []
+    fetch = _Fetch(_http_body(429, b"{}", {"Retry-After": "120"}))
+    with pytest.raises(LrclibError, match="rate-limiting.*about 120 s"):
+        LrclibClient(fetch=fetch, sleep=sleeps.append).search("a", "b")
+    assert sleeps == []
+
+
+def test_cancel_during_a_wait():
+    state = {"n": 0}
+
+    def cancel():
+        state["n"] += 1
+        return state["n"] > 3
+
+    fetch = _Fetch(_http_body(503), [])
+    with pytest.raises(LrclibCancelled):
+        LrclibClient(fetch=fetch, sleep=lambda s: None).search("a", "b", should_cancel=cancel)
+    assert len(fetch.requests) == 1
+
+
+def test_real_http_server_busy_on_get_ok_on_search():
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            hits.append(self.path.split("?")[0])
+            if self.path.startswith("/api/get"):
+                body, code = _BUSY_BODY, 503
+            else:
+                body, code = b'[{"id": 1, "trackName": "T", "artistName": "A", "duration": 10, "plainLyrics": "x"}]', 200
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        import redactor_common.core.lrclib as mod
+        old = mod.BASE_URL
+        mod.BASE_URL = f"http://127.0.0.1:{server.server_port}/api"
+        try:
+            client = LrclibClient(interval=0, sleep=lambda s: None)
+            assert client.search("A", "T")[0].id == 1
+            with pytest.raises(LrclibError, match="HTTP 503 'The server is busy'"):
+                client.get_by_signature("A", "T", "", 10, retry=False)
+        finally:
+            mod.BASE_URL = old
+    finally:
+        server.shutdown()
+    assert hits == ["/api/search", "/api/get"]
+
+
+def test_clean_lyrics_text_and_lyrics_text():
+    assert clean_lyrics_text("a\r\n\r\n\r\n\r\nb\n\nSource: Musixmatch\n") == "a\n\nb"
+    big = "\n".join(["строка " * 10] * 3000)
+    assert len(clean_lyrics_text(big).encode("utf-8")) <= 64 * 1024
+    synced = Lyrics(synced="[00:01.00] Hello\n[00:03.00] \n[00:05.00] World\n[by:me]")
+    assert lyrics_text(synced) == "Hello\n\nWorld"
+    assert lyrics_text(Lyrics(plain="P", synced="[00:01.00] S")) == "P"
+    assert lyrics_text(Lyrics(plain="P", instrumental=True)) == ""
