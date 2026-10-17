@@ -185,6 +185,7 @@ def run_with_progress(
     update_every: int = 1,
     label_for: Callable[[T], str] | None = None,
     on_cancel: Callable[[], None] | None = None,
+    on_error: Callable[[T, Exception], None] | None = None,
 ) -> bool:
     """Runs `step(item, index)` for each item in `items`, showing a
     QProgressDialog only if len(items) >= threshold (items is consumed
@@ -213,6 +214,10 @@ def run_with_progress(
     that runs a long external process (ffmpeg) in the background can
     hand its cancel event's `set` here so Cancel stops that process
     instead of only skipping the items not yet started.
+
+    `on_error`: without it an exception from step() propagates and ENDS the whole run (the items after it are
+    never processed). With it, the exception is handed to `on_error(item, exc)` and the loop carries on with
+    the next item -- one bad file must not stop a batch (Save All used to stop silently at the first one).
     """
     items = list(items)
     dialog = None
@@ -227,7 +232,13 @@ def run_with_progress(
                 return False
             if dialog is not None and label_for is not None:
                 dialog.setLabelText(_elide_label(label_for(item)))
-            step(item, index)
+            if on_error is None:
+                step(item, index)
+            else:
+                try:
+                    step(item, index)
+                except Exception as exc:  # noqa: BLE001 - isolated per item on purpose
+                    on_error(item, exc)
             if dialog is not None and (index % update_every == 0 or index == len(items) - 1):
                 dialog.setValue(index + 1)
                 QApplication.processEvents()

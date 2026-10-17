@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import os
 import sys
-import traceback
 from pathlib import Path
 from typing import Callable
 
@@ -48,49 +47,13 @@ def set_windows_app_user_model_id(app_user_model_id: str) -> None:
 
 
 def make_crash_dialog(log_path: str | Path) -> crash_log.ExceptionCallback:
-    """Returns an `also_call` for crash_log.install() that shows a
-    best-effort "Unexpected Error" message box naming the log file. Does
-    nothing if no QApplication exists yet (a crash during the earliest
-    startup is still logged either way)."""
+    """Returns an `also_call` for crash_log.install(): the shared "Something went wrong" box
+    (redactor_common.gui.crash_dialog): one non-stacking dialog with the traceback under Details, Copy Details,
+    Open Crash Log Folder and the log's path. Works from worker threads; a crash during the earliest startup
+    (no QApplication yet) is still logged either way."""
+    from redactor_common.gui import crash_dialog
 
-    relay = None
-
-    def _show(exc_type, exc_value, exc_tb) -> None:
-        nonlocal relay
-        from PyQt6.QtCore import QObject, QThread, pyqtSignal
-        from PyQt6.QtWidgets import QApplication
-
-        app = QApplication.instance()
-        if app is None:
-            return
-        summary = "".join(traceback.format_exception_only(exc_type, exc_value)).strip()
-        if QThread.currentThread() is app.thread():
-            _display(summary)
-            return
-        # A widget can only be made on the GUI thread: hand the message
-        # over through a signal (queued across threads) instead.
-        if relay is None:
-            class _Relay(QObject):
-                show_message = pyqtSignal(str)
-
-            relay = _Relay()
-            relay.moveToThread(app.thread())
-            relay.show_message.connect(_display)
-        relay.show_message.emit(summary)
-
-    def _display(summary: str) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-
-        QMessageBox.critical(
-            None,
-            "Unexpected Error",
-            "Something went wrong that this app didn't expect.\n\n"
-            f"{summary}\n\n"
-            f"Details have been saved to {log_path} -- "
-            "that file may help track down what happened.",
-        )
-
-    return _show
+    return crash_dialog.callback_for(log_path)
 
 
 def run_app(
