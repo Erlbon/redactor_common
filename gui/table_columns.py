@@ -89,3 +89,39 @@ def lint_resizable_headers(folder: Path | str) -> list[str]:
                     "makes the column undraggable: use make_columns_resizable() (or add '# resizable-ok: <reason>')"
                 )
     return problems
+
+
+# --- the sorting rule (owner, 2026-10-17: ALL column headers are sortable) ---------------------------------------------
+
+_TABLE_CREATION = re.compile(r"\b(?:QTableWidget|QTableView)\(")
+_SORT_ENABLED = re.compile(r"\benable_sorting\(|\bsetSortingEnabled\(\s*True\s*\)")
+_SORTABLE_NO = re.compile(r"#\s*sortable:\s*no\s*\(\s*\S")
+
+
+def lint_sortable_headers(folder: Path | str) -> list[str]:
+    """Problems found in the .py files under `folder` (one readable string per place): a module that creates a
+    QTableWidget/QTableView but never turns sorting on (`enable_sorting(table)` from sortable_table, or
+    `setSortingEnabled(True)`). A table that truly cannot sort (a log, say) carries `# sortable: no (<reason>)` on its
+    creation line or the line above. Empty list = the rule holds."""
+    problems: list[str] = []
+    root = Path(folder)
+    for path in sorted(root.rglob("*.py")):
+        if any(part in {"tests", "__pycache__", "build", "dist"} for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        lines = text.splitlines()
+        sorted_somewhere = any(_SORT_ENABLED.search(line) and not line.lstrip().startswith("#") for line in lines)
+        for number, line in enumerate(lines, start=1):
+            if line.lstrip().startswith(("#", "from ", "import ")) or not _TABLE_CREATION.search(line):
+                continue
+            if _SORTABLE_NO.search(line) or (number > 1 and _SORTABLE_NO.search(lines[number - 2])):
+                continue
+            if not sorted_somewhere:
+                problems.append(
+                    f"{path.name}:{number}: a table that never turns sorting on: call enable_sorting(table) from "
+                    "redactor_common.gui.sortable_table (or add '# sortable: no (<reason>)')"
+                )
+    return problems

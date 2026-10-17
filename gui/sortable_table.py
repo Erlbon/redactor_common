@@ -53,9 +53,11 @@ Usage:
 
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 
 
@@ -85,3 +87,45 @@ def suspend_sorting(table: QTableWidget) -> Iterator[None]:
         yield
     finally:
         table.setSortingEnabled(was_sorting)
+
+
+# --- the one opt-in every table uses (owner rule 2026-10-17: ALL column headers are sortable) -------------------------
+
+
+def natural_key(text: str) -> tuple:
+    """Sort key that reads digit runs as numbers and ignores case: 'Episode 2' < 'Episode 10', 'a' == 'A'. Dates in
+    ISO form (2014-02-17, or a bare 2014) already order correctly this way."""
+    parts = re.split(r"(\d+)", (text or "").casefold())
+    return tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in parts if part != "")
+
+
+class NaturalTableWidgetItem(QTableWidgetItem):
+    """A text cell that sorts naturally (numbers inside the text count as numbers, case is ignored). Use it for
+    names, titles, dates; NumericTableWidgetItem for a column that is a bare number."""
+
+    def __lt__(self, other) -> bool:
+        return natural_key(self.text()) < natural_key(other.text() if hasattr(other, "text") else str(other))
+
+
+def enable_sorting(table: QTableWidget, column: int = -1,
+                   order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
+    """Make every header of `table` click-to-sort, with the sort arrow. Call it once at table setup.
+
+    `column` -1 (the default) keeps the rows in the order they were filled in until the user clicks a header; a real
+    column index sorts by it at once. Fill the table inside `with suspend_sorting(table):` and map a row to its
+    record through an item's Qt.UserRole, never through the row number (a sorted row is not row N of your list)."""
+    header = table.horizontalHeader()
+    header.setSortIndicatorShown(True)
+    header.setSectionsClickable(True)
+    header.setSortIndicator(column, order)
+    table.setSortingEnabled(True)
+
+
+def row_of(table: QTableWidget, key, column: int = 0, role: int = Qt.ItemDataRole.UserRole) -> int:
+    """The CURRENT row whose item in `column` carries `key` in `role` (-1 when none): how to find a record's row
+    after the user sorted the table."""
+    for row in range(table.rowCount()):
+        item = table.item(row, column)
+        if item is not None and item.data(role) == key:
+            return row
+    return -1
