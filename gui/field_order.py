@@ -298,14 +298,20 @@ class FieldOrderController(QObject):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         kind = event.type()
-        if watched is self._container:
-            if kind in (QEvent.Type.Resize, QEvent.Type.LayoutRequest, QEvent.Type.Show, QEvent.Type.Move):
-                self._place_grips()
+        # Never let a stale row (a widget the panel just deleted while rebuilding its form) raise out of an
+        # event filter: an exception escaping a Qt virtual aborts the whole process.
+        try:
+            if watched is self._container:
+                if kind in (QEvent.Type.Resize, QEvent.Type.LayoutRequest, QEvent.Type.Show, QEvent.Type.Move):
+                    self._place_grips()
+                return False
+            if kind == QEvent.Type.KeyPress and isinstance(watched, QWidget):
+                if (event.modifiers() == Qt.KeyboardModifier.AltModifier
+                        and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
+                    if self._move_row_of(watched, -1 if event.key() == Qt.Key.Key_Up else 1):
+                        return True
+        except (RuntimeError, KeyError):
             return False
-        if kind == QEvent.Type.KeyPress and isinstance(watched, QWidget):
-            if event.modifiers() == Qt.KeyboardModifier.AltModifier and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-                if self._move_row_of(watched, -1 if event.key() == Qt.Key.Key_Up else 1):
-                    return True
         return False
 
     def _move_row_of(self, widget: QWidget, delta: int) -> bool:

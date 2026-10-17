@@ -301,3 +301,22 @@ def test_reset_all_hook_replaces_the_single_container_reset(qapp):
     assert calls == ["all"] and panel.shown_order()[0] == "genre"  # the hook decides what resets
     panel.ctl.reset_this()
     assert panel.shown_order() == KEYS
+
+
+def test_stale_rows_during_a_rebuild_never_raise_out_of_the_event_filter(qapp):
+    """A panel that deletes its row widgets while rebuilding can have layout events arrive before its row lists are
+    refreshed; the filter must swallow that (an exception escaping a Qt virtual aborts the process)."""
+    panel, _store = make_panel(qapp)
+    stale = [lbl for lbl, _ed in panel.rows.values()]
+    for lbl, ed in list(panel.rows.values()):
+        panel.form.removeWidget(lbl)
+        panel.form.removeWidget(ed)
+        lbl.deleteLater()
+        ed.deleteLater()
+    from PyQt6.QtCore import QCoreApplication
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    assert stale
+    event = QEvent(QEvent.Type.LayoutRequest)
+    assert panel.ctl.eventFilter(panel.container, event) is False  # does not raise
+    key = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
+    assert panel.ctl.eventFilter(panel.container, key) is False
