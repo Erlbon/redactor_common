@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
@@ -129,3 +129,24 @@ def row_of(table: QTableWidget, key, column: int = 0, role: int = Qt.ItemDataRol
         if item is not None and item.data(role) == key:
             return row
     return -1
+
+
+def enable_header_sort(table: QTableWidget, sort_rows: Callable[[int, Qt.SortOrder], None]) -> None:
+    """Click-to-sort for a table Qt cannot sort natively: one whose rows carry cell widgets (combo boxes, buttons),
+    which stay at their row number while Qt moves the items. Headers get the arrow and are clickable; a click calls
+    `sort_rows(column, order)` (ascending first, descending on the second click of the same column), and the caller
+    re-sorts its own list of records and refills the table."""
+    header = table.horizontalHeader()
+    header.setSectionsClickable(True)
+    header.setSortIndicatorShown(True)
+    header.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+    state = {"column": -1, "order": Qt.SortOrder.AscendingOrder}
+
+    def clicked(column: int) -> None:
+        order = (Qt.SortOrder.DescendingOrder if state["column"] == column and state["order"] == Qt.SortOrder.AscendingOrder
+                 else Qt.SortOrder.AscendingOrder)
+        state["column"], state["order"] = column, order
+        header.setSortIndicator(column, order)
+        sort_rows(column, order)
+
+    header.sectionClicked.connect(clicked)

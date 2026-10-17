@@ -94,14 +94,14 @@ def lint_resizable_headers(folder: Path | str) -> list[str]:
 # --- the sorting rule (owner, 2026-10-17: ALL column headers are sortable) ---------------------------------------------
 
 _TABLE_CREATION = re.compile(r"\b(?:QTableWidget|QTableView)\(")
-_SORT_ENABLED = re.compile(r"\benable_sorting\(|\bsetSortingEnabled\(\s*True\s*\)")
+_SORT_ENABLED = re.compile(r"\benable_sorting\(|\benable_header_sort\(|\bsetSortingEnabled\(\s*True\s*\)")
 _SORTABLE_NO = re.compile(r"#\s*sortable:\s*no\s*\(\s*\S")
 
 
 def lint_sortable_headers(folder: Path | str) -> list[str]:
     """Problems found in the .py files under `folder` (one readable string per place): a module that creates a
     QTableWidget/QTableView but never turns sorting on (`enable_sorting(table)` from sortable_table, or
-    `setSortingEnabled(True)`). A table that truly cannot sort (a log, say) carries `# sortable: no (<reason>)` on its
+    `setSortingEnabled(True)`, or `enable_header_sort(table, callback)` for a table with cell widgets). A table that truly cannot sort (a log, say) carries `# sortable: no (<reason>)` on its
     creation line or the line above. Empty list = the rule holds."""
     problems: list[str] = []
     root = Path(folder)

@@ -84,3 +84,24 @@ def test_remembered_layout_restores_and_saves_size_and_splitter():
     store[("dialog_layout", "y_size")] = "garbage"
     third = QDialog()
     remember_layout(third, "y", get, put)  # garbage is ignored
+
+
+def test_enable_header_sort_calls_back_ascending_then_descending():
+    from redactor_common.gui.sortable_table import enable_header_sort
+
+    table = QTableWidget(2, 2)
+    table.setHorizontalHeaderLabels(["A", "B"])
+    calls = []
+    enable_header_sort(table, lambda col, order: calls.append((col, order)))
+    header = table.horizontalHeader()
+    header.sectionClicked.emit(1)
+    header.sectionClicked.emit(1)
+    header.sectionClicked.emit(0)
+    asc, desc = Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder
+    assert calls == [(1, asc), (1, desc), (0, asc)]
+    assert header.sortIndicatorSection() == 0 and header.isSortIndicatorShown()
+
+
+def test_lint_accepts_the_rebuild_style_sort(tmp_path):
+    (tmp_path / "w.py").write_text("t = QTableWidget(0, 2)\nenable_header_sort(t, f)\n", encoding="utf-8")
+    assert lint_sortable_headers(tmp_path) == []
