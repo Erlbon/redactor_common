@@ -155,3 +155,17 @@ def test_fetch_json_turns_absurd_nesting_into_the_source_error():
     deep = b"[" * 100000 + b"]" * 100000
     with pytest.raises(_Err, match="unreadable response"):
         fetch_json("https://x/", fetch=lambda url: deep, error_cls=_Err, source_name="Src")
+
+
+def test_json_shape_helpers_never_raise_on_hostile_values():
+    from redactor_common.core.lookup_client import as_dict, as_int, as_text, dict_items, json_object
+
+    assert json_object(None, _Err) == {} and json_object({"a": 1}, _Err) == {"a": 1}
+    for bad in ([], [1], 5, "x", True):
+        with pytest.raises(_Err, match="unreadable response from Src"):
+            json_object(bad, _Err, "Src")
+    assert dict_items([1, None, {}, {"a": 1}, [2], "x"]) == [{}, {"a": 1}] and dict_items("x") == [] and dict_items(None) == []
+    assert as_dict([1]) == {} and as_dict({"a": 1}) == {"a": 1}
+    assert as_text({"a": 1}) == "" and as_text(None, "d") == "d" and as_text(7) == "7" and as_text(True) == "" and as_text("x") == "x"
+    assert as_int("12") == 12 and as_int(7) == 7 and as_int(None) == 0 and as_int(True, 9) == 9 and as_int({}, 3) == 3
+    assert as_int(float("nan"), 4) == 4 and as_int("1e999", 5) == 5
