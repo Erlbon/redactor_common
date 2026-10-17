@@ -153,10 +153,73 @@ def throttled(fetch: FetchFn, throttle: Throttle) -> FetchFn:
     return _fetch
 
 
+# -- redirects -----------------------------------------------------------------
+
+# Headers that carry a credential: never sent along to another origin.
+CREDENTIAL_HEADERS = frozenset({"authorization", "api-key", "x-api-key", "cookie", "proxy-authorization"})
+MAX_REDIRECTS = 5
+
+
+def _origin(url: str) -> tuple:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return (scheme, (parts.hostname or "").lower(), port or {"http": 80, "https": 443}.get(scheme))
+
+
+class SafeRedirects(urllib.request.HTTPRedirectHandler):
+    """The one redirect policy of every lookup (2026-10-17).
+
+    urllib's default handler copies every header, an API key or bearer token included, to wherever a redirect
+    points, and also follows ftp:// redirects. This handler
+      - follows only http and https targets (checked for EVERY hop) and never downgrades https to http;
+      - follows at most MAX_REDIRECTS redirects;
+      - when the origin (scheme, host, port) changes, drops every credential header (CREDENTIAL_HEADERS plus
+        `secret_headers`), so a download that carries no credentials may still follow a CDN redirect, while a call
+        that carries a key never leaks it;
+      - with `same_site_only=True` follows no redirect to another origin at all (the HTTPError of the redirect
+        surfaces)."""
+
+    def __init__(self, secret_headers: Iterable[str] = (), same_site_only: bool = False,
+                 max_redirects: int = MAX_REDIRECTS):
+        self._secret = CREDENTIAL_HEADERS | {str(h).lower() for h in secret_headers}
+        self._same_site_only = bool(same_site_only)
+        self.max_redirections = int(max_redirects)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        new_full = urllib.parse.urljoin(req.full_url, newurl)
+        new = urllib.parse.urlsplit(new_full)
+        if new.scheme.lower() not in _ALLOWED_SCHEMES:
+            return None  # ftp:, file: ... -> the HTTPError of the redirect surfaces
+        old = urllib.parse.urlsplit(req.full_url)
+        if old.scheme.lower() == "https" and new.scheme.lower() != "https":
+            return None  # never downgrade
+        other_origin = _origin(req.full_url) != _origin(new_full)
+        if other_origin and self._same_site_only:
+            return None
+        follow = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if follow is not None and other_origin:
+            for store in (follow.headers, follow.unredirected_hdrs):
+                for name in [k for k in store if k.lower() in self._secret]:
+                    del store[name]
+        return follow
+
+
+class SameSiteRedirects(SafeRedirects):
+    """SafeRedirects that follows no redirect to another origin (scene_lookup, where the key travels in a header)."""
+
+    def __init__(self, secret_headers: Iterable[str] = ()):
+        super().__init__(secret_headers=secret_headers, same_site_only=True)
+
+
 # -- the default fetch ---------------------------------------------------------
 
 def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT,
-                       opener=None, max_bytes: Optional[int] = None) -> FetchFn:
+                       opener=None, max_bytes: Optional[int] = None,
+                       secret_headers: Iterable[str] = ()) -> FetchFn:
     """Returns a fetch(url) -> bytes callable using a fixed User-Agent.
     The request-building mechanics are identical across sources; only
     the User-Agent string needs to vary (and, for some APIs, must).
@@ -164,7 +227,11 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT,
     `opener`: an object with urllib's OpenerDirector.open(request,
     timeout=) API, e.g. urllib.request.build_opener(SomeRedirectHandler)
     (Discogs: never carry the token to another host on a redirect).
-    None uses urllib.request.urlopen.
+    None uses an opener with SafeRedirects(secret_headers): a redirect to
+    another origin never carries a credential header (Authorization,
+    Api-Key, X-Api-Key, Cookie, Proxy-Authorization and any name in
+    `secret_headers`), ftp:/file: redirects and an https->http downgrade
+    are refused, and at most MAX_REDIRECTS are followed.
     `max_bytes`: the largest response accepted (default
     MAX_RESPONSE_BYTES); a bigger one raises OSError("the response was
     too large") instead of being read into memory.
@@ -172,6 +239,8 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT,
     Only http and https URLs are fetched (ValueError otherwise; the
     message never contains the URL's query string)."""
     limit = MAX_RESPONSE_BYTES if max_bytes is None else int(max_bytes)
+    if opener is None:
+        opener = urllib.request.build_opener(SafeRedirects(secret_headers=secret_headers))
 
     def _fetch(url: RequestLike) -> bytes:
         if isinstance(url, urllib.request.Request):
@@ -184,10 +253,7 @@ def make_default_fetch(user_agent: str, timeout: float = DEFAULT_TIMEOUT,
         # from an API response must never be able to read a local file.
         if urllib.parse.urlsplit(request.full_url).scheme.lower() not in _ALLOWED_SCHEMES:
             raise ValueError(f"Only http and https URLs are allowed: {redact_url(request.full_url)}")
-        if opener is not None:
-            response_cm = opener.open(request, timeout=timeout)
-        else:
-            response_cm = urllib.request.urlopen(request, timeout=timeout)
+        response_cm = opener.open(request, timeout=timeout)
         with response_cm as response:
             data = response.read(limit + 1)
         if len(data) > limit:
@@ -317,7 +383,8 @@ def fetch_json(
 
     try:
         return json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, MemoryError) as exc:
+        # RecursionError: absurdly deep nesting; MemoryError: an absurd size. Both are "unreadable", not a crash.
         raise error_cls(f"Received an unreadable response from {source_name}.") from exc
 
 

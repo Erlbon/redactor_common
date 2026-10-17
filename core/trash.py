@@ -223,3 +223,17 @@ def move_to_trash_retrying(
     """move_to_trash(path, fallback_folder) with trash_with_retries()'s retries: the drop-in for a direct
     move_to_trash() call on a file the app itself may still be reading."""
     trash_with_retries(lambda p: move_to_trash(p, fallback_folder), attempts=attempts, delay=delay)(path)
+
+
+def trash_with_fallback(fallback_folder: "Callable[[], str] | str | None" = None,
+                        **retry_options) -> Callable[[str], None]:
+    """The mover an app hands to replace_note / the note undo / commit_in_place: the Recycle Bin with retries and,
+    on a drive without a bin (network share, removable disk), the backup folder the person set in Preferences
+    (RECYCLE_FALLBACK_FOLDER_KEY). `fallback_folder` is the path or a callable giving it, read at each call so a
+    changed preference applies at once. Unset: such a drive raises TrashUnavailable and the file is kept."""
+
+    def mover(path: str) -> None:
+        folder = fallback_folder() if callable(fallback_folder) else fallback_folder
+        move_to_trash(path, str(folder).strip() if folder else None)
+
+    return trash_with_retries(mover, **retry_options)

@@ -541,7 +541,7 @@ def replace_note(
     if dry_run:
         return NoteWriteResult(STATUS_WRITTEN, target, f"Would replace {old} ({len(data)} bytes)", True, replaced=old)
 
-    from redactor_common.core.trash import TrashError, trash_with_retries
+    from redactor_common.core.trash import TrashError, TrashUnavailable, trash_with_retries
 
     mover = trash or trash_with_retries()
     temp = _temp_path(folder_s, file_name)
@@ -559,8 +559,10 @@ def replace_note(
         try:
             mover(old)
         except TrashError as exc:
+            hint = (" On a network drive there is no Recycle Bin: set a backup folder in Preferences or updates are "
+                    "refused." if isinstance(exc, TrashUnavailable) else "")
             return NoteWriteResult(STATUS_ERROR, old, f"The old note could not be moved to the Recycle Bin, so it "
-                                                      f"was kept: {exc}")
+                                                      f"was kept: {exc}{hint}")
         if os.path.lexists(old):
             return NoteWriteResult(STATUS_ERROR, old, "The old note is still there after the move: left alone.")
         try:

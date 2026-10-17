@@ -64,13 +64,13 @@ def test_make_default_fetch_sets_user_agent(monkeypatch):
         def read(self, size=-1):
             return b"ok"
 
-    def _fake_urlopen(request, timeout):
+    def _fake_urlopen(self, request, timeout):
         captured["user_agent"] = request.get_header("User-agent")
         captured["url"] = request.full_url
         captured["timeout"] = timeout
         return _FakeResponse()
 
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", _fake_urlopen)
 
     fetch = make_default_fetch("MyApp/1.0", timeout=5.0)
     result = fetch("https://example.com/x")

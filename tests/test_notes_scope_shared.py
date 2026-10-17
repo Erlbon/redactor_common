@@ -184,3 +184,33 @@ def test_with_no_choices_the_dialog_asks_for_a_folder_at_once(tmp_path, monkeypa
     QTest.qWait(100)
     assert asked and not d.continue_button.isEnabled()
     d.close()
+
+
+# -- batch 4: one count walk at a time ---------------------------------------------------------------------------------
+
+def test_toggling_the_scope_never_runs_two_count_walks_at_once(tmp_path):
+    import threading
+    import time
+
+    lock = threading.Lock()
+    state = {"now": 0, "most": 0, "calls": []}
+
+    def slow_count(folder, include):
+        with lock:
+            state["now"] += 1
+            state["most"] = max(state["most"], state["now"])
+            state["calls"].append((Path(folder).name, include))
+        time.sleep(0.4)
+        with lock:
+            state["now"] -= 1
+        return (1, 1)
+
+    d, _paths = make_dialog(tmp_path, count=slow_count)
+    for number in range(12):  # a stress loop of toggles, each long enough apart to pass the 150 ms debounce
+        d.include_box.setChecked(number % 2 == 1)
+        QTest.qWait(170)
+    final = d.include_box.isChecked()
+    assert wait_for(lambda: d.counts is not None and state["now"] == 0 and state["calls"][-1][1] == final, 8000)
+    assert state["most"] == 1, state  # the old behaviour started a walk per toggle: up to several at once
+    assert state["calls"][-1][1] == final  # and the newest wish is the one that was counted last
+    d.close()

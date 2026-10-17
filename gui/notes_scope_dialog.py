@@ -178,6 +178,7 @@ class NotesScopeDialog(QDialog):
         self._describe([path for _radio, path in self.radios])
         self.counts: Optional[object] = None  # the counts of the chosen folder, once known
         self._count_key: Optional[tuple] = None
+        self._count_busy = False
         self._count_timer = QTimer(self)
         self._count_timer.setSingleShot(True)
         self._count_timer.timeout.connect(self._start_count)
@@ -239,6 +240,9 @@ class NotesScopeDialog(QDialog):
             self.other_label.setText(f"{self.picked}  -  {self._caption_of(self.infos[self.picked], Path(self.picked).name, kinds)}")
 
     def _start_count(self) -> None:
+        """Counts the chosen scope off the GUI thread. ONE walk at a time: a toggle while a walk runs only notes the
+        newest wish, which starts when the running one ends (a walk of a big library cannot be interrupted, so
+        starting one per toggle used to pile up threads, some still running when the dialog closed)."""
         folder = self.chosen_folder()
         if not folder:
             return
@@ -248,10 +252,18 @@ class NotesScopeDialog(QDialog):
         self._count_key = key
         self.counts = None
         self._update_hint()
+        if not self._count_busy:
+            self._launch_count(key)
+
+    def _launch_count(self, key: tuple) -> None:
+        self._count_busy = True
         _start(_Worker(key, self._count_fn, *key), self._counted)
 
     def _counted(self, key, counts) -> None:
-        if key != self._count_key:  # an answer for a folder that is no longer the chosen one
+        self._count_busy = False
+        if key != self._count_key:  # the choice changed while this ran: count the newest one now
+            if self._count_key is not None:
+                self._launch_count(self._count_key)
             return
         self.counts = counts
         self._update_hint()

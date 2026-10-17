@@ -10,13 +10,18 @@ The dialog knows nothing about tag formats. The app hands it:
                                           (write, re-read, compare) and returns "" or a plain-language problem.
 It runs the journal read and the restore under redactor_common progress dialogs, never on a frozen window.
 A restore is itself journaled (kind "restore", so it can be restored in turn) and marks the entry "restored".
+
+Entries that are not tag changes (a written note: kinds "note" and "note-update") are undone through
+`undo_handlers`, a mapping kind -> callable(entry) -> (ok, message) the app supplies (see
+notes_model.make_note_undo_handler). A kind with a handler is restorable while its status is "done"; without a
+handler its Restore button stays disabled.
 """
 
 from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Mapping
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -34,12 +39,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from redactor_common.core.journal import KIND_RESTORE, Entry, Journal
+from redactor_common.core.journal import KIND_RESTORE, STATUS_OK, Entry, Journal
 from redactor_common.gui.progress import run_busy
 from redactor_common.gui.table_columns import make_columns_resizable
 
 MAX_ROWS = 2000  # the newest entries; the filter reaches the rest
-KIND_LABELS = {"save": "Save", "redact": "Redact", "restore": "Restore"}
+KIND_LABELS = {"save": "Save", "redact": "Redact", "restore": "Restore", "note": "Note created", "note-update": "Note refreshed"}
 STATUS_LABELS = {
     "ok": "done", "failed": "FAILED", "pending": "not confirmed (interrupted?)", "restored": "restored",
 }
@@ -75,12 +80,14 @@ class HistoryDialog(QDialog):
         apply_restore: Callable[[str, dict[str, str]], str],
         parent: QWidget | None = None,
         title: str = "History",
+        undo_handlers: Mapping[str, Callable[[Entry], tuple[bool, str]]] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(980, 620)
         self._journal = journal
         self._apply_restore = apply_restore
+        self._undo_handlers = dict(undo_handlers or {})
         self.entries: list[Entry] = []
         self._reloading = False
 
@@ -153,6 +160,16 @@ class HistoryDialog(QDialog):
         self.detail.clear()
         self.restore_button.setEnabled(False)
 
+    def can_restore(self, entry: Entry) -> bool:
+        """A tag change with an old value to write back, or a note entry whose kind the app can undo."""
+        if entry.kind in self._undo_handlers:
+            return entry.status == STATUS_OK
+        return entry.restorable
+
+    def _update_restore_button(self, entry: Entry) -> None:
+        self.restore_button.setEnabled(self.can_restore(entry))
+        self.restore_button.setText("Undo Note..." if entry.kind in self._undo_handlers else "Restore Old Values...")
+
     def selected_entry(self) -> Entry | None:
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
         if not rows or rows[0].row() >= len(self.entries):
@@ -166,15 +183,17 @@ class HistoryDialog(QDialog):
             self.restore_button.setEnabled(False)
             return
         self.detail.setPlainText(f"{entry.path}\n{format_time(entry.ts)}\n\n" + describe_changes(entry))
-        self.restore_button.setEnabled(entry.restorable)
+        self._update_restore_button(entry)
 
     # -- restoring --------------------------------------------------------------------------------
 
     def restore_selected(self) -> bool:
         """Writes the selected entry's old values back after a confirmation. Returns whether it was restored."""
         entry = self.selected_entry()
-        if entry is None or not entry.restorable:
+        if entry is None or not self.can_restore(entry):
             return False
+        if entry.kind in self._undo_handlers:
+            return self._undo_selected(entry)
         values, skipped = Journal.restore_values(entry)
         if not os.path.exists(entry.path):
             QMessageBox.warning(self, "Restore", f"The file is not there any more:\n{entry.path}")
@@ -197,4 +216,28 @@ class HistoryDialog(QDialog):
         self._journal.mark_restored(entry.id, restore_id)
         self.reload()
         self.status_label.setText(f"Restored {fields}.")
+        return True
+
+    def _undo_selected(self, entry: Entry) -> bool:
+        """Undoes a written note through the app's handler (after a confirmation). Returns whether it was undone."""
+        if not os.path.exists(entry.path):
+            QMessageBox.warning(self, "Undo Note", f"The note is not there any more:\n{entry.path}")
+            return False
+        refreshed = entry.kind == "note-update"
+        what = ("The note now there goes to the Recycle Bin and the older text it replaced is written back."
+                if refreshed else "The note goes to the Recycle Bin.")
+        answer = QMessageBox.question(
+            self, "Undo Note",
+            f"Undo this change to\n{entry.path}?\n\n{what}\nThis only works while the note is exactly as it was "
+            f"written; a note you edited since is left alone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        ok, message = run_busy(self, "Undoing the note...", self._undo_handlers[entry.kind], entry, title="Undo Note")
+        if not ok:
+            QMessageBox.warning(self, "Undo Note", f"Not undone: {message}")
+            return False
+        self.reload()
+        self.status_label.setText(message)
         return True
