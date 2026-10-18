@@ -56,7 +56,13 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-18#07`.
+Currently: `2026-10-18#08`.
+
+## Label wrap rule (`gui/label_wrap.py`)
+
+No QLabel may be wider than 80% of the screen's available width: a label whose single-line width would be wraps
+(`enforce_label_wrap`). `run_app()` installs the guard (`install_label_wrap_guard(app)`; call it from a custom
+bootstrap); `lint_label_wrap(folder)` flags long inline labels that never call `setWordWrap`.
 
 ## Source ids (`core/source_ids.py`)
 

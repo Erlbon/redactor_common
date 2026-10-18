@@ -86,6 +86,16 @@ one of these four repos, check: did this batch of commits bump
 its own commit, before considering the work done -- don't defer it to
 "whenever a release happens next."
 
+## No label wider than 80% of the screen (Erlend, 2026-10-18)
+
+A QLabel whose natural single-line width would exceed 80% of the screen's available width MUST word-wrap
+(`setWordWrap(True)`), so text never runs off the window. Trigger: epubredactor's Remove Running Headers dialog
+showed a ~400-char intro as one unwrapped line cut off at the window edge. Enforcement lives in
+`redactor_common/gui/label_wrap.py`: `enforce_label_wrap(label)`, `install_label_wrap_guard(app)` (an application
+event filter wrapping labels on Show; `run_app()` installs it, apps with their own bootstrap call it) and
+`lint_label_wrap(folder)` (flags long inline `addWidget(QLabel("..."))` with no `setWordWrap`; exempt a line with
+`# wrap-ok: <reason>`). Short labels are never wrapped. Still wrap long intro labels explicitly in the dialog code.
+
 ## Progress feedback is mandatory for EVERYTHING that can take a moment
 
 **The owner's rule (2026-10-13): everything slow gets a progress dialog, not only loops over books.** A folder

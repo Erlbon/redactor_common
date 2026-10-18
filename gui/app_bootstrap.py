@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 from redactor_common.core import crash_log
+from redactor_common.gui.label_wrap import install_label_wrap_guard
 
 
 def set_windows_app_user_model_id(app_user_model_id: str) -> None:
@@ -81,6 +82,7 @@ def run_app(
     app.setApplicationName(app_name)
     apply_theme(app)  # Fusion + a WCAG-contrast-verified light/dark palette
     apply_message_box_style(app)  # long unwrappable lines stay under 480px wide
+    install_label_wrap_guard(app)  # no QLabel wider than 80% of the screen: long ones word-wrap
     if icon_path and os.path.exists(icon_path):
         app.setWindowIcon(QIcon(str(icon_path)))
 
