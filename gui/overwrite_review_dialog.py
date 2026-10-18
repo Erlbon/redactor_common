@@ -39,32 +39,94 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
-from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout, QTableWidget, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (
+    QAbstractItemView, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QStackedWidget,
+    QTableWidget, QVBoxLayout, QWidget,
+)
 
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
+from redactor_common.gui.sortable_table import NaturalTableWidgetItem, enable_sorting, suspend_sorting
+
+
+def _is_overwrite(row: PreviewRow) -> bool:
+    old, new = row.old_value.strip(), row.new_value.strip()
+    return bool(old) and old != new
+
+
+def _summary(rows: list[PreviewRow]) -> str:
+    overwrites = sum(1 for r in rows if _is_overwrite(r))
+    fills = len(rows) - overwrites
+    parts = []
+    if overwrites:
+        parts.append(f"{overwrites} overwrite{'s' if overwrites != 1 else ''}")
+    if fills:
+        parts.append(f"{fills} fill{'s' if fills != 1 else ''}")
+    return ", ".join(parts)
 
 
 class OverwriteReviewDialog(QDialog):
+    """One file: just its fields. Several files: a file list on the left (how many overwrites and fills each has,
+    files with overwrites tinted amber) and the fields of the selected file on the right, so the dialog never turns
+    into one enormous list. Ticks are kept per file while you move between files."""
+
     def __init__(self, rows: list[PreviewRow], parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("Review Changes")
-        self.resize(900, 500)
+        self.resize(1000, 560)
 
         layout = QVBoxLayout(self)
         info = QLabel(
             "Review every field this would change before applying. A field "
-            "that would overwrite an existing value starts unticked -- tick "
-            "it to accept the new value, or leave it to keep what's already "
+            "that would overwrite an existing value (red, current value) starts unticked -- tick "
+            "it to accept the new value (green), or leave it to keep what's already "
             "there. A field that's currently blank starts ticked, since "
             "there's nothing to lose."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        table = QTableWidget()
-        self._controller = PreviewTableController(table, item_column_label="Field", group_column_label="File")
-        self._controller.set_rows(rows)
-        layout.addWidget(table, 1)
+        groups: dict[str, list[PreviewRow]] = {}
+        for row in rows:
+            groups.setdefault(row.group or "", []).append(row)
+
+        self._stack = QStackedWidget()
+        self._controllers: list[PreviewTableController] = []
+        self._group_rows = list(groups.values())
+        for group_rows in self._group_rows:
+            table = QTableWidget()
+            controller = PreviewTableController(table, item_column_label="Field")
+            controller.set_rows(group_rows)
+            self._controllers.append(controller)
+            self._stack.addWidget(table)
+
+        self._file_list: Optional[QTableWidget] = None
+        if len(groups) > 1:
+            self._build_file_list(groups)
+            split = QSplitter(Qt.Orientation.Horizontal)
+            split.addWidget(self._file_list)
+            split.addWidget(self._stack)
+            split.setStretchFactor(1, 1)
+            split.setSizes([330, 670])
+            layout.addWidget(split, 1)
+
+            bulk = QHBoxLayout()
+            for text, handler in (
+                ("Tick All in File", lambda: self._current().set_all_checked(True)),
+                ("Untick All in File", lambda: self._current().set_all_checked(False)),
+                ("Tick All Files", lambda: self._all_files(True)),
+                ("Untick All Files", lambda: self._all_files(False)),
+                ("Next File with Overwrite", self._next_overwrite),
+            ):
+                button = QPushButton(text)
+                button.clicked.connect(lambda _checked=False, h=handler: h())
+                bulk.addWidget(button)
+            bulk.addStretch(1)
+            layout.addLayout(bulk)
+            self._file_list.selectRow(0)
+        else:
+            layout.addWidget(self._stack, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
@@ -72,10 +134,68 @@ class OverwriteReviewDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _build_file_list(self, groups: dict[str, list[PreviewRow]]) -> None:
+        table = QTableWidget(len(groups), 2)
+        self._file_list = table
+        table.setHorizontalHeaderLabels(["File", "Changes"])
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setWordWrap(True)
+        table.verticalHeader().hide()
+        table.horizontalHeader().setStretchLastSection(True)
+        dark = table.palette().window().color().lightness() < 128
+        amber = QBrush(QColor("#633806" if dark else "#FAEEDA"))
+        amber_text = QBrush(QColor("#FAC775" if dark else "#633806"))
+        enable_sorting(table)
+        with suspend_sorting(table):
+            for index, (name, group_rows) in enumerate(groups.items()):
+                name_item = NaturalTableWidgetItem(name)
+                name_item.setData(Qt.ItemDataRole.UserRole, index)
+                summary_item = NaturalTableWidgetItem(_summary(group_rows))
+                if any(_is_overwrite(r) for r in group_rows):
+                    for item in (name_item, summary_item):
+                        item.setBackground(amber)
+                        item.setForeground(amber_text)
+                table.setItem(index, 0, name_item)
+                table.setItem(index, 1, summary_item)
+        table.setColumnWidth(0, 200)
+        table.resizeRowsToContents()
+        table.currentCellChanged.connect(lambda row, *_: self._file_selected(row))
+
+    def _stack_index_of_row(self, row: int) -> int:
+        item = self._file_list.item(row, 0) if self._file_list is not None else None
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else 0
+
+    def _file_selected(self, row: int) -> None:
+        if row >= 0:
+            self._stack.setCurrentIndex(self._stack_index_of_row(row))
+
+    def _current(self) -> PreviewTableController:
+        return self._controllers[self._stack.currentIndex()]
+
+    def _all_files(self, checked: bool) -> None:
+        for controller in self._controllers:
+            controller.set_all_checked(checked)
+
+    def _next_overwrite(self) -> None:
+        if self._file_list is None:
+            return
+        count = self._file_list.rowCount()
+        start = self._file_list.currentRow()
+        for step in range(1, count + 1):
+            row = (start + step) % count
+            if any(_is_overwrite(r) for r in self._group_rows[self._stack_index_of_row(row)]):
+                self._file_list.selectRow(row)
+                return
+
     def accepted_changes(self) -> dict:
         """(file_index, attr) -> new value, for every row whose checkbox
         is still ticked."""
-        return self._controller.accepted_changes()
+        out: dict = {}
+        for controller in self._controllers:
+            out.update(controller.accepted_changes())
+        return out
 
 
 def build_overwrite_review_rows(
