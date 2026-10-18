@@ -162,6 +162,13 @@ class PreviewTableController:
             if item is not None:
                 item.setCheckState(state)
 
+    def set_checked_where(self, predicate) -> None:
+        """Ticks every row whose item_index satisfies `predicate`; other rows are left as they are."""
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, self._apply_col)
+            if item is not None and predicate(item.data(Qt.ItemDataRole.UserRole)):
+                item.setCheckState(Qt.CheckState.Checked)
+
     def accepted_changes(self) -> dict:
         """item_index -> new value, for every row whose checkbox is still
         ticked."""

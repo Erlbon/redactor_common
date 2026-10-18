@@ -189,6 +189,16 @@ class OverwriteReviewDialog(QDialog):
                 self._file_list.selectRow(row)
                 return
 
+    def tick_fields(self, attrs) -> None:
+        """Ticks every row whose field attribute is in `attrs` (for callers and tests that answer the review
+        without a user)."""
+        for controller in self._controllers:
+            controller.set_checked_where(lambda key: key[1] in attrs)
+
+    def field_rows(self) -> list[tuple[str, str, str]]:
+        """(field label, current value, new value) for every row of every file, in file order."""
+        return [(r.display_name, r.old_value, r.new_value) for rows in self._group_rows for r in rows]
+
     def accepted_changes(self) -> dict:
         """(file_index, attr) -> new value, for every row whose checkbox
         is still ticked."""

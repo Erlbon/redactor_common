@@ -76,3 +76,12 @@ def test_review_dialog_single_file_has_no_file_list(qapp):
     d = OverwriteReviewDialog([PreviewRow((0, "a"), "A", "", "v", group="f")])
     assert d._file_list is None
     assert d.accepted_changes() == {(0, "a"): "v"}
+
+
+def test_review_dialog_tick_fields_and_field_rows(qapp):
+    from redactor_common.gui.overwrite_review_dialog import OverwriteReviewDialog
+
+    d = OverwriteReviewDialog([PreviewRow((0, "title"), "Title", "x", "y", group="f", default_checked=False)])
+    assert d.field_rows() == [("Title", "x", "y")]
+    d.tick_fields({"title"})
+    assert d.accepted_changes() == {(0, "title"): "y"}
