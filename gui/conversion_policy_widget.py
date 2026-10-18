@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.conversion_policy import (
-    ON_OPEN_ASK, ON_OPEN_AUTO, ON_OPEN_NEVER, ORIGINALS_QUARANTINE, ORIGINALS_RECYCLE, ConversionPolicy,
+    ON_OPEN_ASK, ON_OPEN_AUTO, ON_OPEN_NEVER, ORIGINALS_KEEP, ORIGINALS_QUARANTINE, ORIGINALS_RECYCLE, ConversionPolicy,
 )
 
 ON_OPEN_TEXT = {
@@ -58,13 +58,14 @@ class ConversionPolicyWidget(QWidget):
         originals_layout = QVBoxLayout(originals_box)
         self._quarantine = QRadioButton("Move it to a quarantine folder, with an undo log")
         self._recycle = QRadioButton("Send it to the Recycle Bin")
+        self._keep = QRadioButton("Keep it where it is (when the new file has a different name; otherwise it is quarantined)")
         self._quarantine.setChecked(policy.originals == ORIGINALS_QUARANTINE)
         self._recycle.setChecked(policy.originals == ORIGINALS_RECYCLE)
+        self._keep.setChecked(policy.originals == ORIGINALS_KEEP)
         originals_group = QButtonGroup(self)
-        originals_group.addButton(self._quarantine)
-        originals_group.addButton(self._recycle)
-        originals_layout.addWidget(self._quarantine)
-        originals_layout.addWidget(self._recycle)
+        for button in (self._quarantine, self._recycle, self._keep):
+            originals_group.addButton(button)
+            originals_layout.addWidget(button)
         form = QFormLayout()
         self._quarantine_edit = self._folder_row(form, "Quarantine folder (empty: a dated folder beside the file):",
                                                  policy.quarantine_folder)
@@ -81,7 +82,8 @@ class ConversionPolicyWidget(QWidget):
         note.setWordWrap(True)
         originals_layout.addWidget(note)
         layout.addWidget(originals_box)
-        self._quarantine.toggled.connect(self._sync_enabled)
+        for button in (self._quarantine, self._recycle, self._keep):
+            button.toggled.connect(self._sync_enabled)
         self._sync_enabled()
 
         checking_box = QGroupBox("Checking before converting")
@@ -111,7 +113,7 @@ class ConversionPolicyWidget(QWidget):
             edit.setText(path)
 
     def _sync_enabled(self) -> None:
-        on = self._quarantine.isChecked()
+        on = self._quarantine.isChecked() or self._keep.isChecked()  # keep falls back to the quarantine for a same-name file
         self._quarantine_edit.setEnabled(on)
         self._undo_edit.setEnabled(on)
 
@@ -119,7 +121,8 @@ class ConversionPolicyWidget(QWidget):
         on_open = next((key for key, button in self._on_open.items() if button.isChecked()), ON_OPEN_ASK)
         return ConversionPolicy(
             on_open=on_open,
-            originals=ORIGINALS_QUARANTINE if self._quarantine.isChecked() else ORIGINALS_RECYCLE,
+            originals=(ORIGINALS_KEEP if self._keep.isChecked()
+                       else ORIGINALS_QUARANTINE if self._quarantine.isChecked() else ORIGINALS_RECYCLE),
             quarantine_folder=self._quarantine_edit.text().strip(),
             undo_log_folder=self._undo_edit.text().strip(),
             recent_minutes=self._recent.value(),

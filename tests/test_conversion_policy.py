@@ -55,3 +55,5 @@ def test_the_widget_shows_a_policy_and_returns_the_edited_one(qapp):
     edited = widget.policy()
     assert (edited.on_open, edited.originals, edited.dry_run_first) == (cp.ON_OPEN_NEVER, cp.ORIGINALS_RECYCLE, True)
     assert not widget._quarantine_edit.isEnabled()  # the folders only matter for the quarantine
+    widget._keep.setChecked(True)
+    assert widget.policy().originals == cp.ORIGINALS_KEEP and widget._quarantine_edit.isEnabled()  # a same-name file still goes there

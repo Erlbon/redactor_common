@@ -8,7 +8,8 @@ and what happens to the original" is answered the same way everywhere:
               ASK (a dialog lists the files), AUTO (convert without asking; the report says what was done), NEVER
               (do not convert; the app lists such files as read-only rows or leaves them out, as it always did).
   originals   after a VERIFIED conversion: QUARANTINE (the original is moved to a dated folder with an undo log; the
-              folder is the one set, else a folder beside the file) or RECYCLE (the Recycle Bin).
+              folder is the one set, else a folder beside the file), RECYCLE (the Recycle Bin) or KEEP (the original stays
+              where it is; only possible when the new file has a different name, otherwise it is quarantined).
   dry_run_first   whether a conversion run starts as a dry run (list what would happen, change nothing); the run's own
               dialog can still change it.
 
@@ -34,7 +35,8 @@ ON_OPEN_CHOICES = (ON_OPEN_ASK, ON_OPEN_AUTO, ON_OPEN_NEVER)
 
 ORIGINALS_QUARANTINE = "quarantine"
 ORIGINALS_RECYCLE = "recycle"
-ORIGINALS_CHOICES = (ORIGINALS_QUARANTINE, ORIGINALS_RECYCLE)
+ORIGINALS_KEEP = "keep"
+ORIGINALS_CHOICES = (ORIGINALS_QUARANTINE, ORIGINALS_RECYCLE, ORIGINALS_KEEP)
 
 DEFAULT_RECENT_MINUTES = 10
 
