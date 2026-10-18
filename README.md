@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-18#02`.
+Currently: `2026-10-18#07`.
 
 ## Source ids (`core/source_ids.py`)
 
@@ -163,7 +163,7 @@ History: path patterns share the pattern history with filename patterns; tell th
 | `folder_refresh.py` | `find_new_files_in_loaded_folders()` — the logic behind "Refresh List" (F5/Ctrl+R): re-scans the folder(s) already-loaded paths live in via a caller-supplied `find_files_in_folder(folder)` (each project's own existing file-discovery function, bound to non-recursive) and reports whichever paths aren't already loaded. Doesn't discover a brand-new folder nothing's been loaded from at all -- only folders already represented get scanned | epub, generalized off its `refresh_list()` -- cbzredactor had independently rewritten the same behavior from scratch rather than sharing code; mp3/video had neither |
 | `subprocess_utils.py` | `run_tool()` -- one way to shell out: no console window, `stdin=DEVNULL` (ffmpeg can hang on an inherited stdin), UTF-8 output decoding (the locale default mangled ffprobe/mkvmerge JSON: "Amélie" → "AmÃ©lie", then saved back), and a timeout; `popen_tool()`, `no_window_kwargs()` | 2026-09-23; epub/mp3/video each had their own no-console helper, and video's calls had neither stdin nor UTF-8 nor timeouts |
 | `app_paths.py` | `base_dir()`/`tools_dir()`/`asset_path()`/`settings_ini_path()`/`crash_log_path()` -- frozen-vs-dev resolution, given the project's own root (this package lives in site-packages) | 2026-09-23; four copies before (epub/mp3/cbz `core/app_paths.py`, video `config._app_dir()`) |
-| `crash_log.py` | `install(log_path, also_call=...)` -- excepthook writing timestamped tracebacks + faulthandler for native crashes, trimmed by whole entries | epub, 2026-09-23 (cbz had an identical port, mp3 a copy that cut entries mid-way, video had none) |
+| `crash_log.py` | `install(log_path, also_call=...)` -- excepthook writing timestamped tracebacks + faulthandler for native crashes, trimmed by whole entries; every launch appends a `<timestamp> started: pid N [app_label]` marker first (optional `app_label=`), so a timestamp-less native dump belongs to the nearest marker above it; newest entry is at the bottom | epub, 2026-09-23 (cbz had an identical port, mp3 a copy that cut entries mid-way, video had none) |
 | `managed_list.py` | The model behind `manage_list_dialog.py`: merge/hide/add/remove over "hideable defaults + custom entries" (names or `(code, name)` pairs) + tolerant JSON (de)serialization | 2026-09-23; cbz, epub and mp3 each had the same ~150 lines |
 | `pattern_history.py` | `dedupe_and_trim()` + `encode_history()`/`decode_history()` (reads JSON or video's `\x1f` format) for the Rename/Parse pattern history | 2026-09-23; four copies before |
 | `version_bump.py` | The `YYYY-MM-DD#NN` bump (`bump_version_file()`, `pep440_from()`, `main()`), called by every repo's own few-line `bump_version.py` | 2026-09-23; five copies before |

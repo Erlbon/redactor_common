@@ -16,6 +16,14 @@ Promoted from epubredactor's core/crash_log.py (cbz had an identical
 port, mp3 a weaker rewrite that cut entries mid-way when trimming, and
 video had none at all).
 
+Reading order: the file is append-only, so the NEWEST entry is at the BOTTOM.
+Every launch first appends a marker (separator, then "<timestamp> started:
+pid <pid> [app label]"). faulthandler writes its raw "Windows fatal
+exception ..." dump, which carries no timestamp of its own, straight after
+whatever is already in the file, so a native-crash dump always belongs to the
+launch of the nearest marker above it. Python exceptions get their own
+separator and timestamp.
+
 Pure logic, no Qt dependency -- install it before QApplication exists.
 """
 
@@ -47,6 +55,25 @@ def format_crash_entry(exc_type, exc_value, exc_tb) -> str:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     return f"\n{ENTRY_SEPARATOR}\n{timestamp}\n{tb_text}"
+
+
+def format_start_marker(app_label: str = "") -> str:
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    label = f" {app_label}" if app_label else ""
+    return f"\n{ENTRY_SEPARATOR}\n{timestamp} started: pid {os.getpid()}{label}\n"
+
+
+def write_start_marker(
+    path: str | Path, app_label: str = "", max_bytes: int = MAX_LOG_BYTES,
+) -> None:
+    """Appends the one-line per-launch marker. Never raises."""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(format_start_marker(app_label))
+        trim_if_oversized(path, max_bytes)
+    except OSError:
+        pass
 
 
 def trim_if_oversized(path: str | Path, max_bytes: int = MAX_LOG_BYTES) -> None:
@@ -87,6 +114,7 @@ def install(
     also_call: ExceptionCallback | None = None,
     enable_faulthandler: bool = True,
     write_entry: ExceptionCallback | None = None,
+    app_label: str = "",
 ) -> None:
     """Installs the global hook writing to `log_path`.
 
@@ -96,9 +124,11 @@ def install(
     is best-effort: an unwritable log location still lets the app
     launch normally. `write_entry(exc_type, exc_value, exc_tb)` replaces
     the default write_crash_entry(..., log_path) -- for a project wrapper
-    whose own tests patch its module-level writer.
+    whose own tests patch its module-level writer. `app_label` (e.g.
+    "epubredactor 2026-10-18#03") is added to the per-launch start marker.
     """
     global _faulthandler_file
+    write_start_marker(log_path, app_label)
     if enable_faulthandler:
         try:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
