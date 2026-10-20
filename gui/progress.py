@@ -102,6 +102,7 @@ class _InputBlock:
         self._revealed = False
         self._cursor = False
         self._focus: QWidget | None = None
+        self._was_active = False
 
     def __enter__(self) -> "_InputBlock":
         window = None
@@ -114,6 +115,7 @@ class _InputBlock:
             self._window = window
             self._focus = window.focusWidget()  # the window's own idea of it: also right while it is not the active window
             self._updates_were_on = window.updatesEnabled()
+            self._was_active = window.isActiveWindow()
             window.setUpdatesEnabled(False)
             window.setEnabled(False)
         if QApplication.instance() is not None:
@@ -142,6 +144,12 @@ class _InputBlock:
             try:
                 window.setEnabled(True)  # before the repaint is released: a quick call never shows the grey look
                 window.setUpdatesEnabled(self._updates_were_on)
+                # Disabling the active window makes Windows hand the activation to another window, and
+                # re-enabling does not take it back: a modal dialog (the lookup dialogs) then sat there
+                # with live buttons but fields and tables that could not get focus (cbzredactor,
+                # 2026-10-20). Take the activation back before the focus.
+                if self._was_active and window.isVisible() and not window.isActiveWindow():
+                    window.activateWindow()
                 focus = self._focus
                 if focus is not None and focus.isEnabled() and focus.isVisible():
                     focus.setFocus(Qt.FocusReason.OtherFocusReason)

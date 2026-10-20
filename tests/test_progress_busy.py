@@ -31,3 +31,28 @@ def test_no_progress_dialog_is_left_on_screen_after_the_calls():
             time.sleep(0.01)
         assert _visible_progress_dialogs() == [], f"after a {work_ms} ms call"
     window.close()
+
+
+def test_the_window_that_was_active_is_activated_again_after_the_call():
+    """Disabling the active window passes the activation on and re-enabling does not return it: the lookup
+    dialogs were left with live buttons but fields and tables that could not take focus (2026-10-20)."""
+    window = QWidget()
+    window.show()
+    activations = []
+    state = {"active": True}
+    window.isActiveWindow = lambda: state["active"]
+    window.activateWindow = lambda: (activations.append(1), state.update(active=True))
+
+    def work():
+        state["active"] = False  # what Windows does when the active window is disabled
+        return "done"
+
+    assert run_busy(window, "Asking...", work) == "done"
+    assert activations == [1]
+    assert window.isEnabled()
+
+    activations.clear()
+    state["active"] = False  # a window that was not active is not pulled to the front
+    assert run_busy(window, "Asking...", lambda: "done") == "done"
+    assert activations == []
+    window.close()
