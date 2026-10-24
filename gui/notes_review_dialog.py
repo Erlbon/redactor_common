@@ -38,7 +38,6 @@ from redactor_common.core.notes_review import (
     ReviewSession, note_diff,
 )
 from redactor_common.gui.progress import run_busy
-from redactor_common.gui.owned_dialog import OwnedDialog
 
 DEFAULT_SIZE = (1100, 700)
 
@@ -278,7 +277,7 @@ class ProposalPanel(QWidget):
             self.candidateChosen.emit(candidate)
 
 
-class NotesReviewDialog(OwnedDialog):
+class NotesReviewDialog(QDialog):
     def __init__(
         self, session: ReviewSession, view: str,
         rebuild: Callable[[Proposal, Optional[Candidate]], Proposal],

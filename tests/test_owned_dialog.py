@@ -30,6 +30,12 @@ def settle() -> None:
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+# These two Create Notes dialogs free themselves: their callers (notes_run.py, notes_scope_dialog.ask_scope) call deleteLater() once exec() has
+# returned, and the tests of the apps that use them read the dialogs in the middle of nested event loops. A second deletion, at the moment the
+# dialog closes, crashed the apps' tests, so they keep their own.
+SELF_DELETING = {"redactor_common.gui.notes_scope_dialog.NotesScopeDialog", "redactor_common.gui.notes_review_dialog.NotesReviewDialog"}
+
+
 def test_every_dialog_class_of_the_package_has_the_shared_base(qapp):
     """A new dialog made straight from QDialog would stay in memory for good once it had been opened: this fails until it uses OwnedDialog."""
     plain = []
@@ -40,7 +46,8 @@ def test_every_dialog_class_of_the_package_has_the_shared_base(qapp):
             continue
         for name, cls in inspect.getmembers(module, inspect.isclass):
             if cls.__module__ == module.__name__ and issubclass(cls, QDialog) and cls is not OwnedDialog and not issubclass(cls, OwnedDialog):
-                plain.append(f"{module.__name__}.{name}")
+                if f"{module.__name__}.{name}" not in SELF_DELETING:
+                    plain.append(f"{module.__name__}.{name}")
     assert plain == []
 
 

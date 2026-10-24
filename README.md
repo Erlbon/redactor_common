@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-24#01`.
+Currently: `2026-10-24#02`.
 
 ## Label wrap rule (`gui/label_wrap.py`)
 
@@ -193,7 +193,7 @@ past exactly that on 2026-09-23.
 | Module | What it does |
 |---|---|
 | `action_factory.py` | `make_action()` — one QAction, shared between menu + toolbar |
-| `owned_dialog.py` | `OwnedDialog` — the base of every dialog (all of this package's dialogs use it; use it for an app's own too). A dialog is made with the main window as its parent, and Qt keeps a child alive as long as its parent: without this every dialog that was opened stayed in memory with all its widgets until the program closed (found 2026-10-24 by soaking all four apps: 0.2 to 8 MB per open, hundreds of MB after a few hundred opens). `OwnedDialog` sets `WA_DeleteOnClose`, so the dialog is deleted when it is closed, after control is back in the event loop, so what the caller reads right after `exec()` is still there. Do not keep a dialog in an attribute and reshow it; make it again. A test fails for any dialog class that is made straight from `QDialog` |
+| `owned_dialog.py` | `OwnedDialog` — the base of every dialog (all of this package's dialogs use it; use it for an app's own too). A dialog is made with the main window as its parent, and Qt keeps a child alive as long as its parent: without this every dialog that was opened stayed in memory with all its widgets until the program closed (found 2026-10-24 by soaking all four apps: 0.2 to 8 MB per open, hundreds of MB after a few hundred opens). `OwnedDialog` sets `WA_DeleteOnClose`, so the dialog is deleted when it is closed, after control is back in the event loop, so what the caller reads right after `exec()` is still there. Do not keep a dialog in an attribute and reshow it; make it again. A test fails for any dialog class that is made straight from `QDialog` (the two Create Notes dialogs, `NotesScopeDialog` and `NotesReviewDialog`, are the exception: their callers already delete them after `exec()`, and a second deletion at close crashed the apps' tests) |
 | `colors.py` | Shared row-tint colors (dirty/error/etc) plus a current-cell focus outline for a `QTableWidget` — standardized on epub's scheme; mp3/video had each independently picked their own. Does NOT set selected-row colors (that's `theme.py`'s job now — see its 2026-09-07 fix note) | epub |
 | `menu_builder.py` | Declarative **File / Import / Operations / Settings / Help** builder — enforces identical top-level shape and mnemonics across projects; project-specific menus (e.g. epub's Kobo) insert via `extra_menus`. `populate_menu()` (public) fills any QMenu from the same declarative item list — what `context_menu.py`/`column_menu.py` build their right-click menus on |
 | `context_menu.py` | Shared table right-click menu: selection-fix (right-click outside the selection replaces it, matching Explorer) + generic "Open Containing Folder"/"Copy Path", with each project's own actions layered on via `extra_items` | epub, generalized (mp3 and video had no equivalent, or a much thinner one) |

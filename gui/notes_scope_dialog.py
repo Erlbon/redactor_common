@@ -26,7 +26,6 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.notes_scope import ScopeChoice
-from redactor_common.gui.owned_dialog import OwnedDialog
 
 OUTDATED_CHECK_TEXT = "Also review notes made by an older version"
 MAX_PATH_CHARS = 70
@@ -65,7 +64,7 @@ def _shrinkable(*labels: QLabel) -> None:
         label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
 
-class NotesScopeDialog(OwnedDialog):
+class NotesScopeDialog(QDialog):
     def __init__(
         self, parent: QWidget, choices: list[ScopeChoice], include_subfolders: bool, *,
         kind_checks: tuple[tuple[str, str], ...], kinds: str, parse_kinds: Callable, kinds_text: Callable,
