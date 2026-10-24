@@ -1,7 +1,8 @@
 """
 A dialog an app opens must not stay in memory after it is closed (soak tests, 2026-10-24: every dialog made with the main window as its
-parent stayed alive with all its widgets until the program closed). Every dialog class of the package has the shared base, and the
-base deletes a dialog once it has been closed.
+parent stayed alive with all its widgets until the program closed), and what the caller reads from the dialog right after exec() returns
+must still be there. These tests use the REAL exec(), closed by a timer from inside it: a stand-in for exec() once hid that Qt deletes a
+delete-on-close dialog the moment exec() returns.
 """
 import importlib
 import inspect
@@ -12,8 +13,8 @@ import pytest
 pytest.importorskip("PyQt6")
 
 from PyQt6 import sip  # noqa: E402
-from PyQt6.QtCore import QCoreApplication, QEvent, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget  # noqa: E402
+from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMainWindow, QPushButton, QVBoxLayout, QWidget  # noqa: E402
 
 import redactor_common.gui as gui_package  # noqa: E402
 from redactor_common.gui.owned_dialog import OwnedDialog  # noqa: E402
@@ -30,10 +31,22 @@ def settle() -> None:
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-# These two Create Notes dialogs free themselves: their callers (notes_run.py, notes_scope_dialog.ask_scope) call deleteLater() once exec() has
-# returned, and the tests of the apps that use them read the dialogs in the middle of nested event loops. A second deletion, at the moment the
-# dialog closes, crashed the apps' tests, so they keep their own.
-SELF_DELETING = {"redactor_common.gui.notes_scope_dialog.NotesScopeDialog", "redactor_common.gui.notes_review_dialog.NotesReviewDialog"}
+def in_the_event_loop(scenario) -> None:
+    """Runs `scenario()` from inside a running event loop, the way an app's own handlers are run."""
+    outer = QEventLoop()
+    failure = []
+
+    def go() -> None:
+        try:
+            scenario()
+        except BaseException as error:  # noqa: BLE001 -- handed to the test below
+            failure.append(error)
+        finally:
+            outer.quit()
+    QTimer.singleShot(0, go)
+    outer.exec()
+    if failure:
+        raise failure[0]
 
 
 def test_every_dialog_class_of_the_package_has_the_shared_base(qapp):
@@ -46,26 +59,62 @@ def test_every_dialog_class_of_the_package_has_the_shared_base(qapp):
             continue
         for name, cls in inspect.getmembers(module, inspect.isclass):
             if cls.__module__ == module.__name__ and issubclass(cls, QDialog) and cls is not OwnedDialog and not issubclass(cls, OwnedDialog):
-                if f"{module.__name__}.{name}" not in SELF_DELETING:
-                    plain.append(f"{module.__name__}.{name}")
+                plain.append(f"{module.__name__}.{name}")
     assert plain == []
 
 
-def test_a_closed_dialog_is_deleted_once_control_is_back_in_the_event_loop(qapp):
+def test_what_the_caller_reads_after_a_real_exec_is_still_there_and_the_dialog_goes_afterwards(qapp):
+    class Ask(OwnedDialog):
+        def __init__(self, parent):
+            super().__init__(parent)
+            self.edit = QLineEdit("typed", self)
+
+    window = QMainWindow()
+    dlg = Ask(window)
+
+    def scenario() -> None:
+        QTimer.singleShot(0, dlg.accept)
+        assert dlg.exec() == QDialog.DialogCode.Accepted
+        assert dlg.edit.text() == "typed" and not sip.isdeleted(dlg)     # the widget the caller reads must still exist
+        inner = QEventLoop()                                             # a nested loop (a follow-up dialog) must not delete it early
+        QTimer.singleShot(0, inner.quit)
+        inner.exec()
+        QApplication.processEvents()
+        assert dlg.edit.text() == "typed" and not sip.isdeleted(dlg)
+    in_the_event_loop(scenario)
+    settle()
+    assert sip.isdeleted(dlg)                                            # and once control is back in the caller's own loop, it is gone
+    window.deleteLater()
+
+
+def test_a_dialog_shown_without_exec_is_deleted_when_it_is_closed(qapp):
     class Probe(OwnedDialog):
         pass
     window = QMainWindow()
     dlg = Probe(window)
-    assert dlg.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     dlg.show()
     dlg.accept()
-    assert not sip.isdeleted(dlg)                            # not at once: what the caller reads right after exec() is still there
+    assert not sip.isdeleted(dlg)                            # not at once
     settle()
     assert sip.isdeleted(dlg)
     window.deleteLater()
 
 
-def test_opening_and_closing_a_big_dialog_again_and_again_leaves_nothing_behind(qapp):
+def test_a_caller_that_also_calls_delete_later_is_harmless(qapp):
+    window = QMainWindow()
+    dlg = OwnedDialog(window)
+
+    def scenario() -> None:
+        QTimer.singleShot(0, dlg.reject)
+        dlg.exec()
+        dlg.deleteLater()                                    # the pattern several callers already had
+    in_the_event_loop(scenario)
+    settle()
+    assert sip.isdeleted(dlg)
+    window.deleteLater()
+
+
+def test_opening_and_closing_a_big_dialog_again_and_again_through_a_real_exec_leaves_nothing_behind(qapp):
     class Big(OwnedDialog):
         def __init__(self, parent):
             super().__init__(parent)
@@ -75,19 +124,21 @@ def test_opening_and_closing_a_big_dialog_again_and_again_leaves_nothing_behind(
                 button = QPushButton("x")
                 button.clicked.connect(lambda _c=False, n=i: self.setWindowTitle(str(n)))   # a lambda that captures the dialog, as the real ones do
                 box.addWidget(button)
+
     window = QMainWindow()
     window.show()
-    for _ in range(3):
+
+    def open_and_close(accept: bool) -> None:
         d = Big(window)
-        d.show()
-        d.reject()
+        QTimer.singleShot(0, d.accept if accept else d.reject)
+        d.exec()
+
+    for _ in range(3):
+        open_and_close(False)
     settle()
     start = len(window.findChildren(QWidget))
-    for _ in range(25):
-        d = Big(window)
-        d.show()
-        d.reject()
-        del d
+    for n in range(25):
+        open_and_close(n % 2 == 0)
     settle()
     assert len(window.findChildren(QWidget)) == start
     window.deleteLater()

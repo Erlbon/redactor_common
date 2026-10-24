@@ -439,6 +439,7 @@ def run_find_duplicates(
         user_cancelled = cancel_event.is_set()   # read before close(): closing emits `canceled` too
         if reporter.dialog is not None:
             reporter.dialog.close()
+            reporter.dialog.deleteLater()   # a child of the window: otherwise one more progress box per run stays for good
     if user_cancelled:
         return None
     groups = [g for g in (groups or []) if len(g.members) >= 2]
