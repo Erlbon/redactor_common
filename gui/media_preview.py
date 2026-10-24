@@ -28,6 +28,7 @@ from PyQt6.QtCore import QUrl, Qt
 from PyQt6.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout,
 )
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 SEEK_STEP_MS = 5000
 DEFAULT_VOLUME = 70  # percent
@@ -136,7 +137,7 @@ class _AudioCombo(QComboBox):
         super().keyPressEvent(event)
 
 
-class MediaPreviewDialog(QDialog):
+class MediaPreviewDialog(OwnedDialog):
     def __init__(
         self, path: str, video: bool = False, parent=None, autoplay: bool = False,
         initial_audio_track: Optional[int] = None, track_labels: Optional[Mapping] = None,

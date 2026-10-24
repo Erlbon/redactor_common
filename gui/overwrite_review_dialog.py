@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
 from redactor_common.gui.sortable_table import NaturalTableWidgetItem, enable_sorting, suspend_sorting
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 
 def _is_overwrite(row: PreviewRow) -> bool:
@@ -66,7 +67,7 @@ def _summary(rows: list[PreviewRow]) -> str:
     return ", ".join(parts)
 
 
-class OverwriteReviewDialog(QDialog):
+class OverwriteReviewDialog(OwnedDialog):
     """One file: just its fields. Several files: a file list on the left (how many overwrites and fills each has,
     files with overwrites tinted amber) and the fields of the selected file on the right, so the dialog never turns
     into one enormous list. Ticks are kept per file while you move between files."""

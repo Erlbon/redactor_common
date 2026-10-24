@@ -84,6 +84,7 @@ from redactor_common.core.dump_import import DumpImportError
 from redactor_common.core.local_db import LocalDatabaseError, forget_cached
 from redactor_common.gui.dump_import_runner import run_dump_import
 from redactor_common.gui.progress import run_busy
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 PathDefault = Union[str, Callable[[], str], None]
 BuildWork = Callable[[str, Callable[[float], None], Callable[[], bool]], Any]
@@ -170,7 +171,7 @@ def run_database_build(
     return dest
 
 
-class LocalDatabaseSettingsDialog(QDialog):
+class LocalDatabaseSettingsDialog(OwnedDialog):
     def __init__(
         self,
         *,

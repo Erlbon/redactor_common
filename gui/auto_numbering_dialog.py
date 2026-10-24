@@ -28,11 +28,12 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.auto_number import apply_auto_number_to_text_field, generate_auto_number
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 T = TypeVar("T")
 
 
-class AutoNumberingDialog(QDialog):
+class AutoNumberingDialog(OwnedDialog):
     def __init__(
         self,
         items: list[T],

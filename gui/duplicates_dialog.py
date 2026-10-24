@@ -56,6 +56,7 @@ from redactor_common.core.os_utils import open_with_default_app, reveal_in_file_
 from redactor_common.core.trash import TrashError, move_to_trash
 from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
 from redactor_common.gui.progress import ProgressReporter
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 DEFAULT_TITLE = "Find Duplicates"
 MEMBER_ROLE = Qt.ItemDataRole.UserRole
@@ -74,7 +75,7 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
-class DuplicatesDialog(QDialog):
+class DuplicatesDialog(OwnedDialog):
     """Groups of duplicate candidates for review. After exec(): `to_select`
     holds the items for "Select these in the list" (dialog accepted) and
     `trashed` the items already moved to the Recycle Bin.

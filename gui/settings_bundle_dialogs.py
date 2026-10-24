@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 from redactor_common.core import settings_bundle as sb
 from redactor_common.core import labels
 from redactor_common.gui.menu_builder import MenuAction
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 _FILE_FILTER = "Settings files (*.json);;All files (*)"
 MACHINE_SPECIFIC_SUFFIX = " (this computer only)"
@@ -51,7 +52,7 @@ def _short(value: Any, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-class ExportSectionsDialog(QDialog):
+class ExportSectionsDialog(OwnedDialog):
     """Checkbox list of sections; machine-specific ones are unticked."""
 
     def __init__(self, parent: QWidget | None, adapter: sb.SettingsAdapter) -> None:
@@ -87,7 +88,7 @@ class ExportSectionsDialog(QDialog):
         }
 
 
-class ImportPreviewDialog(QDialog):
+class ImportPreviewDialog(OwnedDialog):
     """Changes grouped by section, a checkbox per section. Nothing is applied here."""
 
     def __init__(

@@ -32,12 +32,13 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 _KIND_DEFAULT = "default"
 _KIND_CUSTOM = "custom"
 
 
-class ManageListDialog(QDialog):
+class ManageListDialog(OwnedDialog):
     def __init__(
         self,
         title: str,

@@ -39,9 +39,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 
-class QuickPickDialog(QDialog):
+class QuickPickDialog(OwnedDialog):
     def __init__(
         self,
         title: str,

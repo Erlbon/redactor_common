@@ -39,13 +39,14 @@ from redactor_common.core.path_parser import (
     parse_path_detailed, relative_segments, split_path_pattern,
 )
 from redactor_common.gui.pattern_field_panel import PatternFieldPanel
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 T = TypeVar("T")
 
 NOTE_JOINER = chr(10)  # tooltip line break
 
 
-class ParseFilenameDialog(QDialog):
+class ParseFilenameDialog(OwnedDialog):
     def __init__(
         self,
         items: list[T],

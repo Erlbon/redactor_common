@@ -63,12 +63,13 @@ from redactor_common.gui.background_call import call_in_background
 from redactor_common.gui.menu_builder import MenuAction
 from redactor_common.gui.progress import run_with_progress
 from redactor_common.gui.standard_shortcuts import REDACT
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 
 # --- results ----------------------------------------------------------------
 
 
-class RedactResultsDialog(QDialog):
+class RedactResultsDialog(OwnedDialog):
     """Report text + Needs-review list. Non-blocking helpers
     (save_report_to, copy_report) are separate from the buttons so they
     can be tested without a file dialog.
@@ -255,7 +256,7 @@ def _safe_describe(describe: Callable[[Any], str], item: Any) -> str:
 # --- recipe editor ------------------------------------------------------------
 
 
-class RecipeEditorDialog(QDialog):
+class RecipeEditorDialog(OwnedDialog):
     """Edit a Recipe against a catalogue: tick/untick and reorder steps
     (drag, or Move up/down), tweak the selected step's options, and set
     the confidence threshold. recipe() returns the edited result; the

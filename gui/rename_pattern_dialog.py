@@ -27,11 +27,12 @@ from redactor_common.core.error_summary import summarize_errors
 from redactor_common.core.move_plan import PlannedMove, plan_moves
 from redactor_common.core.rename_pattern import render_filename, unique_path, zero_pad_numeric_value
 from redactor_common.gui.pattern_field_panel import PatternFieldPanel
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 T = TypeVar("T")
 
 
-class RenamePatternDialog(QDialog):
+class RenamePatternDialog(OwnedDialog):
     def __init__(
         self,
         items: list[T],

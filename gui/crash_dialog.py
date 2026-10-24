@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core import crash_log
 from redactor_common.core.os_utils import open_with_default_app
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 DIALOG_TITLE = "Something went wrong"
 RATE_LIMIT_SECONDS = 5.0
@@ -57,7 +58,7 @@ def _signature(exc_type, exc_value, exc_tb) -> str:
     return f"{getattr(exc_type, '__name__', exc_type)}|{where}|{exc_value}"
 
 
-class CrashDialog(QDialog):
+class CrashDialog(OwnedDialog):
     """The box itself: message, counter, collapsible traceback, crash log path, three buttons."""
 
     def __init__(self, summary: str, details: str, log_path: str, parent=None):

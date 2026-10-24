@@ -116,6 +116,7 @@ from redactor_common.gui.background_call import BackgroundCancelled, call_in_bac
 from redactor_common.gui.image_label import AspectRatioImageLabel
 from redactor_common.gui.progress import ProgressReporter
 from redactor_common.gui.table_columns import make_columns_resizable
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 BOOK_COL, FOUND_COL, APPLY_COL = range(3)
 # Halved from the old single-cover (220, 320) -- two now sit side by
@@ -177,7 +178,7 @@ class LookupResult:
         return bool(self.fields) and not self.error
 
 
-class LookupDialogBase(QDialog):
+class LookupDialogBase(OwnedDialog):
     def __init__(
         self,
         items: list,

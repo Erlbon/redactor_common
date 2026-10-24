@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.table_settings import is_column_visible
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 HINT_TEXT = "Top of the list = leftmost column. Drag rows or use the arrows."
 EARLIER_TIP = "Move this column earlier (further left in the table)"
@@ -60,7 +61,7 @@ class _ReorderList(QListWidget):
         event.accept()
 
 
-class ColumnSettingsDialog(QDialog):
+class ColumnSettingsDialog(OwnedDialog):
     """
     Usage:
         dialog = ColumnSettingsDialog(

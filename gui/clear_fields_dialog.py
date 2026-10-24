@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.clear_fields import ClearPlan, describe_fields
 from redactor_common.gui.table_columns import make_columns_resizable
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 WARNING = "This empties the fields in the file(s) when you Save. You can undo before saving."
 
@@ -34,7 +35,7 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" + ("" if count == 1 else "s")
 
 
-class ClearFieldsDialog(QDialog):
+class ClearFieldsDialog(OwnedDialog):
     def __init__(
         self,
         plan: ClearPlan,

@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 from redactor_common.core.journal import KIND_RESTORE, STATUS_OK, Entry, Journal
 from redactor_common.gui.progress import run_busy
 from redactor_common.gui.table_columns import make_columns_resizable
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 MAX_ROWS = 2000  # the newest entries; the filter reaches the rest
 KIND_LABELS = {"save": "Save", "redact": "Redact", "restore": "Restore", "note": "Note created", "note-update": "Note refreshed"}
@@ -73,7 +74,7 @@ def describe_changes(entry: Entry) -> str:
     return "\n\n".join(lines)
 
 
-class HistoryDialog(QDialog):
+class HistoryDialog(OwnedDialog):
     def __init__(
         self,
         journal: Journal,

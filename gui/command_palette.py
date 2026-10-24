@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 from redactor_common.core import labels
 from redactor_common.gui import standard_shortcuts
 from redactor_common.gui.standard_menus import KEY_COMMAND_PALETTE, PATH_SEPARATOR, ActionRegistry
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 
 @dataclass
@@ -132,7 +133,7 @@ def filter_commands(query: str, commands: list[Command]) -> list[Command]:
     return [c for s, i, c in sorted((t for t in scored if t[0] is not None), key=lambda t: (t[0], t[1]))]
 
 
-class CommandPalette(QDialog):
+class CommandPalette(OwnedDialog):
     """The palette dialog. `show_palette()` refreshes the command list and
     opens it; `visible_commands()` is what the list currently shows."""
 

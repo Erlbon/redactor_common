@@ -23,13 +23,14 @@ from PyQt6.QtWidgets import (
 
 from redactor_common.core.search_replace import SearchReplaceError, apply_replace
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 FILENAME_FIELD_KEY = "__filename__"
 
 T = TypeVar("T")
 
 
-class SearchReplaceDialog(QDialog):
+class SearchReplaceDialog(OwnedDialog):
     def __init__(
         self,
         items: list[T],

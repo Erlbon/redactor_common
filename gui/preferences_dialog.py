@@ -62,6 +62,7 @@ from redactor_common.core.preferences import PrefAction, PrefSection, PrefSpec, 
 from redactor_common.gui import standard_shortcuts as keys
 from redactor_common.gui.menu_builder import MenuAction
 from redactor_common.gui.standard_menus import KEY_PREFERENCES, ROLE_BY_KEY
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 # More pages than this switch from tabs to a list + stack (tabs wrap badly).
 MAX_TABS = 6
@@ -109,7 +110,7 @@ class _Row:
         self.widgets = widgets  # label (if any) + container: enabled/disabled together
 
 
-class PreferencesDialog(QDialog):
+class PreferencesDialog(OwnedDialog):
     applied = pyqtSignal(dict)  # emitted after each write with just the keys written
 
     def __init__(

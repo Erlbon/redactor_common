@@ -35,6 +35,7 @@ import os
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QTextDocument
 from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QTextBrowser, QVBoxLayout
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 
 def _read_text_file(path: str) -> str:
@@ -61,7 +62,7 @@ def _markdown_browser(markdown_text: str) -> QTextBrowser:
     return browser
 
 
-class AboutDialog(QDialog):
+class AboutDialog(OwnedDialog):
     def __init__(
         self,
         app_name: str,
@@ -124,7 +125,7 @@ class AboutDialog(QDialog):
         layout.addWidget(buttons)
 
 
-class ChangelogDialog(QDialog):
+class ChangelogDialog(OwnedDialog):
     def __init__(self, changelog_path: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Changelog")
@@ -140,7 +141,7 @@ class ChangelogDialog(QDialog):
         layout.addWidget(buttons)
 
 
-class CreditsDialog(QDialog):
+class CreditsDialog(OwnedDialog):
     """Third-party libraries, tools, and APIs a project depends on --
     same bundled-markdown-file pattern as ChangelogDialog, just reading
     CREDITS.md instead. Link-heavy content (the whole point is pointing

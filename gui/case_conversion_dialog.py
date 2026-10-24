@@ -18,11 +18,12 @@ from PyQt6.QtWidgets import (
 from redactor_common.core.case_conversion import CASE_CONVERSIONS, apply_case_conversion
 from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
 from redactor_common.gui.progress import run_with_progress
+from redactor_common.gui.owned_dialog import OwnedDialog
 
 T = TypeVar("T")
 
 
-class CaseConversionDialog(QDialog):
+class CaseConversionDialog(OwnedDialog):
     def __init__(
         self,
         items: list[T],
