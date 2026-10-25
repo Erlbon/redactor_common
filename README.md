@@ -56,7 +56,24 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-24#03`.
+Currently: `2026-10-25#01`.
+
+## Self-update (`core/selfupdate.py`, `gui/update_controller.py`)
+
+Help > Check for Updates in every app, plus an opt-in check once a day at startup (off by default; a Preferences
+switch). It reads `api.github.com/repos/<owner>/<app>/releases/latest`, compares the tag (`v2026-10-24-01`) with
+`APP_VERSION`, and shows the release notes with Update Now / Skip This Version / Not Now. Update Now streams
+`<app>.exe` to `<exe>.new.part` under a progress dialog, refuses it unless its size and SHA-256 match the `digest`
+GitHub lists for the asset, then renames the running exe to `<exe>.old` and the new file into its place (Windows
+allows renaming a running exe). Restart Now closes the window normally (unsaved changes are asked about) and starts
+the new exe with `PYINSTALLER_RESET_ENVIRONMENT=1`; `run_app()` deletes `<exe>.old` at the next start. From source
+or on Linux the dialog links to the release page instead. State (switch, last check, skipped version) lives in
+`<app>_updates.json` next to the settings; `with_update_settings()` routes the Preferences key there.
+
+Wiring per app: `UpdateController(window, APP_NAME, APP_VERSION, APP_REPO_URL, json_path)`,
+`standard_help_items(..., updates_slot=controller.check_now)`, `controller.start_auto_check()`, and
+`updates_section()` + `with_update_settings()` in the Preferences dialog. Verified 2026-10-25 with a frozen
+one-file build that updated itself to the real cbzredactor release and restarted.
 
 ## Label wrap rule (`gui/label_wrap.py`)
 

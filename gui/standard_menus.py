@@ -431,14 +431,19 @@ def standard_help_items(
     credits_slot: Callable | None,
     about_slot: Callable | None,
     extra: Iterable = (),
+    *,
+    updates_slot: Callable | None = None,
 ) -> MenuItems:
-    """The Help menu: Changelog, Credits | About <app_name>. About carries
-    AboutRole and NO shortcut (F1 is Help contents; `extra` may hold a
-    User Guide entry bound to standard_shortcuts.HELP)."""
+    """The Help menu: Changelog, Credits | Check for Updates | About <app_name>.
+    About carries AboutRole and NO shortcut (F1 is Help contents; `extra` may
+    hold a User Guide entry bound to standard_shortcuts.HELP). `updates_slot`
+    is gui/update_controller.UpdateController.check_now."""
     return _groups(
         list(extra),
         [_std("changelog", labels.CHANGELOG, changelog_slot),
          _std("credits", labels.CREDITS, credits_slot)],
+        [_std("check_for_updates", labels.CHECK_FOR_UPDATES, updates_slot,
+              tooltip="Ask GitHub whether a newer version has been released")],
         [MenuAction(KEY_ABOUT, labels.about(app_name), about_slot or _noop, enabled=about_slot is not None)],
     )
 

@@ -97,6 +97,7 @@ LANGUAGES = "La&nguages…"
 # --- Help ---------------------------------------------------------------------
 CHANGELOG = "&Changelog…"
 CREDITS = "C&redits…"
+CHECK_FOR_UPDATES = "Check for &Updates…"
 
 
 def about(app_name: str) -> str:

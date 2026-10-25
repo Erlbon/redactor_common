@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from redactor_common.core import crash_log
+from redactor_common.core import crash_log, selfupdate
 from redactor_common.gui.label_wrap import install_label_wrap_guard
 
 
@@ -71,6 +71,7 @@ def run_app(
     if crash_log_path is not None:
         crash_log.install(crash_log_path, also_call=make_crash_dialog(crash_log_path))
     set_windows_app_user_model_id(app_user_model_id)
+    selfupdate.remove_leftovers()  # the <exe>.old an update left behind (a no-op from source)
 
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
