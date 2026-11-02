@@ -145,6 +145,17 @@ def _attr(element: ET.Element, name: str) -> str:
     return ""
 
 
+def _refined(metadata: ET.Element, element: ET.Element, prop: str) -> str:
+    """Text of the EPUB 3 <meta refines="#id" property=prop> that describes `element`, or ''."""
+    ident = _attr(element, "id")
+    if not ident:
+        return ""
+    for meta in _children(metadata, "meta"):
+        if _attr(meta, "refines") == f"#{ident}" and _attr(meta, "property") == prop:
+            return _text(meta)
+    return ""
+
+
 _YEAR = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 
 
@@ -202,7 +213,9 @@ def from_opf(source: "str | bytes | os.PathLike") -> NoteConversion:
         return _fail("The OPF has no title.")
     creators = []
     for creator in _children(metadata, "creator"):
-        role, name = _attr(creator, "role").lower(), _text(creator)
+        # EPUB 2 keeps the role in opf:role, EPUB 3 in <meta refines="#id" property="role">.
+        role = (_attr(creator, "role") or _refined(metadata, creator, "role")).strip().lower()
+        name = _text(creator)
         if name and role in ("", "aut") and name not in creators:
             creators.append(name)
     if not creators:

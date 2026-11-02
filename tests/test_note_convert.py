@@ -86,6 +86,20 @@ def test_opf_from_file_bytes_and_epub3_series(tmp_path):
     assert three.front.years == ""  # Calibre's 0101 placeholder date is no year
 
 
+def test_opf_epub3_roles_in_refining_metas():
+    # pandoc's and epubredactor's EPUB 3 form: the role is a meta, not opf:role.
+    opf = """<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Saw Hammer</dc:title>
+<dc:creator id="creator-1">Allan Lawson</dc:creator>
+<meta refines="#creator-1" property="role" scheme="marc:relators">aut</meta>
+<dc:creator id="creator-2">Tom Tolk</dc:creator>
+<meta refines="#creator-2" property="role" scheme="marc:relators">trl</meta>
+<dc:creator id="creator-3">No Role</dc:creator></metadata></package>"""
+    body = from_opf(opf).draft.body
+    assert "**Author:** Allan Lawson, No Role  \n" in body or body.rstrip().endswith("**Author:** Allan Lawson, No Role")
+    assert "Tom Tolk" not in body
+
+
 def test_opf_rendered_note_parses_in_pluteus_grammar():
     text = from_opf(OPF).draft.render()
     meta, body = parse_front_matter(text)
