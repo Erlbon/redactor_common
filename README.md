@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-10-25#01`.
+Currently: `2026-11-04#01`.
 
 ## Self-update (`core/selfupdate.py`, `gui/update_controller.py`)
 
@@ -193,6 +193,8 @@ History: path patterns share the pattern history with filename patterns; tell th
 | `languages.py` | One ISO 639 table (639-1, 639-2/T, 639-2/B, English name): `convert()`, `name_for()`, `language_pairs(codes, style)` for each app's quick-pick list in its format's code style (EPUB/ComicInfo 2-letter, ID3 3-letter, Matroska bibliographic "ger") | 2026-09-23 |
 | `secret_store.py` | `get_secret()`/`set_secret()`/`delete_secret()`/`secret_source()`/`keyring_available()` + `migrate_legacy_secret()` -- API keys and passwords in the OS credential store (via optional `keyring`), never scrambled; see "Secrets" below | 2026-09-30; cbz kept Comic Vine/GCD credentials in its ini (password XOR-"scrambled"), video kept TMDB/TVDB/OpenSubtitles keys in plaintext |
 | `settings_bundle.py` | Export/Import Settings file: `SettingsAdapter`, `build_bundle()`/`parse_bundle()`/`diff_bundle()`/`apply_bundle()`, secret-key guard; see "Export/Import Settings" below | 2026-09-30; new, no app had it |
+| `wikipedia.py` | Wikipedia + Wikidata client for the folder notes (`get_summary()`, `search_titles()`, `wikidata_claims()`, `make_fetch(user_agent)`), plus the music page finder (`find_music_page()`, `find_artist_page()`, `looks_like_music()`, `music_identifiers()`; `compare=` is the caller's name form) | video + mp3 notes; music part folded in from mp3's `core/wikipedia_lookup.py` 2026-11-04 |
+| `lookups/` | Online lookup clients shared by more than one app, all Qt-free (`tests/test_lookups_no_qt.py`); each app calls the module's `configure()` once (User-Agent, where its key or token lives): `musicbrainz.py`, `discogs.py`, `tmdb.py`, `release_name.py` (scene/release names), `cover_finder.py` (cover.jpg/folder.jpg beside the files) | 2026-11-04, from mp3redactor and videoredactor for the Folder Redactor |
 
 `pytest` from this folder runs everything (`tests/`): the core modules
 need no Qt; the GUI tests run headless under `QT_QPA_PLATFORM=offscreen`.
