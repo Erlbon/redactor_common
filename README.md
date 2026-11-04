@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-04#01`.
+Currently: `2026-11-04#02`.
 
 ## Self-update (`core/selfupdate.py`, `gui/update_controller.py`)
 
@@ -195,6 +195,11 @@ History: path patterns share the pattern history with filename patterns; tell th
 | `settings_bundle.py` | Export/Import Settings file: `SettingsAdapter`, `build_bundle()`/`parse_bundle()`/`diff_bundle()`/`apply_bundle()`, secret-key guard; see "Export/Import Settings" below | 2026-09-30; new, no app had it |
 | `wikipedia.py` | Wikipedia + Wikidata client for the folder notes (`get_summary()`, `search_titles()`, `wikidata_claims()`, `make_fetch(user_agent)`), plus the music page finder (`find_music_page()`, `find_artist_page()`, `looks_like_music()`, `music_identifiers()`; `compare=` is the caller's name form) | video + mp3 notes; music part folded in from mp3's `core/wikipedia_lookup.py` 2026-11-04 |
 | `lookups/` | Online lookup clients shared by more than one app, all Qt-free (`tests/test_lookups_no_qt.py`); each app calls the module's `configure()` once (User-Agent, where its key or token lives): `musicbrainz.py`, `discogs.py`, `tmdb.py`, `release_name.py` (scene/release names), `cover_finder.py` (cover.jpg/folder.jpg beside the files) | 2026-11-04, from mp3redactor and videoredactor for the Folder Redactor |
+| `zip_rewrite.py` | THE zip writer: `rewrite_archive(src, dst, RewritePlan)` (per-entry keep/drop/rename/replace, entries added before/after, a sliding decision window, untouched entries streamed in chunks, every entry's metadata and safe extra fields kept, every CRC checked before the swap, `progress`/`byte_progress`/`should_cancel`), `swap_in()` (original set aside under `namer(path)`, then `dispose_original` = the Recycle Bin; a refused bin restores it unless `keep_new_if_dispose_fails`), `write_new_archive()` for a new zip from `NewEntry` bytes or files | cbzredactor's, 2026-11-04, plus Dossier's CRC check and streaming |
+| `zip_names.py` | Legacy (unflagged) entry names: valid UTF-8 read as such and written back flagged, any other bytes kept byte for byte (`RawNameInfo`); `open_zip()` | cbzredactor, 2026-11-04 |
+| `comicinfo_write.py` | THE ComicInfo.xml writer (stdlib ElementTree): `parse_comicinfo`, `apply_comicinfo_edits`, `serialize_comicinfo` (schema order, xsi/xsd declared, root attributes kept, empty elements dropped, PageCount refreshed), `check_comicinfo_value` (on the CLI's `check_text`/`is_ascii_number`), `locate_comicinfo`/`find_comicinfo_member`, `comicinfo_rewrite_plan`, `write_comicinfo_into_cbz`; `COMICINFO_ORDER`, `LIST_SEPARATOR` | cbzredactor + Dossier merged 2026-11-04 (their review, section 6) |
+| `audio_write.py` | THE mutagen writer: `save_tags()` (an ID3 tag keeps its version), `edit_audio_copy()` (edit a copy beside the file, read it back, swap it in; symlinks followed), `read_audio_tags`/`write_audio_tags` (easy keys, lists in and out) | Dossier + mp3redactor merged 2026-11-04 |
+| `writer_guard.py` | `find_private_writers(folder)`: each app's test that nothing writes a zip, ComicInfo.xml or mutagen tags outside the three modules above | 2026-11-04 |
 
 `pytest` from this folder runs everything (`tests/`): the core modules
 need no Qt; the GUI tests run headless under `QT_QPA_PLATFORM=offscreen`.
