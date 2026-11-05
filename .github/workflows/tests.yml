@@ -19,7 +19,7 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PyQt6's bundled Qt still needs these system libraries on Linux;
       # without them even an offscreen QApplication() fails to construct.
@@ -33,7 +33,7 @@ jobs:
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
             libxcb-xinerama0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
