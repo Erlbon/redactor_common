@@ -37,9 +37,26 @@ gui/progress.run_busy().
 from __future__ import annotations
 
 import os
+import stat
 from typing import Callable, Iterable
 
 Skip = Callable[[str], bool]
+
+
+def is_folder_link(path: str) -> bool:
+    """A symlink or (Windows) junction: a folder that is really another folder. os.path.isjunction exists from
+    Python 3.12; before that the reparse tag tells. os.walk() never skips junctions by itself, so a junction
+    back to a parent folder made a folder search run forever (2026-11-05)."""
+    if os.path.islink(path):
+        return True
+    junction = getattr(os.path, "isjunction", None)
+    if junction is not None:
+        return junction(path)
+    try:
+        info = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    return getattr(info, "st_reparse_tag", 0) == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", -1)
 
 
 def normalize_extensions(extensions: Iterable[str]) -> tuple[str, ...]:
@@ -71,7 +88,8 @@ def _walk(folder: str, recursive: bool) -> Iterable[str]:
     """The files in `folder` (and below it when `recursive`). Unreadable folders are passed over; folder
     links are not followed (no loops)."""
     if recursive:
-        for root, _dirs, files in os.walk(folder):
+        for root, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if not is_folder_link(os.path.join(root, d))]
             for name in files:
                 yield os.path.join(root, name)
         return

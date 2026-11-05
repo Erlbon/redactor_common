@@ -143,3 +143,28 @@ def test_pathlike_inputs(tmp_path):
 
 def test_extension_labels():
     assert extension_labels(["x/a.flac", "b.WAV", "c.flac", "noext"]) == ["FLAC", "WAV"]
+
+
+def _junction(link, target):
+    import subprocess
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+    if made.returncode != 0:
+        pytest.skip("could not create a junction here")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows folder links")
+def test_junctions_are_not_followed_so_a_loop_cannot_hang_the_scan(tmp_path):
+    # Library/Marvel/again points back at Library: os.walk() alone went round it forever (2026-11-05). A
+    # subprocess with a time limit, so a regression fails here instead of hanging the whole run.
+    import subprocess
+    touch(tmp_path, "Marvel/a.cbz")
+    _junction(tmp_path / "Favourites", tmp_path / "Marvel")
+    _junction(tmp_path / "Marvel" / "again", tmp_path)
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    code = ("import sys; sys.path.insert(0, sys.argv[1]);"
+            "from redactor_common.core.folder_discovery import find_by_extension;"
+            "print('|'.join(find_by_extension([sys.argv[2]], ['.cbz'])))")
+    done = subprocess.run([sys.executable, "-c", code, root, str(tmp_path)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(tmp_path / "Marvel" / "a.cbz")  # once: not again through Favourites

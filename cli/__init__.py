@@ -52,6 +52,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, TextIO
 
+from redactor_common.core.folder_discovery import is_folder_link
+
 EXIT_OK = 0
 EXIT_PARTIAL = 1
 EXIT_USAGE = 2
@@ -214,8 +216,7 @@ def natural_key(text: str) -> list:
 
 def _is_link(path: str) -> bool:
     """A symlink or (Windows) junction: a folder that is really another folder."""
-    junction = getattr(os.path, "isjunction", None)
-    return os.path.islink(path) or bool(junction and junction(path))
+    return is_folder_link(path)
 
 
 def _wildcard_matches(argument: str) -> list[str]:
