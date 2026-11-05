@@ -309,6 +309,10 @@ def add_redact_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--list-steps", action="store_true", help="show the steps and whether the recipe has them on, then stop")
     parser.add_argument("--trash-dir", metavar="FOLDER", help="move originals here instead of the Recycle Bin")
+    parser.add_argument(
+        "-n", "--dry-run", action="store_true",
+        help="show what would change and save nothing; steps that write to disk (convert, rename, move...) are left out",
+    )
 
 
 def read_recipe_file(path: str) -> str:
@@ -383,10 +387,11 @@ def list_steps(recipe: Recipe, catalogue: Sequence[Step], out: Output) -> int:
 def redact_items(
     items: Sequence[Any], recipe: Recipe, catalogue: Iterable[Step], *, make_context: Callable[[Any], Any],
     describe: Callable[[Any], str], finalize: Callable, finalize_label: str, path_of: ItemPath, out: Output,
-    after_run: Callable[[], Iterable[str] | None] | None = None,
+    after_run: Callable[[], Iterable[str] | None] | None = None, dry_run: bool = False,
 ) -> int:
     """Runs the recipe over `items` and reports. Returns EXIT_PARTIAL if any file failed, else EXIT_OK.
-    `after_run()` is called once the run is over and may return run-wide notes to add to the report."""
+    `after_run()` is called once the run is over and may return run-wide notes to add to the report.
+    `dry_run`: see run_recipe(); the app's own env and after_run must not write either."""
 
     def progress(done: int, total: int, item: Any) -> None:
         if item is not None:
@@ -394,7 +399,7 @@ def redact_items(
 
     report = run_recipe(
         items, recipe, catalogue, make_context, progress=progress, describe=describe,
-        finalize=finalize, finalize_label=finalize_label,
+        finalize=finalize, finalize_label=finalize_label, dry_run=dry_run,
     )
     if after_run is not None:
         report.run_notes += list(after_run() or [])
@@ -412,5 +417,6 @@ def redact_items(
     out.finish({
         "files": len(report.entries), "failed": failed, "needs_review": len(report.needs_review()),
         "cancelled": report.cancelled, "confidence_threshold": report.confidence_threshold, "run_notes": report.run_notes,
+        "dry_run": report.dry_run,
     })
     return EXIT_PARTIAL if failed else EXIT_OK

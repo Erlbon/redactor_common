@@ -228,7 +228,15 @@ class Step:
     `hidden = True`: an internal step the engine always runs (whatever the
     stored recipe says) but the editor doesn't list and recipes never store.
 
-    `prepare(items, env)` is the optional batch pre-pass, see below."""
+    `prepare(items, env)` is the optional batch pre-pass, see below.
+
+    `dry_run_safe = True`: prepare(), run() and apply_suggestion() only
+    read (files, databases, the web) and change the in-memory context;
+    they never write, rename, move or delete anything on disk. Only these
+    steps run in a dry run (run_recipe(dry_run=True)); the default is
+    False, so a step nobody has checked is left out of a dry run rather
+    than trusted. after_save steps never run in a dry run (nothing was
+    saved), whatever this says."""
 
     key: str = ""
     label: str = ""
@@ -240,6 +248,7 @@ class Step:
     after: tuple[str, ...] = ()  # keys of steps this one must run after
     hidden: bool = False  # run by the engine, not listed/stored by the editor/recipe
     run_when_unchanged: bool = False  # "after_save" only: run even if nothing was saved
+    dry_run_safe: bool = False  # never touches the disk: may run in a dry run (see above)
 
     def __init__(self, *, default_enabled: bool | None = None) -> None:
         if default_enabled is not None:
@@ -468,6 +477,7 @@ class RedactReport:
     not_processed: int = 0  # files skipped because the run was cancelled
     duration: float = 0.0
     run_notes: list[str] = field(default_factory=list)  # run-wide FYIs (a step unavailable for this run)
+    dry_run: bool = False  # nothing was saved: CHANGES is what a real run would apply
 
     def count(self, status: FileStatus) -> int:
         return sum(1 for e in self.entries if e.status is status)
@@ -483,6 +493,8 @@ class RedactReport:
 
     def to_text(self) -> str:
         lines = ["Redact report", "============="]
+        if self.dry_run:
+            lines.append("DRY RUN: nothing was written. CHANGES lists what a real run would apply.")
         summary = [f"{len(self.entries)} file(s)"]
         for status in FileStatus:
             n = self.count(status)
@@ -614,6 +626,19 @@ def begin_run(items: Iterable[Any], resolved: list[tuple[Step, dict[str, Any]]],
         if value is not None:
             run.batch[step.key] = value
     return run
+
+
+def dry_run_steps(
+    resolved: list[tuple[Step, dict[str, Any]]],
+) -> tuple[list[tuple[Step, dict[str, Any]]], list[str]]:
+    """The part of `resolved` a dry run may run (dry_run_safe steps that
+    aren't after_save), and the RUN NOTES lines naming the rest. For a GUI
+    that drives run_recipe_on_item() itself: run these with finalize=None."""
+    keep = [r for r in resolved if r[0].dry_run_safe and r[0].position != "after_save"]
+    kept = {id(step) for step, _opts in keep}
+    held = [step.label or step.key for step, _opts in resolved if id(step) not in kept and not step.hidden]
+    notes = [f"Dry run: not run, they write to disk or need the save: {', '.join(held)}"] if held else []
+    return keep, notes
 
 
 def run_recipe_on_item(
@@ -850,6 +875,7 @@ def run_recipe(
     finalize: FinalizeFn | None = None,
     finalize_label: str = "Final save",
     env: Any = None,
+    dry_run: bool = False,
 ) -> RedactReport:
     """Run `recipe` over `items`, each isolated from the others.
     `progress(done, total, item)` is called before each file (item is
@@ -857,12 +883,21 @@ def run_recipe(
     between files. Returns the RedactReport (cancelled runs report what
     was done and how many files were skipped). `env` (anything) is handed
     to every enabled step's prepare(items, env) once, before the first
-    file."""
+    file.
+
+    `dry_run`: only the dry_run_safe steps run (see dry_run_steps()),
+    finalize is never called, and the report says so; the changes the
+    steps applied in memory stay in CHANGES as what a real run would do."""
     items = list(items)
     resolved = recipe.resolve(catalogue)
-    report = RedactReport(confidence_threshold=recipe.confidence_threshold)
+    report = RedactReport(confidence_threshold=recipe.confidence_threshold, dry_run=dry_run)
+    held_notes: list[str] = []
+    if dry_run:
+        resolved, held_notes = dry_run_steps(resolved)
+        finalize = None
     started = time.monotonic()
     run = begin_run(items, resolved, env)
+    run.notes[:0] = held_notes
     report.run_notes = run.notes
     for index, item in enumerate(items):
         if should_cancel is not None and should_cancel():

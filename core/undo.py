@@ -45,6 +45,10 @@ from typing import Callable, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
+# Was 5 until 2026-11-05: typed panel edits became undo steps of their own, and 5 ran out within a minute
+# (usability review). A snapshot is metadata plus references to immutable bytes (covers), so 50 costs little.
+DEFAULT_MAX_ENTRIES = 50
+
 
 @dataclass
 class UndoEntry(Generic[T]):
@@ -53,14 +57,14 @@ class UndoEntry(Generic[T]):
 
 
 class UndoManager(Generic[T]):
-    def __init__(self, max_entries: int = 5):
+    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES):
         self._undo_stack: deque[UndoEntry[T]] = deque(maxlen=max_entries)
         self._redo_stack: deque[UndoEntry[T]] = deque(maxlen=max_entries)
 
     def push(self, label: str, items: list[T], snapshot_fn: Callable[[T], object]) -> None:
         """Call BEFORE mutating `items`, to capture their pre-change
-        state via snapshot_fn(item). Pushing a 6th entry (beyond
-        max_entries) silently drops the oldest one -- that's the
+        state via snapshot_fn(item). Pushing an entry beyond
+        max_entries silently drops the oldest one -- that's the
         "last N changes" behavior. Clears any pending redo history:
         a genuinely new edit invalidates whatever "future" redo would
         have jumped back to."""
