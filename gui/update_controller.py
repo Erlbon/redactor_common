@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -101,7 +102,8 @@ class _AutoResult(QObject):
 class UpdateController(QObject):
     def __init__(self, window: QWidget, app_name: str, app_version: str, repo_url: str,
                  settings_path: str | Path, *, fetch=None, platform: str = sys.platform,
-                 frozen: bool | None = None, exe: Path | None = None, switch_place: str = "Preferences"):
+                 frozen: bool | None = None, exe: Path | None = None, switch_place: str = "Preferences",
+                 installed: bool | None = None):
         """`switch_place`: where this app keeps the daily-check switch, as the update dialog names it
         (Dossier: "the Help menu")."""
         super().__init__(window)
@@ -116,6 +118,9 @@ class UpdateController(QObject):
         self._platform = platform
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._exe = Path(exe) if exe else selfupdate.running_exe()
+        # an installed copy (its installer's uninstaller beside it) updates by running the new installer, not by swapping the exe
+        self._installed = selfupdate.is_installed(self._exe, platform, self._frozen) if installed is None else installed
+        self._pending_command: list[str] | None = None
         self._auto = _AutoResult(self)
         self._auto.found.connect(self._on_auto_found)
         self._restart_connected = False
@@ -124,7 +129,7 @@ class UpdateController(QObject):
     # --- checking --------------------------------------------------------------------------------------------------
 
     def _latest(self) -> Release:
-        return selfupdate.fetch_latest(self.repo, self.slug, self._fetch, self._platform)
+        return selfupdate.fetch_latest(self.repo, self.slug, self._fetch, self._platform, self._installed)
 
     def check_now(self) -> None:
         """Help > Check for Updates."""
@@ -170,7 +175,10 @@ class UpdateController(QObject):
 
     def offer(self, release: Release, automatic: bool = False) -> str:
         """Shows the Update Available dialog and acts on the answer. Returns the choice."""
-        can, reason = selfupdate.can_self_replace(self._exe, self._platform, self._frozen)
+        if self._installed:                  # the installer does the replacing: the folder need not be writable for us
+            can, reason = True, ""
+        else:
+            can, reason = selfupdate.can_self_replace(self._exe, self._platform, self._frozen)
         if can and not release.downloadable:
             can, reason = False, "This release has no verifiable download for this system; use the download page."
         dialog = UpdateDialog(self.app_name, self.app_version, release, can, reason, self.window, automatic,
@@ -187,6 +195,8 @@ class UpdateController(QObject):
 
     def update_to(self, release: Release) -> bool:
         """Downloads, verifies and installs `release`, then offers the restart. True when installed."""
+        if self._installed:
+            return self._update_by_installer(release)
         new_file = self._exe.with_name(self._exe.name + selfupdate.NEW_SUFFIX)
 
         def work(progress, cancel):
@@ -211,9 +221,41 @@ class UpdateController(QObject):
             self.restart()
         return True
 
-    def restart(self) -> None:
+    def _update_by_installer(self, release: Release) -> bool:
+        """An installed copy: download the new installer (checked like any update), then close and let it run silently; it starts
+        the program again when it is done. True when the installer was started (at quit)."""
+        setup = Path(tempfile.gettempdir()) / release.asset_name
+
+        def work(progress, cancel):
+            return selfupdate.download(release, setup, progress, cancel)
+
+        try:
+            got = run_work_with_progress(self.window, f"Downloading {self.app_name} {release.display}...", work,
+                                         release.asset_size, title="Update")
+        except UpdateError as exc:
+            QMessageBox.warning(self.window, "Update", str(exc))
+            return False
+        if got is None:
+            return False
+        answer = QMessageBox.question(
+            self.window, "Update",
+            f"{self.app_name} {release.display} is ready to install. {self.app_name} closes, the update installs, and "
+            f"{self.app_name} starts again.\n\nUpdate now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            try:
+                got.unlink()
+            except OSError:
+                pass
+            return False
+        self.restart(selfupdate.installer_command(got))
+        return True
+
+    def restart(self, command: list[str] | None = None) -> None:
         """Closes the main window the normal way (it may ask about unsaved changes and stay open) and, once the app
-        has quit, starts the new exe."""
+        has quit, starts the new exe (or ``command``: the new installer of an installed copy)."""
+        self._pending_command = command
         app = QApplication.instance()
         if not self._restart_connected:
             app.aboutToQuit.connect(self._start_new_exe)
@@ -228,6 +270,8 @@ class UpdateController(QObject):
         if not self.restart_pending:
             return
         argv, env = selfupdate.restart_command(self._exe)
+        if self._pending_command:
+            argv = self._pending_command
         flags = 0
         if sys.platform == "win32":
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

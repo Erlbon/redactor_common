@@ -18,6 +18,10 @@ an update is:
   4. restart:  start the new exe with PYINSTALLER_RESET_ENVIRONMENT=1 and the _PYI*/_MEIPASS2 variables removed, so a
                one-file build unpacks itself afresh instead of reusing the old process's temp folder.
 
+An INSTALLED copy (is_installed(): Inno Setup's uninstaller beside the exe) is a folder of files, so instead of steps 3 and 4 it
+downloads '<slug>-setup.exe' (checked the same way), starts it silently (installer_command()) and closes; the installer replaces
+the folder and starts the program again.
+
 Only a frozen Windows build replaces itself (can_self_replace()). From source, or on Linux, the check still works and
 the dialog links to the release page.
 
@@ -97,9 +101,31 @@ def repo_from_url(url: str) -> str:
     return f"{m.group(1)}/{m.group(2)}"
 
 
-def asset_name(slug: str, platform: str = sys.platform) -> str:
-    """The release file for this platform: 'cbzredactor.exe' on Windows, the Linux tarball elsewhere."""
-    return f"{slug}.exe" if platform == "win32" else f"{slug}-linux-x86_64.tar.gz"
+def asset_name(slug: str, platform: str = sys.platform, installed: bool = False) -> str:
+    """The release file for this platform: 'cbzredactor.exe' on Windows, the Linux tarball elsewhere. An installed copy on
+    Windows (``is_installed``) updates through its installer instead: '<slug>-setup.exe'."""
+    if platform == "win32":
+        return f"{slug}-setup.exe" if installed else f"{slug}.exe"
+    return f"{slug}-linux-x86_64.tar.gz"
+
+
+INSTALLER_MARK = "unins000.exe"      # Inno Setup's uninstaller: the program was installed, not unpacked by hand
+
+
+def is_installed(exe: Path | None = None, platform: str = sys.platform, frozen: bool | None = None) -> bool:
+    """Whether this program was put in place by its installer (a frozen Windows build with Inno Setup's uninstaller beside it). Such a
+    copy is a folder of files, not one exe, so it is updated by running the new installer, never by swapping the exe."""
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if not frozen or platform != "win32":
+        return False
+    return (Path(exe or running_exe()).parent / INSTALLER_MARK).is_file()
+
+
+def installer_command(setup: Path) -> list[str]:
+    """How the downloaded installer is started for an update: silently, closing the program if it still runs, and starting it again at
+    the end (the installer's own RESTARTAPP parameter)."""
+    return [str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPP=1"]
 
 
 # --- the check -------------------------------------------------------------------------------------------------------
@@ -126,7 +152,7 @@ class Release:
         return bool(self.asset_url and self.asset_size > 0 and self.sha256)
 
 
-def release_from_json(data: object, slug: str, platform: str = sys.platform) -> Release:
+def release_from_json(data: object, slug: str, platform: str = sys.platform, installed: bool = False) -> Release:
     """The Release a /releases/latest answer describes. UpdateError if it has no tag that reads as a version."""
     data = lookup_client.as_dict(data)
     tag = lookup_client.as_text(data.get("tag_name"))
@@ -136,7 +162,7 @@ def release_from_json(data: object, slug: str, platform: str = sys.platform) -> 
     page = lookup_client.as_text(data.get("html_url"))
     if not page.startswith("https://github.com/"):
         page = ""
-    wanted = asset_name(slug, platform)
+    wanted = asset_name(slug, platform, installed)
     for asset in lookup_client.dict_items(data.get("assets")):
         if lookup_client.as_text(asset.get("name")) != wanted:
             continue
@@ -149,7 +175,7 @@ def release_from_json(data: object, slug: str, platform: str = sys.platform) -> 
 
 
 def fetch_latest(repo: str, slug: str, fetch: lookup_client.FetchFn | None = None,
-                 platform: str = sys.platform) -> Release:
+                 platform: str = sys.platform, installed: bool = False) -> Release:
     """Asks GitHub for the newest published release of `repo` ('Owner/name'). Raises UpdateError."""
     repo_from_url(f"https://github.com/{repo}")      # validates
     fetch = fetch or lookup_client.make_default_fetch(USER_AGENT, max_bytes=MAX_API_BYTES)
@@ -160,7 +186,7 @@ def fetch_latest(repo: str, slug: str, fetch: lookup_client.FetchFn | None = Non
         status_messages={404: "GitHub lists no published release for this program yet.",
                          403: "GitHub refused the check (too many checks from this address); try again in an hour."},
     )
-    return release_from_json(data, slug, platform)
+    return release_from_json(data, slug, platform, installed)
 
 
 def is_newer(release: Release, current_version: str) -> bool:

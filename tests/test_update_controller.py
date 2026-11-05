@@ -238,3 +238,42 @@ class _Opener:
         import io
         assert request.full_url.startswith("https://github.com/Erlbon/cbzredactor/releases/download/")
         return io.BytesIO(self.data)
+
+
+# an installed copy (Inno Setup's uninstaller beside the exe) updates through its installer ---------------------------------
+def answer_with_setup(tag):
+    data = json.loads(answer(tag))
+    data["assets"].append({"name": "cbzredactor-setup.exe", "size": len(PAYLOAD), "digest": "sha256:" + hashlib.sha256(PAYLOAD).hexdigest(),
+                           "browser_download_url": f"https://github.com/Erlbon/cbzredactor/releases/download/{tag}/cbzredactor-setup.exe"})
+    return json.dumps(data).encode()
+
+
+def test_an_installed_copy_is_told_by_its_uninstaller(tmp_path):
+    exe = tmp_path / "cbzredactor.exe"
+    exe.write_bytes(b"x")
+    assert not selfupdate.is_installed(exe, "win32", True)
+    (tmp_path / "unins000.exe").write_bytes(b"u")
+    assert selfupdate.is_installed(exe, "win32", True)
+    assert not selfupdate.is_installed(exe, "win32", False) and not selfupdate.is_installed(exe, "linux", True)
+    assert selfupdate.asset_name("cbzredactor", "win32", installed=True) == "cbzredactor-setup.exe"
+
+
+def test_an_installed_copy_downloads_the_installer_and_runs_it_silently_at_quit(tmp_path, boxes, dialogs, monkeypatch):
+    exe = tmp_path / "cbzredactor.exe"
+    exe.write_bytes(b"old exe")
+    (tmp_path / "unins000.exe").write_bytes(b"u")
+    monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+    c = uc.UpdateController(QMainWindow(), "The CBZ Redactor", "2026-10-24#01", "https://github.com/Erlbon/cbzredactor",
+                            tmp_path / "u.json", fetch=lambda _r: answer_with_setup("v2026-11-02-03"), platform="win32",
+                            frozen=True, exe=exe)
+    monkeypatch.setattr(selfupdate.urllib.request, "build_opener", lambda *_a: _Opener(PAYLOAD))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    started = []
+    monkeypatch.setattr(uc.subprocess, "Popen", lambda argv, **kw: started.append(argv))
+    monkeypatch.setattr(c.window, "close", lambda: True)
+    monkeypatch.setattr(_app, "quit", lambda: c._start_new_exe())
+    dialogs.answer = uc.UPDATE
+    c.check_now()
+    setup = tmp_path / "cbzredactor-setup.exe"
+    assert setup.read_bytes() == PAYLOAD and exe.read_bytes() == b"old exe"       # the exe is the installer's to replace
+    assert started == [[str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPP=1"]]
