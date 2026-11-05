@@ -40,7 +40,9 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: python -m pip install . pytest
+        # send2trash isn't a dependency of the package (each app lists it, see core/trash.py), but the trash
+        # tests need it.
+        run: python -m pip install . pytest send2trash
 
       - name: Run tests
         run: python -m pytest -q
