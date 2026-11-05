@@ -162,6 +162,19 @@ def test_the_real_dialog_offers_update_now_when_it_can(tmp_path):
     assert dialog.choice == uc.UPDATE
 
 
+def test_the_automatic_offer_names_where_the_app_keeps_the_switch(tmp_path, dialogs):
+    def hint_of(dialog):
+        return [w.text() for w in dialog.findChildren(uc.QLabel) if "daily check" in w.text()]
+    r = selfupdate.release_from_json(json.loads(answer("v2026-11-02-03")), "cbzredactor", "win32")
+    assert hint_of(uc.UpdateDialog("App", "2026-10-24#01", r, True, automatic=True)) == [
+        "The daily check can be switched off in Preferences."]
+    c = controller(tmp_path)
+    c.switch_place = "the Help menu"
+    c.offer(r, automatic=True)
+    (dialog,) = dialogs.shown
+    assert hint_of(dialog) == ["The daily check can be switched off in the Help menu."]
+
+
 def test_auto_check_does_nothing_unless_switched_on(tmp_path):
     c = controller(tmp_path)
     assert c.start_auto_check(0) is False

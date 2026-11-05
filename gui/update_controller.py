@@ -54,7 +54,7 @@ class UpdateDialog(OwnedDialog):
     replace itself), Skip This Version, Not Now. The answer is in `choice` after exec()."""
 
     def __init__(self, app_name: str, current: str, release: Release, can_update: bool, reason: str = "",
-                 parent: QWidget | None = None, automatic: bool = False):
+                 parent: QWidget | None = None, automatic: bool = False, switch_place: str = "Preferences"):
         super().__init__(parent)
         self.choice = LATER
         self.setWindowTitle("Update Available")
@@ -69,7 +69,7 @@ class UpdateDialog(OwnedDialog):
             layout.addWidget(why)
         layout.addWidget(_markdown_browser(release.notes or "*(no release notes)*"), 1)
         if automatic:
-            hint = QLabel("The daily check can be switched off in Preferences.")
+            hint = QLabel(f"The daily check can be switched off in {switch_place}.")
             hint.setWordWrap(True)
             layout.addWidget(hint)
 
@@ -101,9 +101,12 @@ class _AutoResult(QObject):
 class UpdateController(QObject):
     def __init__(self, window: QWidget, app_name: str, app_version: str, repo_url: str,
                  settings_path: str | Path, *, fetch=None, platform: str = sys.platform,
-                 frozen: bool | None = None, exe: Path | None = None):
+                 frozen: bool | None = None, exe: Path | None = None, switch_place: str = "Preferences"):
+        """`switch_place`: where this app keeps the daily-check switch, as the update dialog names it
+        (Dossier: "the Help menu")."""
         super().__init__(window)
         self.window = window
+        self.switch_place = switch_place
         self.app_name = app_name
         self.app_version = app_version
         self.repo = selfupdate.repo_from_url(repo_url)
@@ -170,7 +173,8 @@ class UpdateController(QObject):
         can, reason = selfupdate.can_self_replace(self._exe, self._platform, self._frozen)
         if can and not release.downloadable:
             can, reason = False, "This release has no verifiable download for this system; use the download page."
-        dialog = UpdateDialog(self.app_name, self.app_version, release, can, reason, self.window, automatic)
+        dialog = UpdateDialog(self.app_name, self.app_version, release, can, reason, self.window, automatic,
+                              self.switch_place)
         dialog.exec()
         choice = dialog.choice
         if choice == SKIP:
