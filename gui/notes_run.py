@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 from redactor_common.core.notes_model import Candidate, Proposal, write_proposal as shared_write_proposal
 from redactor_common.core.notes_review import ReviewSession, choose_view
 from redactor_common.core.notes_timing import lookup_sentence, progress_suffix
-from redactor_common.gui.notes_review_dialog import NotesReviewDialog, open_in_system
+from redactor_common.gui.notes_review_dialog import NotesReviewDialog, ReviewHooks, open_in_system
 from redactor_common.gui.progress import run_busy
 from redactor_common.gui.work_progress import run_work_with_progress
 
@@ -46,14 +46,24 @@ def run_create_notes(
     size_text: str = "", on_size: Optional[Callable[[str], None]] = None, open_path: Callable[[str], None] = open_in_system,
     include_outdated: bool = False, left_alone: Callable[[object], str] = lambda found: "",
     candidate_columns: tuple[str, ...] = ("Name", "Details", "Score", "Source", "Matches"),
-    history_note: str = "",
+    history_note: str = "", hooks: Optional[ReviewHooks] = None,
+    rebuild: Optional[Callable[..., Proposal]] = None,
+    nothing_found_why: Callable[[object], str] = lambda found: "",
+    found_notes: Callable[[object], list[str]] = lambda found: [],
 ) -> Optional[NotesReviewDialog]:
     """Scan, look up, review.
 
     `scan()` returns an object with `.targets`, `.skipped` and `.missing` (the app's ScanResult); `engine` has `.phases`,
     `.stats`, `.rebuild(proposal, candidate)` and `.can_choose(proposal, candidate)`; `build(targets, progress=, cancel=,
     on_proposal=, engine=)` returns the proposals (the app's build_proposals). `write_fn` is what the review page writes
-    with. `label_for(target)` names a folder in the progress label."""
+    with. `label_for(target)` names a folder in the progress label.
+
+    The richer options (all off by default): `hooks` are the review page's extras (ReviewHooks); `rebuild(proposal,
+    candidate, level="", **extra)` replaces the plain engine.rebuild(proposal, candidate=...) for a page whose hooks pick
+    levels, genres or links; `nothing_found_why(found)` is the app's own message when nothing is to be looked up (a wrong
+    level, a library root: '' = the usual one); `found_notes(found)` adds the app's lines about the scan to the banner. An
+    engine with an `on_status` attribute gets one that writes into the progress label ('MusicBrainz is busy, waiting 4 s':
+    never wait silently). The returned dialog's `followup` lists the folders of a follow-up run the person asked for."""
     scan_started = time.perf_counter()
     try:
         found = run_busy(parent, "Looking at the folders…", scan, title=title)
@@ -61,6 +71,10 @@ def run_create_notes(
         QMessageBox.warning(parent, title, f"The folders could not be read: {exc}")
         return None
     if not found.targets:
+        special = nothing_found_why(found)
+        if special:
+            QMessageBox.information(parent, title, special)
+            return None
         why = []
         if found.skipped:
             why.append(f"{len(found.skipped)} folder(s) already have a note and were left alone.")
@@ -78,6 +92,7 @@ def run_create_notes(
     engine.phases.add("scan", time.perf_counter() - scan_started, count=len(targets))
     started = time.perf_counter()
     marks: list[float] = []  # when each folder was started: the gaps are how long the folders took
+    current = [""]  # the progress label as it stands
 
     def work(progress):
         # Runs on the worker thread: it only talks to the progress object (which marshals to the GUI thread).
@@ -87,8 +102,12 @@ def run_create_notes(
                 marks.append(now)
                 durations = [b - a for a, b in zip(marks, marks[1:])]
                 progress.set_value(done)
-                progress.set_label(f"Looking up {label_for(targets[done])} ({done + 1} of {total})…"
-                                   + progress_suffix(done, total, now - started, durations))
+                current[0] = (f"Looking up {label_for(targets[done])} ({done + 1} of {total})…"
+                              + progress_suffix(done, total, now - started, durations))
+                progress.set_label(current[0])
+
+        if hasattr(engine, "on_status"):  # a busy service is said in the label, never waited for silently
+            engine.on_status = lambda text: progress.set_label(f"{text}…  {current[0]}")
 
         try:
             build(targets, progress=report, cancel=progress.should_cancel, on_proposal=built.append, engine=engine)
@@ -110,6 +129,7 @@ def run_create_notes(
         notes.append(f"The lookup stopped early: {failure[0]}")
     if found.skipped:
         notes.append(f"{len(found.skipped)} folder(s) already have a note and are not listed.")
+    notes.extend(found_notes(found))
     if include_outdated:
         updates = sum(1 for t in found.targets if getattr(t, "update", None) is not None)
         notes.append(f"Notes made by an older version: {updates} can be updated (never pre-ticked). " + left_alone(found))
@@ -121,14 +141,15 @@ def run_create_notes(
     time_line = engine.phases.time_line()
     log.debug("%s | %s", lookup_note, engine.phases.detail())
 
-    def rebuild(proposal: Proposal, candidate: Optional[Candidate]) -> Proposal:
+    def plain_rebuild(proposal: Proposal, candidate: Optional[Candidate]) -> Proposal:
         return engine.rebuild(proposal, candidate=candidate)
 
     dialog = NotesReviewDialog(
-        session, choose_view(targets, owner_kinds=owner_kinds, child_kind=child_kind), rebuild, engine.can_choose,
+        session, choose_view(targets, owner_kinds=owner_kinds, child_kind=child_kind), rebuild or plain_rebuild,
+        engine.can_choose,
         banner="  ".join(n for n in notes if n) + (f"\n{time_line}" if time_line else ""), parent=parent, title=title,
         size=parse_size(size_text), on_size=(lambda w, h: on_size(f"{w}x{h}")) if on_size else None, open_path=open_path,
-        candidate_columns=candidate_columns, lookup_note=lookup_note, history_note=history_note)
+        candidate_columns=candidate_columns, lookup_note=lookup_note, history_note=history_note, hooks=hooks)
     dialog.exec()
     dialog.deleteLater()  # parented to `parent`: otherwise it (and the whole ReviewSession) lives as long as the window
     return dialog
