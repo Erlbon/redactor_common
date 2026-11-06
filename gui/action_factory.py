@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QWidget
 def make_action(
     parent: QWidget,
     text: str,
-    slot: Callable[[], None],
+    slot: Callable[..., None],
     shortcut: str | QKeySequence.StandardKey | None = None,
     shortcuts: Iterable[str] | None = None,
     tooltip: str | None = None,
@@ -42,5 +42,9 @@ def make_action(
         act.setToolTip(tooltip)
     if checkable:
         act.setCheckable(True)
-    act.triggered.connect(slot)
+        act.triggered.connect(slot)
+    else:
+        # PyQt6 passes triggered's `checked` bool to any slot that can take
+        # it, so `def add_links(self, text=None)` would get text=False.
+        act.triggered.connect(lambda _checked=False: slot())
     return act
