@@ -47,12 +47,23 @@ def source_description(source: str) -> str:
     }.get(source, "Not set")
 
 
+def users_text(name: str, app: str) -> str:
+    """'shared with mp3redactor' (the other apps that use the key), or '' when no other app does."""
+    others = [a for a in secret_store.users_of(name) if a != app]
+    return f"shared with {', '.join(others)}" if others else ""
+
+
 class SecretField(QWidget):
-    def __init__(self, app: str, name: str, env_var: Optional[str] = None, parent=None):
+    """`shared=True`: one of the family's shared keys (secret_store.FAMILY_KEYS): read env var > shared entry > this
+    app's own old entry, saved to the shared entry (every Redactor that uses it sees the change), and the label says
+    which other apps use it."""
+
+    def __init__(self, app: str, name: str, env_var: Optional[str] = None, parent=None, shared: bool = False):
         super().__init__(parent)
         self.app = app
         self.name = name
         self.env_var = env_var
+        self.shared = shared
         self._remove_pending = False
 
         self.edit = QLineEdit()
@@ -78,13 +89,24 @@ class SecretField(QWidget):
         """Re-read the store and reset pending edits."""
         self._remove_pending = False
         self.edit.clear()
-        source = secret_store.secret_source(self.app, self.name, self.env_var)
+        where = ""
+        if self.shared:
+            where, source = secret_store.key_location(self.name, self.app, self.env_var)
+        else:
+            source = secret_store.secret_source(self.app, self.name, self.env_var)
         has = source != secret_store.SOURCE_NONE
         self.edit.setPlaceholderText(
             f"•••••• ({source_description(source).lower()}; "
             "type to change)" if has else "Not set"
         )
-        self.source_label.setText(source_description(source))
+        text = source_description(source)
+        if self.shared:
+            if where == secret_store.WHERE_OWN:
+                text += " for this program only (saving shares it with the other Redactors)"
+            users = users_text(self.name, self.app)
+            if users and where != secret_store.WHERE_OWN:
+                text += f"; {users}"
+        self.source_label.setText(text)
         # An env var can't be removed from here.
         self.remove_button.setEnabled(has and source != secret_store.SOURCE_ENV)
 
@@ -113,10 +135,16 @@ class SecretField(QWidget):
         offer the fallback and call again."""
         changed = False
         if self._remove_pending:
-            secret_store.delete_secret(self.app, self.name)
+            if self.shared:
+                secret_store.delete_key(self.name, self.app)  # the shared entry and this app's own old copy
+            else:
+                secret_store.delete_secret(self.app, self.name)
             changed = True
         elif self.edit.text():
-            secret_store.set_secret(self.app, self.name, self.edit.text(), allow_unencrypted_fallback)
+            if self.shared:
+                secret_store.set_key(self.name, self.edit.text(), allow_unencrypted_fallback)
+            else:
+                secret_store.set_secret(self.app, self.name, self.edit.text(), allow_unencrypted_fallback)
             changed = True
         if changed:
             self.refresh()

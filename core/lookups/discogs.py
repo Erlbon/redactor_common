@@ -22,8 +22,8 @@ Discogs API rules followed here (https://www.discogs.com/developers):
 The token is never put in a URL, a log line or an exception message: it
 travels only in the Authorization header, and every error text is scrubbed
 of it before it leaves this module. It is stored by redactor_common's
-secret store under the app's name (configure(); mp3redactor's is app
-"mp3redactor", name "discogs_token"); see load_token().
+secret store as the family's shared key "discogs_token" (the app's own old
+entry, configure(), is the fallback while the apps move over); see load_token().
 A cover image is fetched with the token only from a discogs.com host, and a
 redirect away from discogs.com drops the header.
 
@@ -83,11 +83,11 @@ def configure(user_agent: str, secret_app: str) -> None:
 
 
 def load_token() -> str:
-    """The stored token ("" if none). DISCOGS_TOKEN in the environment wins,
-    then the OS credential store (or the opt-in fallback file)."""
+    """The stored token ("" if none). DISCOGS_TOKEN in the environment wins, then the family's shared entry, then the
+    app's own old entry (secret_store.get_key: the OS credential store, or the opt-in fallback file)."""
     if not SECRET_APP:
         return os.environ.get(TOKEN_ENV_VAR, "").strip()
-    return secret_store.get_secret(SECRET_APP, SECRET_NAME, env_var=TOKEN_ENV_VAR).strip()
+    return secret_store.get_key(SECRET_NAME, SECRET_APP, env_var=TOKEN_ENV_VAR).strip()
 
 
 def has_token() -> bool:

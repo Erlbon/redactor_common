@@ -32,6 +32,9 @@ in a repr; errors carry only the app/secret NAME and the exception type.
 
 Pure logic, no Qt dependency.
 
+The family's keys are SHARED (get_key / set_key / unshared_keys / share_keys, at the end): one entry per service for
+every Redactor, edited from any app's API Keys; an app's own old entry is only a fallback while the apps move over.
+
 Usage:
     from redactor_common.core import secret_store as ss
 
@@ -406,3 +409,129 @@ def migrate_legacy_secret(app: str, name: str, read_legacy: Callable[[], str],
         return False
     clear_legacy()
     return True
+
+
+# -- the family's shared keys (2026-11-06, Erlend: one key per service for every Redactor) ----------------------
+#
+# A key used to live under each app's own name (discogs_token@redactor/mp3redactor AND
+# discogs_token@redactor/folderredactor ...): a new key had to be entered in every app that used it. Now one entry
+# per service is shared by the family (<name>@redactor/shared), edited from any app's API Keys. An app reads
+# env var > the shared entry > its own old entry (kept while the apps move over: an app on an older redactor_common
+# still reads and writes its own), and every save goes to the shared entry. These are keys, tokens and the odd
+# service password: no Redactor signs in to an account of the person's.
+
+SHARED_APP = "shared"  # service name: redactor/shared
+
+
+class FamilyKey:
+    """One key of the family: its entry name (permanent), what a person calls it, its environment variable, and the apps
+    that use it (shown in API Keys: 'used by ...')."""
+
+    __slots__ = ("name", "label", "env_var", "apps")
+
+    def __init__(self, name: str, label: str, env_var: Optional[str], apps: tuple):
+        self.name, self.label, self.env_var, self.apps = name, label, env_var, tuple(apps)
+
+    def __repr__(self) -> str:
+        return f"FamilyKey({self.name!r})"
+
+
+# Every key a Redactor keeps. A new key (or a new app using one) is added here.
+FAMILY_KEYS: dict[str, FamilyKey] = {k.name: k for k in (
+    FamilyKey("discogs_token", "Discogs Token", "DISCOGS_TOKEN", ("mp3redactor", "folderredactor")),
+    FamilyKey("tmdb_api_key", "TMDB API Key", "TMDB_API_KEY", ("videoredactor", "folderredactor")),
+    FamilyKey("tvdb_api_key", "TheTVDB API Key", "TVDB_API_KEY", ("videoredactor",)),
+    FamilyKey("opensubtitles_api_key", "OpenSubtitles API Key", "OPENSUBTITLES_API_KEY", ("videoredactor",)),
+    FamilyKey("libretranslate_api_key", "LibreTranslate API Key", "LIBRETRANSLATE_API_KEY", ("videoredactor",)),
+    FamilyKey("theporndb_api_key", "ThePornDB API Token", "THEPORNDB_API_KEY", ("videoredactor",)),
+    FamilyKey("stashdb_api_key", "StashDB API Key", "STASHDB_API_KEY", ("videoredactor",)),
+    FamilyKey("comicvine_api_key", "Comic Vine API Key", "COMICVINE_API_KEY", ("cbzredactor",)),
+    FamilyKey("gcd_password", "Grand Comics Database password", None, ("cbzredactor",)),
+)}
+
+WHERE_ENV, WHERE_SHARED, WHERE_OWN, WHERE_NONE = "env", "shared", "own", "none"
+
+
+def users_of(name: str) -> tuple:
+    """The apps that use this key ('' tuple for a key the registry does not know)."""
+    key = FAMILY_KEYS.get(name)
+    return key.apps if key else ()
+
+
+def get_key(name: str, app: str, env_var: Optional[str] = None,
+            legacy: Union[None, str, Callable[[], str]] = None) -> str:
+    """The key: env var > the family's shared entry > `app`'s own old entry > `legacy`. "" if none."""
+    if env_var:
+        env = os.environ.get(env_var, "").strip()
+        if env:
+            return env
+    for owner in (SHARED_APP, app):
+        value, _ = _read_stored(owner, name)
+        if value:
+            return value
+    return _legacy_value(legacy)
+
+
+def key_location(name: str, app: str, env_var: Optional[str] = None) -> tuple[str, str]:
+    """(where, source) of what get_key() would return: where is WHERE_ENV / WHERE_SHARED / WHERE_OWN / WHERE_NONE,
+    source the SOURCE_* of that entry (keyring or the unencrypted file)."""
+    if env_var and os.environ.get(env_var, "").strip():
+        return WHERE_ENV, SOURCE_ENV
+    for owner, where in ((SHARED_APP, WHERE_SHARED), (app, WHERE_OWN)):
+        value, source = _read_stored(owner, name)
+        if value:
+            return where, source
+    return WHERE_NONE, SOURCE_NONE
+
+
+def set_key(name: str, value: str, allow_unencrypted_fallback: Optional[bool] = None) -> str:
+    """Save the key for the whole family (the shared entry); returns where it went. An empty value deletes it there."""
+    return set_secret(SHARED_APP, name, value, allow_unencrypted_fallback)
+
+
+def delete_key(name: str, app: Optional[str] = None) -> None:
+    """Remove the shared key, and `app`'s own old entry too (else that copy would quietly come back as the key)."""
+    delete_secret(SHARED_APP, name)
+    if app:
+        delete_secret(app, name)
+
+
+class UnsharedKey:
+    """A key in some app's own entry that the family's shared entry does not have yet. The value is never in the repr."""
+
+    __slots__ = ("name", "label", "app", "value")
+
+    def __init__(self, name: str, label: str, app: str, value: str):
+        self.name, self.label, self.app, self.value = name, label, app, value
+
+    def __repr__(self) -> str:
+        return f"UnsharedKey({self.name!r}, from {self.app!r})"
+
+
+def unshared_keys(names: Optional[list[str]] = None) -> list[UnsharedKey]:
+    """Keys of the registry (or only `names`) stored under an app's own name but not yet shared: the first app found,
+    in the registry's order of apps. Nothing is read from an environment variable: that is the person's, not stored."""
+    out = []
+    for key in FAMILY_KEYS.values():
+        if names is not None and key.name not in names:
+            continue
+        if _read_stored(SHARED_APP, key.name)[0]:
+            continue
+        for app in key.apps:
+            value, _ = _read_stored(app, key.name)
+            if value:
+                out.append(UnsharedKey(key.name, key.label, app, value))
+                break
+    return out
+
+
+def share_keys(found: list[UnsharedKey], allow_unencrypted_fallback: Optional[bool] = None) -> list[str]:
+    """Copies each into the shared entry (the app's own entry stays: an app on an older redactor_common reads it).
+    Returns plain-language problems, one per key that could not be shared (never a value)."""
+    problems = []
+    for key in found:
+        try:
+            set_key(key.name, key.value, allow_unencrypted_fallback)
+        except SecretStoreUnavailable as exc:
+            problems.append(f"{key.label}: {exc}")
+    return problems
