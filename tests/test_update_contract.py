@@ -38,6 +38,7 @@ CreateUninstallRegKey=yes
 
 [Files]
 Source: "Fake.exe"; DestDir: "{app}"
+Source: "Helper.exe"; DestDir: "{app}\\_internal\\tool"
 Source: "update-channel"; DestDir: "{app}"
 
 [Code]
@@ -71,6 +72,7 @@ needs_iscc = pytest.mark.skipif(sys.platform != "win32" or iscc() is None, reaso
 
 def build(tmp_path):
     (tmp_path / "Fake.exe").write_bytes(b"MZ not really a program")
+    (tmp_path / "Helper.exe").write_bytes(b"MZ a helper the program starts, like Accipio's aria2c")
     (tmp_path / "update-channel").write_text("windows-zip\n", encoding="utf-8")   # what the folder build carries
     (tmp_path / "test.iss").write_text(SCRIPT, encoding="utf-8")
     done = subprocess.run([str(iscc()), "/Q", f"/DUpdateContract={CONTRACT}", str(tmp_path / "test.iss")],
@@ -108,13 +110,18 @@ def test_an_update_declares_its_channel_asks_the_program_to_stop_and_waits_for_i
         assert (target / "update-channel").read_text(encoding="utf-8").strip() == "windows-installer"
         assert "Update contract" not in read(tmp_path / "first.log")       # nothing to stop on a first install
 
-        holder = open(target / "Fake.exe", "rb")          # "the program is still running" for three seconds
-        threading.Timer(3.0, holder.close).start()
-        assert install(tmp_path / "update.log") == 0
-        text = read(tmp_path / "update.log")
-        assert text.index("MAIN KnowsQuit") < text.index("asking the program to stop") < text.index("MAIN PrepareToInstall")
-        waited = int(re.search(r"waited (\d+) ms", text).group(1))
-        assert 250 <= waited < 30000                         # the installer's own start used part of the 3 s
+        # 2026-11-07: the program had stopped, but its helper (Accipio's aria2c, in _internal) still ran for a few
+        # seconds, and Windows closed it by force. A helper deep in the folder is waited for too.
+        for held in (target / "Fake.exe", target / "_internal" / "tool" / "Helper.exe"):
+            holder = open(held, "rb")                     # "still running" for three seconds
+            threading.Timer(3.0, holder.close).start()
+            log = tmp_path / f"update-{held.stem}.log"
+            assert install(log) == 0
+            text = read(log)
+            assert text.index("MAIN KnowsQuit") < text.index("asking the program to stop") < text.index("MAIN PrepareToInstall")
+            waited = int(re.search(r"waited (\d+) ms for the programs", text).group(1))
+            assert 250 <= waited < 30000                     # the installer's own start used part of the 3 s
+            assert "still running" not in text
         assert (target / "update-channel").read_text(encoding="utf-8").strip() == "windows-installer"
     finally:
         uninstaller = target / "unins000.exe"
