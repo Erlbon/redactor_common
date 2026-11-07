@@ -26,16 +26,37 @@ import sys
 from pathlib import Path
 
 
+CONFIG_ENV = "REDACTOR_CONFIG_DIR"
+
+
 def is_frozen() -> bool:
     """True when running as a PyInstaller-built executable."""
     return bool(getattr(sys, "frozen", False))
 
 
+def config_override() -> Path | None:
+    """REDACTOR_CONFIG_DIR, when set: the folder every app of the family keeps its settings in instead of its usual
+    place, created on first use. The release gate runs old copies with it so a test never touches the real profile.
+    ValueError for a relative path (it would land wherever the program happens to start)."""
+    value = os.environ.get(CONFIG_ENV, "").strip()
+    if not value:
+        return None
+    folder = Path(value)
+    if not folder.is_absolute():
+        raise ValueError(f"{CONFIG_ENV} must be an absolute path: {value!r}")
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def base_dir(dev_root: str | Path) -> Path:
-    """The app's home for writable state: `dev_root` (the project root)
+    """The app's home for writable state: REDACTOR_CONFIG_DIR when set
+    (config_override()); else `dev_root` (the project root)
     when running from source; when frozen, the .exe's folder on Windows
     (the family's portable-app convention), and the per-user config
     folder elsewhere -- see user_config_dir()."""
+    override = config_override()
+    if override is not None:
+        return override
     if is_frozen():
         if sys.platform == "win32":
             # sys.executable is already absolute for a frozen build; not

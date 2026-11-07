@@ -1,36 +1,35 @@
 """
 redactor_common/core/selfupdate.py
 
-The Qt-free half of "Help > Check for Updates" (the dialogs are gui/update_controller.py).
+The Qt-free half of "Help > Check for Updates" (the dialogs are gui/update_controller.py), following the update
+framework in docs/update-framework.md.
 
-Every app publishes one GitHub Release per version: tag `v2026-10-24-01` for APP_VERSION "2026-10-24#01", with
-`<slug>.exe` (Windows) and `<slug>-linux-x86_64.tar.gz` attached (see each app's .github/workflows/release.yml). So
-an update is:
+Every app publishes one GitHub Release per version: tag `v2026-10-24-01` for APP_VERSION "2026-10-24#01". Each release
+carries `update-manifest.json` (core/update_manifest.py), which names, per channel, the exact file with its size and
+SHA-256. An update is:
 
-  1. check:    GET api.github.com/repos/<owner>/<slug>/releases/latest (no token: the repos are public; drafts and
-               pre-releases are never "latest") and compare its tag with APP_VERSION;
-  2. download: stream the asset to `<exe>.new.part` next to the running exe, hashing as it goes, and refuse it unless
-               its size and SHA-256 match what the API lists for that asset (GitHub's `digest` field). An asset with
-               no digest is refused too: nothing unverified ever replaces the program;
-  3. install:  Windows will not overwrite a running exe but WILL rename one. The running exe becomes `<exe>.old`, the
-               new file takes its name, and the next start deletes `<exe>.old` (remove_leftovers()). No helper
-               script, no second process waiting for the first to exit;
-  4. restart:  start the new exe with PYINSTALLER_RESET_ENVIRONMENT=1 and the _PYI*/_MEIPASS2 variables removed, so a
-               one-file build unpacks itself afresh instead of reusing the old process's temp folder.
-
-An INSTALLED copy (is_installed(): Inno Setup's uninstaller beside the exe) is a folder of files, so instead of steps 3 and 4 it
-downloads '<slug>-setup.exe' (checked the same way), starts it silently (installer_command()) and closes; the installer replaces
-the folder and starts the program again.
-
-Only a frozen Windows build replaces itself (can_self_replace()). From source, or on Linux, the check still works and
-the dialog links to the release page.
+  1. decide:   GET api.github.com/repos/<owner>/<slug>/releases/latest (or /releases/tags/<tag>; no token: the repos
+               are public; drafts and pre-releases are never "latest"), compare its tag with APP_VERSION, read this
+               copy's declared channel, fetch the manifest (checked against GitHub's digest for it) and find the
+               channel's package among the release's assets, with the same size and digest. The result is a
+               Decision: INSTALL (with the file), PAGE (with the reason this copy cannot update itself) or NONE.
+               Nothing is guessed: a missing manifest, channel or package is a named reason, never a quiet fallback;
+  2. download: stream the package next to where it is used, hashing as it goes, and refuse it unless its size and
+               SHA-256 match;
+  3. install:  windows-exe: Windows will not overwrite a running exe but WILL rename one. The running exe becomes
+               `<exe>.old`, the new file takes its name, and the next start deletes `<exe>.old` (remove_leftovers()).
+               windows-installer: the new installer is started with the family's installer contract
+               (installer_command(): `/relaunch=yes`) once the app has quit; it replaces the folder and starts the
+               program again;
+  4. restart:  (exe) start the new exe with PYINSTALLER_RESET_ENVIRONMENT=1 and the _PYI*/_MEIPASS2 variables removed,
+               so a one-file build unpacks itself afresh instead of reusing the old process's temp folder.
 
 The check is OFF by default (the family rule for anything that phones out or logs): KEY_CHECK_FOR_UPDATES turns on a
 once-a-day check at startup. Help > Check for Updates works either way. The few values this needs live in their own
-small JSON file (UpdateSettings), not in each app's own settings store, so all four apps share one implementation;
+small JSON file (UpdateSettings), not in each app's own settings store, so all apps share one implementation;
 with_update_settings() routes the Preferences key there.
 
-Nothing is sent except the HTTPS GET itself (GitHub sees the address it comes from).
+Nothing is sent except the HTTPS GETs themselves (GitHub sees the address they come from).
 """
 
 from __future__ import annotations
@@ -43,18 +42,23 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
-from redactor_common.core import lookup_client
+from redactor_common.core import lookup_client, update_manifest
 from redactor_common.core.preferences import CallbackBackend, PreferencesBackend, PrefSection, PrefSpec
+from redactor_common.core.update_manifest import (
+    LINUX_TARBALL, MANIFEST_NAME, SOURCE, WINDOWS_EXE, WINDOWS_INSTALLER, WINDOWS_ZIP,
+)
 
 KEY_CHECK_FOR_UPDATES = "check_for_updates"
 SECTION_UPDATES = "updates"
 CHECK_INTERVAL = 24 * 3600           # the automatic check runs at most once a day
 API_LATEST = "https://api.github.com/repos/{repo}/releases/latest"
+API_TAG = "https://api.github.com/repos/{repo}/releases/tags/{tag}"
 USER_AGENT = "redactor-update-check"
 MAX_API_BYTES = 2 * 1024 * 1024
 MAX_ASSET_BYTES = 1024 * 1024 * 1024
@@ -64,10 +68,16 @@ OLD_SUFFIX = ".old"
 NEW_SUFFIX = ".new"
 PART_SUFFIX = ".new.part"
 
+# Decision.action
+INSTALL = "install"     # this copy can update itself with Decision.release's file
+PAGE = "page"           # it cannot (Decision.reason says why): the release page is the way
+NONE = "none"           # nothing newer
+
 _REPO_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9_.-]*?)(?:\.git)?/?")
 # "2026-10-24#01", "v2026-10-24-01", "2026-10-24-1"
 _VERSION = re.compile(r"v?(\d{4})-(\d{1,2})-(\d{1,2})[#-](\d{1,3})")
 _SHA256 = re.compile(r"sha256:([0-9a-fA-F]{64})")
+_TAG = re.compile(r"v\d{4}-\d{2}-\d{2}-\d{2,3}")
 
 
 class UpdateError(Exception):
@@ -92,6 +102,11 @@ def display_version(text: str) -> str:
     return f"{y:04d}-{mo:02d}-{d:02d}#{n:02d}"
 
 
+def tag_for(version: str) -> str:
+    """'2026-10-24#01' -> 'v2026-10-24-01'."""
+    return "v" + display_version(version).replace("#", "-")
+
+
 def repo_from_url(url: str) -> str:
     """'https://github.com/Erlbon/cbzredactor' -> 'Erlbon/cbzredactor'. ValueError for anything that is not a GitHub
     repository address (the result is put into an API URL)."""
@@ -101,31 +116,14 @@ def repo_from_url(url: str) -> str:
     return f"{m.group(1)}/{m.group(2)}"
 
 
-def asset_name(slug: str, platform: str = sys.platform, installed: bool = False) -> str:
-    """The release file for this platform: 'cbzredactor.exe' on Windows, the Linux tarball elsewhere. An installed copy on
-    Windows (``is_installed``) updates through its installer instead: '<slug>-setup.exe'."""
-    if platform == "win32":
-        return f"{slug}-setup.exe" if installed else f"{slug}.exe"
-    return f"{slug}-linux-x86_64.tar.gz"
-
-
-INSTALLER_MARK = "unins000.exe"      # Inno Setup's uninstaller: the program was installed, not unpacked by hand
-
-
-def is_installed(exe: Path | None = None, platform: str = sys.platform, frozen: bool | None = None) -> bool:
-    """Whether this program was put in place by its installer (a frozen Windows build with Inno Setup's uninstaller beside it). Such a
-    copy is a folder of files, not one exe, so it is updated by running the new installer, never by swapping the exe."""
-    if frozen is None:
-        frozen = bool(getattr(sys, "frozen", False))
-    if not frozen or platform != "win32":
-        return False
-    return (Path(exe or running_exe()).parent / INSTALLER_MARK).is_file()
-
-
-def installer_command(setup: Path) -> list[str]:
-    """How the downloaded installer is started for an update: silently, closing the program if it still runs, and starting it again at
-    the end (the installer's own RESTARTAPP parameter)."""
-    return [str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPP=1"]
+def installer_command(setup: Path, visible: bool = True, relaunch: bool = True) -> list[str]:
+    """How a downloaded installer is started for an update, by the family's installer contract
+    (installer/update-contract.iss): quietly (`visible`: with Inno's progress window), no reboot, and `/relaunch=yes`
+    so it starts the program again when it is done."""
+    command = [str(setup), "/SILENT" if visible else "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    if relaunch:
+        command.append("/relaunch=yes")
+    return command
 
 
 # --- the check -------------------------------------------------------------------------------------------------------
@@ -148,12 +146,41 @@ class Release:
 
     @property
     def downloadable(self) -> bool:
-        """An asset for this platform with a size and a digest to check it against."""
+        """A file with a size and a digest to check it against."""
         return bool(self.asset_url and self.asset_size > 0 and self.sha256)
 
 
-def release_from_json(data: object, slug: str, platform: str = sys.platform, installed: bool = False) -> Release:
-    """The Release a /releases/latest answer describes. UpdateError if it has no tag that reads as a version."""
+@dataclass(frozen=True)
+class Decision:
+    """What this copy does with a release: `action` INSTALL / PAGE / NONE, and for anything but INSTALL the reason in
+    words. `release` carries the notes and page, and for INSTALL the verified file to download."""
+    action: str
+    reason: str
+    channel: str
+    current: str
+    release: Release
+
+    def as_json(self) -> dict:
+        """What `--check-update` prints."""
+        return {"action": self.action, "reason": self.reason, "channel": self.channel, "current": self.current,
+                "release": self.release.tag, "file": self.release.asset_name if self.action == INSTALL else "",
+                "size": self.release.asset_size if self.action == INSTALL else 0}
+
+    def details(self, app_name: str) -> str:
+        """The "Copy details" text of the update box, for a bug report."""
+        return "\n".join((
+            f"{app_name} {self.current}",
+            f"Channel: {self.channel or '(none: no update-channel file)'}",
+            f"Release: {self.release.tag}",
+            f"Action: {self.action}",
+            f"File: {self.release.asset_name or '-'}",
+            f"Reason: {self.reason or '-'}",
+            f"Executable: {sys.executable}",
+        ))
+
+
+def release_info(data: object) -> Release:
+    """The tag, notes and page of a release API answer. UpdateError if its tag does not read as a version."""
     data = lookup_client.as_dict(data)
     tag = lookup_client.as_text(data.get("tag_name"))
     version = parse_version(tag)
@@ -162,31 +189,108 @@ def release_from_json(data: object, slug: str, platform: str = sys.platform, ins
     page = lookup_client.as_text(data.get("html_url"))
     if not page.startswith("https://github.com/"):
         page = ""
-    wanted = asset_name(slug, platform, installed)
-    for asset in lookup_client.dict_items(data.get("assets")):
-        if lookup_client.as_text(asset.get("name")) != wanted:
-            continue
-        url = lookup_client.as_text(asset.get("browser_download_url"))
-        m = _SHA256.fullmatch(lookup_client.as_text(asset.get("digest")))
-        return Release(tag, version, lookup_client.as_text(data.get("body")), page, wanted,
-                       url if url.startswith("https://github.com/") else "",
-                       lookup_client.as_int(asset.get("size")), m.group(1).lower() if m else "")
     return Release(tag, version, lookup_client.as_text(data.get("body")), page)
 
 
-def fetch_latest(repo: str, slug: str, fetch: lookup_client.FetchFn | None = None,
-                 platform: str = sys.platform, installed: bool = False) -> Release:
-    """Asks GitHub for the newest published release of `repo` ('Owner/name'). Raises UpdateError."""
+def _assets(data: dict) -> dict[str, dict]:
+    """The release's files by name, each with its https://github.com/ URL, size and sha256 ("" when none)."""
+    found = {}
+    for asset in lookup_client.dict_items(data.get("assets")):
+        url = lookup_client.as_text(asset.get("browser_download_url"))
+        m = _SHA256.fullmatch(lookup_client.as_text(asset.get("digest")))
+        found[lookup_client.as_text(asset.get("name"))] = {
+            "url": url if url.startswith("https://github.com/") else "",
+            "size": lookup_client.as_int(asset.get("size")), "sha256": m.group(1).lower() if m else ""}
+    return found
+
+
+def fetch_release(repo: str, fetch: lookup_client.FetchFn | None = None, tag: str = "") -> dict:
+    """GitHub's answer for the newest published release of `repo` ('Owner/name'), or for `tag` (a pre-release too).
+    Raises UpdateError."""
     repo_from_url(f"https://github.com/{repo}")      # validates
+    if tag and not _TAG.fullmatch(tag):
+        raise UpdateError(f"Not a release tag: {tag!r}")
     fetch = fetch or lookup_client.make_default_fetch(USER_AGENT, max_bytes=MAX_API_BYTES)
-    request = lookup_client.build_request(API_LATEST.format(repo=repo), headers={
+    url = API_TAG.format(repo=repo, tag=urllib.parse.quote(tag)) if tag else API_LATEST.format(repo=repo)
+    request = lookup_client.build_request(url, headers={
         "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
-    data = lookup_client.fetch_json(
+    missing = f"GitHub lists no release {tag}." if tag else "GitHub lists no published release for this program yet."
+    return lookup_client.as_dict(lookup_client.fetch_json(
         request, fetch, error_cls=UpdateError, source_name="GitHub",
-        status_messages={404: "GitHub lists no published release for this program yet.",
+        status_messages={404: missing,
                          403: "GitHub refused the check (too many checks from this address); try again in an hour."},
-    )
-    return release_from_json(data, slug, platform, installed)
+    ))
+
+
+_CANNOT = {
+    WINDOWS_ZIP: "This copy was unpacked from the zip, so it cannot replace itself. Download the new version from the "
+                 "release page (or install it with the installer, which then keeps it up to date).",
+    LINUX_TARBALL: "The Linux build cannot replace itself yet. Download the new version from the release page.",
+    SOURCE: "This copy runs from source; update it with git pull.",
+    "": "This copy cannot tell how it was installed (it has no update-channel file), so it does not guess. "
+        "Download the new version from the release page.",
+}
+
+
+def decide(repo: str, slug: str, current_version: str, channel: str, fetch: lookup_client.FetchFn | None = None,
+           tag: str = "", writable: Callable[[], tuple[bool, str]] | None = None) -> Decision:
+    """What this copy (version `current_version`, declared `channel`) does with the newest release of `repo`, or with
+    release `tag`. Raises UpdateError only when GitHub cannot be asked; everything else is a Decision with a reason.
+    `writable` (windows-exe only) says whether the exe's folder can be written: can_self_replace() by default."""
+    fetch = fetch or lookup_client.make_default_fetch(USER_AGENT, max_bytes=MAX_API_BYTES)
+    data = fetch_release(repo, fetch, tag)
+    release = release_info(data)
+
+    def page(reason: str) -> Decision:
+        return Decision(PAGE, reason, channel, current_version, release)
+
+    if not is_newer(release, current_version):
+        return Decision(NONE, f"You have the newest version ({current_version}).", channel, current_version, release)
+    if channel not in update_manifest.SELF_UPDATING:
+        return page(_CANNOT.get(channel, _CANNOT[""]))
+    assets = _assets(data)
+    entry = assets.get(MANIFEST_NAME)
+    if entry is None:
+        return page(f"Release {release.display} has no {MANIFEST_NAME}: it was made before this program's update "
+                    "framework, so this copy cannot tell which file to install. Use the release page.")
+    if not (entry["url"] and entry["size"] > 0 and entry["sha256"]):
+        return page(f"GitHub lists no checksum for release {release.display}'s {MANIFEST_NAME}, so it cannot be "
+                    "trusted. Use the release page.")
+    raw = lookup_client.fetch_bytes(entry["url"], fetch, error_cls=UpdateError, what=f"the release's {MANIFEST_NAME}")
+    if len(raw) != entry["size"] or hashlib.sha256(raw).hexdigest() != entry["sha256"]:
+        return page(f"Release {release.display}'s {MANIFEST_NAME} does not match the checksum GitHub lists for it; "
+                    "it was not used. Use the release page.")
+    try:
+        manifest = update_manifest.parse(raw)
+    except ValueError as exc:
+        return page(f"Release {release.display} cannot be installed automatically: {exc}. Use the release page.")
+    if manifest.schema > update_manifest.SCHEMA:
+        return page(f"Release {release.display} uses a newer update format than this copy knows. Use the release page.")
+    if manifest.min_client > update_manifest.CLIENT:
+        return page(f"This copy's updater is too old to install release {release.display}. Use the release page.")
+    if manifest.app != slug:
+        return page(f"Release {release.display}'s manifest is for another program ({manifest.app}). Use the release page.")
+    if manifest.tag != release.tag:
+        return page(f"Release {release.display}'s manifest describes another release ({manifest.tag}). "
+                    "Use the release page.")
+    package = manifest.packages.get(channel)
+    if package is None:
+        return page(f"Release {release.display} has no package for this kind of copy ({channel}). "
+                    "Use the release page.")
+    held = assets.get(package.file)
+    if held is None or not held["url"]:
+        return page(f"Release {release.display}'s manifest names {package.file}, which the release does not hold. "
+                    "Use the release page.")
+    if held["size"] != package.size or held["sha256"] != package.sha256:
+        return page(f"{package.file} in release {release.display} does not match its manifest (size or checksum). "
+                    "Use the release page.")
+    if channel == WINDOWS_EXE:
+        can, why = (writable or can_self_replace)()
+        if not can:
+            return page(why)
+    release = Release(release.tag, release.version, release.notes, release.page_url, package.file, held["url"],
+                      package.size, package.sha256)
+    return Decision(INSTALL, "", channel, current_version, release)
 
 
 def is_newer(release: Release, current_version: str) -> bool:
@@ -201,15 +305,19 @@ def running_exe() -> Path:
     return Path(sys.executable)
 
 
-def can_self_replace(exe: Path | None = None, platform: str = sys.platform,
-                     frozen: bool | None = None) -> tuple[bool, str]:
-    """(True, "") when this program can replace its own file; otherwise (False, why) for the dialog."""
-    if frozen is None:
-        frozen = bool(getattr(sys, "frozen", False))
-    if not frozen:
-        return False, "This copy runs from source; update it with git pull."
-    if platform != "win32":
-        return False, "Automatic updating is only built for the Windows program; download the new version instead."
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def channel_of(exe: Path | None = None, frozen: bool | None = None) -> str:
+    """This copy's declared channel (update_manifest.read_channel), with the one-file build's bundle as fallback."""
+    frozen = is_frozen() if frozen is None else frozen
+    bundle = getattr(sys, "_MEIPASS", None)
+    return update_manifest.read_channel(Path(exe or running_exe()), frozen, Path(bundle) if bundle else None)
+
+
+def can_self_replace(exe: Path | None = None) -> tuple[bool, str]:
+    """(True, "") when the program's folder can be written to (the windows-exe swap needs it); else (False, why)."""
     exe = exe or running_exe()
     try:
         fd, probe = tempfile.mkstemp(prefix=".update-probe-", dir=exe.parent)
@@ -267,6 +375,13 @@ def download(release: Release, dest: Path, progress: Callable[[int, int], None] 
             _remove_quietly(part)
 
 
+def installer_download_path(release: Release) -> Path:
+    """Where an installer update is downloaded: its own folder in the temp folder, under the manifest's file name."""
+    folder = Path(tempfile.gettempdir()) / "redactor-updates"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / release.asset_name
+
+
 def install(new_file: Path, exe: Path | None = None) -> Path:
     """Puts `new_file` in place of the (running) `exe`: exe -> exe.old, new_file -> exe. If the second step fails,
     the first is undone and UpdateError is raised. Returns the path of the old copy."""
@@ -292,7 +407,7 @@ def remove_leftovers(exe: Path | None = None, frozen: bool | None = None) -> Non
     """At startup: deletes `<exe>.old` (the copy an update replaced) and any half-finished download. Harmless when
     there is nothing to delete, when running from source, or when a file is still locked (tried again next start)."""
     if frozen is None:
-        frozen = bool(getattr(sys, "frozen", False))
+        frozen = is_frozen()
     if not frozen:
         return
     exe = Path(exe or running_exe())

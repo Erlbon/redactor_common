@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redactor_common"
-version = "2026.11.6.3"
+version = "2026.11.7.1"
 description = "Shared PyQt6 UI + core logic for the Redactor family of tools (epub/video/mp3/cbz)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,3 +30,7 @@ packages = ["redactor_common", "redactor_common.cli", "redactor_common.core", "r
 
 [tool.setuptools.package-dir]
 redactor_common = "."
+
+# The installer contract every app's Inno Setup script includes (python -m redactor_common.release contract-path).
+[tool.setuptools.package-data]
+redactor_common = ["installer/*.iss"]

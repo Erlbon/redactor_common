@@ -28,8 +28,11 @@ def api_answer(tag="v2026-11-02-03", digest="sha256:" + DIGEST, size=len(PAYLOAD
     }
 
 
-def release(**kw):
-    return selfupdate.release_from_json(api_answer(**kw), "cbzredactor", "win32")
+def release(tag="v2026-11-02-03", digest=DIGEST, size=len(PAYLOAD), url=None):
+    """A release whose file decide() has already found and checked against its manifest."""
+    return Release(tag, selfupdate.parse_version(tag), "## Notes", f"https://github.com/Erlbon/cbzredactor/releases/tag/{tag}",
+                   "cbzredactor.exe", url or f"https://github.com/Erlbon/cbzredactor/releases/download/{tag}/cbzredactor.exe",
+                   size, digest or "")
 
 
 class FakeOpener:
@@ -69,56 +72,64 @@ def test_repo_from_url_accepts_the_apps_urls_and_rejects_anything_else():
             selfupdate.repo_from_url(bad)
 
 
-def test_asset_name_per_platform():
-    assert selfupdate.asset_name("cbzredactor", "win32") == "cbzredactor.exe"
-    assert selfupdate.asset_name("cbzredactor", "linux") == "cbzredactor-linux-x86_64.tar.gz"
+def test_tag_for_a_version():
+    assert selfupdate.tag_for("2026-10-24#01") == "v2026-10-24-01"
+
+
+def test_installer_command_follows_the_installer_contract(tmp_path):
+    setup = tmp_path / "App-setup.exe"
+    assert selfupdate.installer_command(setup) == [str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                                                   "/relaunch=yes"]
+    assert selfupdate.installer_command(setup, visible=False, relaunch=False) == [
+        str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
 
 
 # --- reading the API answer ----------------------------------------------------------------------------------------------
 
 
-def test_release_from_json_picks_this_platforms_asset_and_digest():
-    r = release()
-    assert r.tag == "v2026-11-02-03" and r.display == "2026-11-02#03"
-    assert r.asset_name == "cbzredactor.exe" and r.asset_size == len(PAYLOAD) and r.sha256 == DIGEST
-    assert r.downloadable and r.notes == "## Notes"
-    linux = selfupdate.release_from_json(api_answer(), "cbzredactor", "linux")
-    assert linux.asset_name.endswith(".tar.gz")
+def test_release_info_reads_tag_notes_and_page():
+    r = selfupdate.release_info(api_answer())
+    assert r.tag == "v2026-11-02-03" and r.display == "2026-11-02#03" and r.notes == "## Notes"
+    assert r.page_url == "https://github.com/Erlbon/cbzredactor/releases/tag/v2026-11-02-03"
+    assert not r.downloadable                     # the file comes from the manifest (decide), never from a name
 
 
-def test_an_asset_without_digest_is_not_downloadable():
+def test_a_release_without_digest_is_not_downloadable():
+    assert release().downloadable
     assert not release(digest=None).downloadable
-    assert not release(digest="md5:abc").downloadable
-    assert not release(name="other.exe").downloadable
 
 
 def test_a_download_url_off_github_is_dropped():
     data = api_answer()
     data["assets"][1]["browser_download_url"] = "https://evil.example/cbzredactor.exe"
-    assert not selfupdate.release_from_json(data, "cbzredactor", "win32").downloadable
+    assert selfupdate._assets(data)["cbzredactor.exe"]["url"] == ""
 
 
 def test_odd_answers_raise_update_error_not_a_crash():
     for data in ({}, [], None, {"tag_name": "nightly"}, {"tag_name": 5}):
         with pytest.raises(UpdateError):
-            selfupdate.release_from_json(data, "cbzredactor", "win32")
-    r = selfupdate.release_from_json({"tag_name": "v2026-11-02-03", "assets": "x", "body": None}, "cbzredactor")
+            selfupdate.release_info(data)
+    r = selfupdate.release_info({"tag_name": "v2026-11-02-03", "assets": "x", "body": None})
     assert not r.downloadable and r.notes == ""
+    assert selfupdate._assets({"assets": "x"}) == {}
 
 
-def test_fetch_latest_asks_the_right_url():
+def test_fetch_release_asks_the_right_url():
     seen = []
 
     def fetch(request):
         seen.append(request.full_url)
         return json.dumps(api_answer()).encode()
 
-    r = selfupdate.fetch_latest("Erlbon/cbzredactor", "cbzredactor", fetch, "win32")
-    assert seen == ["https://api.github.com/repos/Erlbon/cbzredactor/releases/latest"]
-    assert r.sha256 == DIGEST
+    assert selfupdate.fetch_release("Erlbon/cbzredactor", fetch)["tag_name"] == "v2026-11-02-03"
+    selfupdate.fetch_release("Erlbon/cbzredactor", fetch, tag="v2026-11-02-03")
+    assert seen == ["https://api.github.com/repos/Erlbon/cbzredactor/releases/latest",
+                    "https://api.github.com/repos/Erlbon/cbzredactor/releases/tags/v2026-11-02-03"]
+    with pytest.raises(UpdateError, match="Not a release tag"):
+        selfupdate.fetch_release("Erlbon/cbzredactor", fetch, tag="../../x")
 
 
-def test_fetch_latest_turns_failures_into_update_error():
+def test_fetch_release_turns_failures_into_update_error():
     def offline(_request):
         raise urllib.error.URLError("no network")
 
@@ -126,9 +137,11 @@ def test_fetch_latest_turns_failures_into_update_error():
         raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
 
     with pytest.raises(UpdateError, match="Could not reach GitHub"):
-        selfupdate.fetch_latest("Erlbon/cbzredactor", "cbzredactor", offline)
+        selfupdate.fetch_release("Erlbon/cbzredactor", offline)
     with pytest.raises(UpdateError, match="no published release"):
-        selfupdate.fetch_latest("Erlbon/cbzredactor", "cbzredactor", missing)
+        selfupdate.fetch_release("Erlbon/cbzredactor", missing)
+    with pytest.raises(UpdateError, match="no release v2026-11-02-03"):
+        selfupdate.fetch_release("Erlbon/cbzredactor", missing, tag="v2026-11-02-03")
 
 
 def test_is_newer():
@@ -226,12 +239,8 @@ def test_restart_command_resets_the_pyinstaller_environment(tmp_path):
 
 def test_can_self_replace(tmp_path):
     exe = tmp_path / "app.exe"
-    assert selfupdate.can_self_replace(exe, "win32", frozen=True) == (True, "")
-    ok, why = selfupdate.can_self_replace(exe, "win32", frozen=False)
-    assert not ok and "git pull" in why
-    ok, why = selfupdate.can_self_replace(exe, "linux", frozen=True)
-    assert not ok and "download" in why
-    ok, why = selfupdate.can_self_replace(tmp_path / "missing" / "app.exe", "win32", frozen=True)
+    assert selfupdate.can_self_replace(exe) == (True, "")
+    ok, why = selfupdate.can_self_replace(tmp_path / "missing" / "app.exe")
     assert not ok and "cannot be written" in why
     assert list(tmp_path.iterdir()) == []     # the write probe cleans up after itself
 

@@ -28,8 +28,8 @@ The project skill in `.claude/skills/redactor-conventions/SKILL.md` holds the fu
 
 Full text of these rules: `.claude/skills/redactor-conventions/SKILL.md` in redactor_common.
 
-## Machine-local, not in git
-The release scripts (`release.ps1`, `release-<project>.ps1`, `release-all.ps1`) and a hand-placed `upx.exe` lived in a machine-local `_shared-tools` folder that is deliberately not in git. They are not in this repo and must be recreated or copied over by hand.
+## Releases and updates
+Every app updates through one framework, `docs/update-framework.md` (approved 2026-11-07): each release carries `update-manifest.json`, each copy declares its channel in `update-channel`, installers include `installer/update-contract.iss`, and `python -m redactor_common.release publish` (run in the app's repo, configured by its `[tool.redactor-release]`) publishes a pre-release, runs the gate (the previous release's real copy must update itself to the new one) and only then makes it Latest. Apps not yet moved onto it still use the old machine-local scripts in `_shared-tools` (`release.ps1`, `release-<project>.ps1`, not in git); move them one app at a time.
 
 
 ## Line endings
