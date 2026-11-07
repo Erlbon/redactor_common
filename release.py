@@ -14,7 +14,7 @@ Run from the app's repository (or pass --repo PATH). The app describes itself in
     name = "Accipio"
     repo = "Erlbon/accipio"
     version_file = "accipio/core/version.py"          # holds APP_VERSION = "YYYY-MM-DD#NN"
-    build = ["cmd", "/c", "call build_exe.bat < nul"]
+    build = ["build_exe.bat"]                         # a .bat/.cmd is called by its full path, stdin closed
     exe = "Accipio.exe"                               # the program inside an install or the exe package itself
     installer_app_id = "{6C0E5D8A-...}"               # windows-installer only: its Inno Setup AppId
     after_gate = [["python", "-m", "accipio", "--register"]]     # optional: put back what an install changed
@@ -157,8 +157,9 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 def run(argv: Sequence[str], cwd: Path | None = None, check: bool = True, env: dict | None = None,
         capture: bool = True) -> subprocess.CompletedProcess:
+    # stdin closed: a build script's closing "pause" returns at once instead of waiting for a key
     done = subprocess.run(list(argv), cwd=cwd, env=env, capture_output=capture, text=True, encoding="utf-8",
-                          errors="replace")
+                          errors="replace", stdin=subprocess.DEVNULL)
     if check and done.returncode != 0:
         raise ReleaseError(f"{' '.join(map(str, argv))} failed (exit {done.returncode}):\n"
                            f"{(done.stdout or '')[-2000:]}{(done.stderr or '')[-2000:]}")
@@ -203,13 +204,21 @@ def build_env(cfg: Config) -> dict:
     is that venv's (the family rule: never pip into the shared Python; a package installed there for something else
     would also end up in the exe)."""
     env = dict(os.environ)
-    # With this set (Claude Code sets it), cmd no longer finds "build_exe.bat" in the folder it runs in.
-    env.pop("NoDefaultCurrentDirectoryInExePath", None)
     scripts = cfg.root / ".venv" / ("Scripts" if sys.platform == "win32" else "bin")
     if scripts.is_dir():
         env["PATH"] = str(scripts) + os.pathsep + env.get("PATH", "")
         env["VIRTUAL_ENV"] = str(scripts.parent)
     return env
+
+
+def build_command(cfg: Config) -> list[str]:
+    """`build` as run: a .bat/.cmd script named first is called by its absolute path (2026-11-07: "cmd /c call
+    build_exe.bat" in the repository folder answered "not recognized", although `where` found it there)."""
+    first, rest = cfg.build[0], cfg.build[1:]
+    script = cfg.root / first
+    if first.lower().endswith((".bat", ".cmd")) and script.is_file():
+        return ["cmd", "/d", "/c", "call", str(script), *rest]
+    return list(cfg.build)
 
 
 def make_zip(cfg: Config) -> Path | None:
@@ -525,7 +534,7 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
     say(f"Releasing {cfg.name} {cfg.version} as {tag}")
     if not skip_build:
         say("Building...")
-        runner(cfg.build, cwd=cfg.root, capture=False, env=build_env(cfg))
+        runner(build_command(cfg), cwd=cfg.root, capture=False, env=build_env(cfg))
     make_zip(cfg)
     write_manifest(cfg)
     assets = assets_of(cfg)

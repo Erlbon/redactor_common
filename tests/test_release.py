@@ -181,10 +181,13 @@ def test_the_build_uses_the_repositorys_own_venv(tmp_path):
     assert env["PATH"].split(release.os.pathsep)[0] == str(scripts) and env["VIRTUAL_ENV"] == str(scripts.parent)
 
 
-def test_the_build_finds_a_script_in_the_repository_folder(tmp_path, monkeypatch):
-    """2026-11-07: with NoDefaultCurrentDirectoryInExePath set, cmd did not find build_exe.bat beside it."""
-    monkeypatch.setenv("NoDefaultCurrentDirectoryInExePath", "1")
-    assert "NoDefaultCurrentDirectoryInExePath" not in release.build_env(repo(tmp_path))
+def test_a_build_script_is_called_by_its_full_path(tmp_path):
+    """2026-11-07: "cmd /c call build_exe.bat" in the repository folder answered "not recognized"."""
+    cfg = repo(tmp_path, PYPROJECT.replace('build = ["cmd", "/c", "call build_exe.bat < nul"]',
+                                           'build = ["build_exe.bat", "--x"]'))
+    assert release.build_command(cfg) == ["build_exe.bat", "--x"]          # not there: left as written
+    (tmp_path / "build_exe.bat").write_text("@echo off\n", encoding="utf-8")
+    assert release.build_command(cfg) == ["cmd", "/d", "/c", "call", str(tmp_path / "build_exe.bat"), "--x"]
 
 
 def test_publish_can_leave_the_gated_release_a_pre_release(tmp_path, monkeypatch):
