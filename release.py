@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from redactor_common.core import selfupdate, update_manifest, zip_rewrite
+from redactor_common.core import crash_log, selfupdate, update_manifest, zip_rewrite
 from redactor_common.core.update_manifest import MANIFEST_NAME, WINDOWS_EXE, WINDOWS_INSTALLER, WINDOWS_ZIP
 
 DEFAULT_GATE_DIR = r"C:\Temp\Claude\release-gate"
@@ -342,6 +342,17 @@ def verify_release(cfg: Config, tag: str, scratch: Path, runner: Runner = run) -
 # --- the gate ---------------------------------------------------------------------------------------------------------
 
 
+START_MARKER = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d started: pid \d+.*$")
+
+
+def crash_entries(text: str) -> str:
+    """What a crash log holds beyond core.crash_log's start markers (the separator and "<time> started: pid ..."
+    that every launch writes): a traceback or a faulthandler dump. "" when the program only started."""
+    return "\n".join(line for line in text.splitlines()
+                     if line.strip() and line.strip() != crash_log.ENTRY_SEPARATOR
+                     and not START_MARKER.match(line.strip())).strip()
+
+
 def wait_for_pid(pid: int, timeout: float) -> int | None:
     """The exit code of process `pid` once it ends; None when it still runs after `timeout` (or cannot be watched)."""
     if sys.platform != "win32":
@@ -534,7 +545,8 @@ class Gate:
         process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
         time.sleep(self.cfg.gate_live)
         alive = process.poll() is None
-        crashed = crash is not None and crash.exists()
+        crashed = crash is not None and crash.exists() and crash_entries(crash.read_text(encoding="utf-8",
+                                                                                          errors="replace"))
         stopped = self.runner([str(exe), *self.cfg.gate_quit], cwd=exe.parent, env=self.env, check=False)
         try:
             code = process.wait(30)
@@ -544,8 +556,7 @@ class Gate:
         if not alive:
             raise ReleaseError(f"{exe.name} stopped by itself within {self.cfg.gate_live:.0f} s (exit {code}).")
         if crashed:
-            raise ReleaseError(f"{exe.name} wrote a crash log on its first start:\n"
-                               + crash.read_text(encoding="utf-8", errors="replace")[-3000:])
+            raise ReleaseError(f"{exe.name} wrote a crash log on its first start:\n" + crashed[-3000:])
         if stopped.returncode != 0 or code != 0:
             raise ReleaseError(f"{exe.name} did not stop cleanly (quit exit {stopped.returncode}, program exit {code}).")
         say(f"  {exe.name} ran {self.cfg.gate_live:.0f} s with no crash and stopped when asked")

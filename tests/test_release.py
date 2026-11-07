@@ -253,8 +253,10 @@ if "--quit" in sys.argv:
 mode = open(os.path.join(profile, "mode")).read() if os.path.exists(os.path.join(profile, "mode")) else "fine"
 if mode == "dies":
     sys.exit(3)
+# every start writes crash_log's start marker, as run_app does; only what comes after it is a crash
+open(os.path.join(profile, "crash.log"), "a").write(chr(10) + "=" * 70 + chr(10) + "2026-11-07 16:54:21 started: pid 1" + chr(10))
 if mode == "crashes":
-    open(os.path.join(profile, "crash.log"), "w").write("Traceback: ConnectionResetError")
+    open(os.path.join(profile, "crash.log"), "a").write("Traceback: ConnectionResetError")
 while not os.path.exists(stop):
     time.sleep(0.05)
 os.remove(stop)
@@ -288,6 +290,14 @@ def test_a_program_that_crashes_on_its_first_start_fails_the_gate(tmp_path, monk
     gate, exe = running_gate(tmp_path, monkeypatch, "crashes")
     with pytest.raises(release.ReleaseError, match=r"crash log(.|\n)*ConnectionResetError"):
         gate.expect_it_runs(exe)
+
+
+def test_only_what_follows_the_start_markers_is_a_crash():
+    from redactor_common.core import crash_log
+    started = crash_log.format_start_marker("Accipio 2026-11-07#10") * 2
+    assert release.crash_entries(started) == ""
+    assert release.crash_entries(started + "Windows fatal exception: access violation") == \
+        "Windows fatal exception: access violation"
 
 
 def test_a_program_that_stops_by_itself_fails_the_gate(tmp_path, monkeypatch):
