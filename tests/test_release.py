@@ -181,6 +181,27 @@ def test_the_build_uses_the_repositorys_own_venv(tmp_path):
     assert env["PATH"].split(release.os.pathsep)[0] == str(scripts) and env["VIRTUAL_ENV"] == str(scripts.parent)
 
 
+def test_the_build_finds_a_script_in_the_repository_folder(tmp_path, monkeypatch):
+    """2026-11-07: with NoDefaultCurrentDirectoryInExePath set, cmd did not find build_exe.bat beside it."""
+    monkeypatch.setenv("NoDefaultCurrentDirectoryInExePath", "1")
+    assert "NoDefaultCurrentDirectoryInExePath" not in release.build_env(repo(tmp_path))
+
+
+def test_publish_can_leave_the_gated_release_a_pre_release(tmp_path, monkeypatch):
+    cfg = repo(tmp_path)
+    steps = []
+    for name in ("preflight", "make_zip", "write_manifest", "gate", "promote"):
+        monkeypatch.setattr(release, name, lambda *a, _n=name, **k: steps.append(_n))
+    monkeypatch.setattr(release, "assets_of", lambda cfg: [])
+    monkeypatch.setattr(release, "release_exists", lambda *a: {"prerelease": True})
+    (tmp_path / "dist").mkdir()
+    runner = FakeRunner()
+    release.publish(cfg, skip_build=True, first=True, runner=runner, promote_after=False)
+    assert "gate" in steps and "promote" not in steps
+    release.publish(cfg, skip_build=True, first=True, runner=runner)
+    assert steps[-1] == "promote"
+
+
 def test_contract_path_cli(capsys):
     assert release.main(["contract-path"]) == 0
     assert capsys.readouterr().out.strip().endswith("update-contract.iss")

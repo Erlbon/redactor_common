@@ -203,6 +203,8 @@ def build_env(cfg: Config) -> dict:
     is that venv's (the family rule: never pip into the shared Python; a package installed there for something else
     would also end up in the exe)."""
     env = dict(os.environ)
+    # With this set (Claude Code sets it), cmd no longer finds "build_exe.bat" in the folder it runs in.
+    env.pop("NoDefaultCurrentDirectoryInExePath", None)
     scripts = cfg.root / ".venv" / ("Scripts" if sys.platform == "win32" else "bin")
     if scripts.is_dir():
         env["PATH"] = str(scripts) + os.pathsep + env.get("PATH", "")
@@ -515,7 +517,9 @@ def promote(cfg: Config, tag: str, runner: Runner = run) -> None:
 
 
 def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bool = False,
-            runner: Runner = run) -> None:
+            runner: Runner = run, promote_after: bool = True) -> None:
+    """`promote_after` False: the gated release stays a pre-release (a stepping stone another release is gated
+    from, such as an app's first framework release)."""
     preflight(cfg, runner)
     tag = cfg.tag
     say(f"Releasing {cfg.name} {cfg.version} as {tag}")
@@ -542,7 +546,10 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
         runner(["gh", "release", "upload", tag, "--repo", cfg.repo, "--clobber", *map(str, assets)], cwd=cfg.root)
     say(f"Published {tag} as a pre-release.")
     gate(cfg, tag, previous, first, runner)
-    promote(cfg, tag, runner)
+    if promote_after:
+        promote(cfg, tag, runner)
+    else:
+        say(f"{tag} passed the gate and stays a pre-release (--no-promote).")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -553,6 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("manifest")
     p = sub.add_parser("publish")
     p.add_argument("--skip-build", action="store_true")
+    p.add_argument("--no-promote", action="store_true", help="leave the gated release a pre-release")
     for name in ("publish", "gate"):
         q = p if name == "publish" else sub.add_parser("gate")
         if name == "gate":
@@ -571,7 +579,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             make_zip(cfg)
             print(write_manifest(cfg))
         elif args.command == "publish":
-            publish(cfg, args.skip_build, args.previous, args.first_framework_release)
+            publish(cfg, args.skip_build, args.previous, args.first_framework_release,
+                    promote_after=not args.no_promote)
         elif args.command == "gate":
             gate(cfg, args.tag, args.previous, args.first_framework_release)
         elif args.command == "promote":
