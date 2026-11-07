@@ -198,6 +198,18 @@ def preflight(cfg: Config, runner: Runner = run) -> None:
         raise ReleaseError(f"Release {cfg.tag} already exists and is published. Bump the version first.")
 
 
+def build_env(cfg: Config) -> dict:
+    """The build runs with the repository's own .venv first on PATH when it has one, so its build script's "python"
+    is that venv's (the family rule: never pip into the shared Python; a package installed there for something else
+    would also end up in the exe)."""
+    env = dict(os.environ)
+    scripts = cfg.root / ".venv" / ("Scripts" if sys.platform == "win32" else "bin")
+    if scripts.is_dir():
+        env["PATH"] = str(scripts) + os.pathsep + env.get("PATH", "")
+        env["VIRTUAL_ENV"] = str(scripts.parent)
+    return env
+
+
 def make_zip(cfg: Config) -> Path | None:
     """Zips the folder build (the folder itself as the zip's top level), after checking it declares windows-zip."""
     if not cfg.zip_folder:
@@ -509,7 +521,7 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
     say(f"Releasing {cfg.name} {cfg.version} as {tag}")
     if not skip_build:
         say("Building...")
-        runner(cfg.build, cwd=cfg.root, capture=False)
+        runner(cfg.build, cwd=cfg.root, capture=False, env=build_env(cfg))
     make_zip(cfg)
     write_manifest(cfg)
     assets = assets_of(cfg)
