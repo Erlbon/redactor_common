@@ -118,7 +118,10 @@ class Config:
 
 
 def load_config(root: Path) -> Config:
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:                     # Python 3.10: the backport, a dependency there (pyproject.toml)
+        import tomli as tomllib
 
     root = Path(root).resolve()
     try:

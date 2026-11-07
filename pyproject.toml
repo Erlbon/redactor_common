@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redactor_common"
-version = "2026.11.7.1"
+version = "2026.11.7.2"
 description = "Shared PyQt6 UI + core logic for the Redactor family of tools (epub/video/mp3/cbz)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,7 @@ license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 dependencies = [
     "PyQt6",
+    "tomli>=2; python_version < '3.11'",    # release.py reads [tool.redactor-release]; tomllib from 3.11
 ]
 
 [project.optional-dependencies]
