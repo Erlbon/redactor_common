@@ -241,6 +241,85 @@ def test_publish_can_leave_the_gated_release_a_pre_release(tmp_path, monkeypatch
     assert steps[-1] == "promote"
 
 
+# ---- 81A (2026-11-07): the gate runs the program, as a user does ---------------------------------------------------
+
+PROGRAM = """
+import os, sys, time
+profile = os.environ["REDACTOR_CONFIG_DIR"]
+stop = os.path.join(profile, "stop")
+if "--quit" in sys.argv:
+    open(stop, "w").close()
+    sys.exit(0)
+mode = open(os.path.join(profile, "mode")).read() if os.path.exists(os.path.join(profile, "mode")) else "fine"
+if mode == "dies":
+    sys.exit(3)
+if mode == "crashes":
+    open(os.path.join(profile, "crash.log"), "w").write("Traceback: ConnectionResetError")
+while not os.path.exists(stop):
+    time.sleep(0.05)
+os.remove(stop)
+"""
+
+
+def running_gate(tmp_path, monkeypatch, mode="fine"):
+    monkeypatch.setattr(release, "RUN_SETTLE", 0.5)
+    cfg = repo(tmp_path, PYPROJECT + '\n[tool.redactor-release.gate]\nrun = ["PROGRAM", "--minimized"]\n'
+                                      'quit = ["PROGRAM", "--quit"]\ncrash_log = "crash.log"\nlive = 1\n')
+    program = tmp_path / "program.py"
+    program.write_text(PROGRAM, encoding="utf-8")
+    cfg.gate_run = [str(program), "--minimized"]
+    cfg.gate_quit = [str(program), "--quit"]
+    gate = release.Gate(cfg, cfg.tag, tmp_path / "scratch")
+    (gate.profile / "mode").write_text(mode, encoding="utf-8")
+    return gate, release.Path(release.sys.executable)
+
+
+def test_the_gate_config_needs_both_run_and_quit(tmp_path):
+    with pytest.raises(release.ReleaseError, match="both run and quit"):
+        repo(tmp_path, PYPROJECT + '\n[tool.redactor-release.gate]\nrun = ["--minimized"]\n')
+
+
+def test_the_new_program_must_run_and_stop_when_asked(tmp_path, monkeypatch):
+    gate, exe = running_gate(tmp_path, monkeypatch)
+    gate.expect_it_runs(exe)
+
+
+def test_a_program_that_crashes_on_its_first_start_fails_the_gate(tmp_path, monkeypatch):
+    gate, exe = running_gate(tmp_path, monkeypatch, "crashes")
+    with pytest.raises(release.ReleaseError, match=r"crash log(.|\n)*ConnectionResetError"):
+        gate.expect_it_runs(exe)
+
+
+def test_a_program_that_stops_by_itself_fails_the_gate(tmp_path, monkeypatch):
+    gate, exe = running_gate(tmp_path, monkeypatch, "dies")
+    with pytest.raises(release.ReleaseError, match="stopped right after starting"):
+        gate.start_running(exe)
+
+
+def test_an_update_that_closes_the_running_program_by_force_fails_the_gate(tmp_path, monkeypatch):
+    gate, exe = running_gate(tmp_path, monkeypatch)
+    running = gate.start_running(exe)
+    running.kill()                                      # what Windows' Restart Manager does
+    with pytest.raises(release.ReleaseError, match="by force"):
+        gate.expect_stopped_by_itself(running, "")
+
+
+def test_the_installer_log_shows_a_forced_close(tmp_path, monkeypatch):
+    gate, exe = running_gate(tmp_path, monkeypatch)
+    running = gate.start_running(exe)
+    gate.runner([str(exe), *gate.cfg.gate_quit], env=gate.env)
+    log = tmp_path / "setup.log"
+    log.write_text("2026-11-07 12:00:01.000   RestartManager found an application using one of our files: aria2c.exe\n",
+                   encoding="utf-8")
+    with pytest.raises(release.ReleaseError, match="aria2c.exe"):
+        gate.expect_stopped_by_itself(running, str(log))
+    clean = tmp_path / "clean.log"
+    clean.write_text("Update contract: waited 250 ms for the programs in C:\\x to stop\n", encoding="utf-8")
+    running = gate.start_running(exe)
+    gate.runner([str(exe), *gate.cfg.gate_quit], env=gate.env)
+    gate.expect_stopped_by_itself(running, str(clean))
+
+
 def test_contract_path_cli(capsys):
     assert release.main(["contract-path"]) == 0
     assert capsys.readouterr().out.strip().endswith("update-contract.iss")

@@ -97,7 +97,9 @@ def test_update_starts_the_installer_without_relaunch_and_reports_it(tmp_path, m
     setup = tmp_path / "temp" / "redactor-updates" / "App-2026-11-07-02-setup.exe"
     assert code == 0 and data["action"] == "started" and data["pid"] == 4321
     assert setup.read_bytes() == NEW
-    assert started == [[str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]]
+    log = str(setup) + ".log"                               # the release gate reads it for forced closes
+    assert started == [[str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/LOG={log}"]]
+    assert data["log"] == log
 
 
 def test_update_swaps_an_exe_copy(tmp_path):

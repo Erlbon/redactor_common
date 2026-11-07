@@ -94,8 +94,11 @@ def handle(argv: list[str], app_name: str, app_version: str, repo_url: str, *, e
     try:
         if channel == WINDOWS_INSTALLER:
             setup = selfupdate.download(release, selfupdate.installer_download_path(release), opener=opener)
-            process = (launch or _start_detached)(selfupdate.installer_command(setup, visible=False, relaunch=False))
-            return say(dict(data, action="started", pid=int(getattr(process, "pid", 0) or 0), installer=str(setup)), 0)
+            log = setup.with_name(setup.name + ".log")          # the release gate reads it (forced closes)
+            command = selfupdate.installer_command(setup, visible=False, relaunch=False) + [f"/LOG={log}"]
+            process = (launch or _start_detached)(command)
+            return say(dict(data, action="started", pid=int(getattr(process, "pid", 0) or 0), installer=str(setup),
+                            log=str(log)), 0)
         if channel == WINDOWS_EXE:
             new_file = exe.with_name(exe.name + selfupdate.NEW_SUFFIX)
             selfupdate.download(release, new_file, opener=opener)

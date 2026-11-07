@@ -128,6 +128,10 @@ Publishing a release goes like this:
    `--check-update --release-tag <new>`; it must say `install` with the right file. Then run its
    `--update --release-tag <new>` for real and check that the new version is what now runs. Then uninstall
    the scratch copy and remove the scratch folder.
+   With `[tool.redactor-release.gate]` (`run`, `quit`, `crash_log`, `live`; added 2026-11-07, 81A) the gate
+   also runs the program as a user does: the old copy is running while it updates itself and must stop by
+   itself (exit 0; the installer log must show no program closed by force), and afterwards the new program
+   must start, keep running for `live` seconds with no crash log, and stop when asked.
 5. Only then mark the release "Latest".
 
 If the gate fails, the release stays a pre-release and nothing reaches anyone. The first release of each app on

@@ -66,6 +66,7 @@ from redactor_common.core.update_manifest import MANIFEST_NAME, WINDOWS_EXE, WIN
 DEFAULT_GATE_DIR = r"C:\Temp\Claude\release-gate"
 INSTALL_WAIT = 600          # seconds an install or update may take
 UNINSTALL_WAIT = 120
+RUN_SETTLE = 8.0            # seconds a program started by the gate gets before it must still be running
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}_is1"
 
 
@@ -98,6 +99,10 @@ class Config:
     extra_assets: list[str] = field(default_factory=list)
     title: str = "{name} {version}"
     notes: str = ""
+    gate_run: list[str] = field(default_factory=list)       # [gate] run: how the program is started to run (empty:
+    gate_quit: list[str] = field(default_factory=list)      # the gate never runs it); quit: how it is asked to stop
+    gate_crash_log: str = ""                                # crash log, relative to the scratch profile
+    gate_live: float = 20.0                                 # seconds the new program must keep running
 
     @property
     def version(self) -> str:
@@ -163,10 +168,15 @@ def load_config(root: Path) -> Config:
     if WINDOWS_INSTALLER in packages and not raw.get("installer_app_id"):
         raise ReleaseError("a windows-installer package needs installer_app_id (the Inno Setup AppId)")
     zip_cfg = raw.get("zip") or {}
+    gate_cfg = raw.get("gate") or {}
+    if bool(gate_cfg.get("run")) != bool(gate_cfg.get("quit")):
+        raise ReleaseError("[tool.redactor-release.gate] needs both run and quit (how the program starts and stops)")
     return Config(root, raw["app"], raw["name"], raw["repo"], root / raw["version_file"], list(raw["build"]),
                   raw["exe"], packages, raw.get("installer_app_id", ""), zip_cfg.get("folder", ""),
                   zip_cfg.get("file", ""), [list(c) for c in raw.get("after_gate", [])],
-                  list(raw.get("extra_assets", [])), raw.get("title") or "{name} {version}", raw.get("notes", ""))
+                  list(raw.get("extra_assets", [])), raw.get("title") or "{name} {version}", raw.get("notes", ""),
+                  list(gate_cfg.get("run", [])), list(gate_cfg.get("quit", [])), gate_cfg.get("crash_log", ""),
+                  float(gate_cfg.get("live", 20.0)))
 
 
 # --- running things ---------------------------------------------------------------------------------------------------
@@ -461,15 +471,84 @@ class Gate:
             target = self.install(previous_setup)
             self.expect_version(exe_of(target), previous_version)
             self.expect_channel(target, WINDOWS_INSTALLER)
+            running = self.start_running(exe_of(target))        # 81A: the update happens over a running copy
             done = self.expect_update(exe_of(target), new, WINDOWS_INSTALLER)
             code = wait_for_pid(int(done.get("pid") or 0), INSTALL_WAIT)
             if code is None:
                 raise ReleaseError(f"The installer started by --update was still running after {INSTALL_WAIT} s.")
             if code != 0:
                 raise ReleaseError(f"The installer started by --update failed (exit {code}).")
+            self.expect_stopped_by_itself(running, done.get("log", ""))
             self.expect_version(exe_of(target), new.version)
             self.expect_channel(target, WINDOWS_INSTALLER)
+        self.expect_it_runs(exe_of(target))                     # 81A: the new program starts and keeps running
         self.uninstall(target)
+
+    # running the program (81A, 2026-11-07: an update over a running Accipio closed it and aria2 by force, and the
+    # first start after it crashed; the gate had never run the program)
+
+    def start_running(self, exe: Path) -> subprocess.Popen | None:
+        """The program started the way a user runs it ([gate] run), in the scratch profile; None when not set."""
+        if not self.cfg.gate_run:
+            return None
+        process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
+        time.sleep(RUN_SETTLE)
+        if process.poll() is not None:
+            raise ReleaseError(f"{exe.name} {' '.join(self.cfg.gate_run)} stopped right after starting "
+                               f"(exit {process.returncode}).")
+        say(f"  running: {exe.name} {' '.join(self.cfg.gate_run)}")
+        return process
+
+    def expect_stopped_by_itself(self, running: subprocess.Popen | None, log: str) -> None:
+        """The update stopped the running program the way it asked (exit 0), not Windows by force."""
+        if running is None:
+            return
+        try:
+            code = running.wait(30)
+        except subprocess.TimeoutExpired:
+            running.kill()
+            raise ReleaseError("The program was still running after the update.") from None
+        if code != 0:
+            raise ReleaseError(f"The update closed the running program by force (exit {code}), not by asking it.")
+        say("  the running copy stopped by itself for the update")
+        if not log:
+            say("  (that release's --update keeps no installer log: from redactor_common 2026-11-07-09 it does)")
+            return
+        try:
+            text = Path(log).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            raise ReleaseError(f"The installer log {log} is missing.") from None
+        for sign in ("RestartManager found an application", "still running after"):
+            if sign in text:
+                line = next(l for l in text.splitlines() if sign in l)
+                raise ReleaseError(f"The installer had to close a program by force: {line.strip()}")
+        say("  installer log: no program had to be closed by force")
+
+    def expect_it_runs(self, exe: Path) -> None:
+        """The program starts, is still running after [gate] live seconds with no crash log, and stops when asked."""
+        if not self.cfg.gate_run:
+            return
+        crash = self.profile / self.cfg.gate_crash_log if self.cfg.gate_crash_log else None
+        if crash is not None and crash.exists():
+            crash.unlink()
+        process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
+        time.sleep(self.cfg.gate_live)
+        alive = process.poll() is None
+        crashed = crash is not None and crash.exists()
+        stopped = self.runner([str(exe), *self.cfg.gate_quit], cwd=exe.parent, env=self.env, check=False)
+        try:
+            code = process.wait(30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise ReleaseError(f"{exe.name} did not stop when asked ({' '.join(self.cfg.gate_quit)}).") from None
+        if not alive:
+            raise ReleaseError(f"{exe.name} stopped by itself within {self.cfg.gate_live:.0f} s (exit {code}).")
+        if crashed:
+            raise ReleaseError(f"{exe.name} wrote a crash log on its first start:\n"
+                               + crash.read_text(encoding="utf-8", errors="replace")[-3000:])
+        if stopped.returncode != 0 or code != 0:
+            raise ReleaseError(f"{exe.name} did not stop cleanly (quit exit {stopped.returncode}, program exit {code}).")
+        say(f"  {exe.name} ran {self.cfg.gate_live:.0f} s with no crash and stopped when asked")
 
     def run_exe(self, new: update_manifest.Manifest, previous_exe: Path | None, previous_version: str,
                 new_exe: Path) -> None:
