@@ -382,7 +382,12 @@ class Gate:
         say(f"  {exe.name} --version: {got}")
 
     def expect_channel(self, folder: Path, channel: str) -> None:
+        """The channel the copy in `folder` declares: its update-channel file, or, for a one-file exe that carries its
+        channel inside (a bundled file the gate cannot see), what the program itself says (--check-update)."""
         got = update_manifest.read_channel(folder / self.cfg.exe, frozen=True)
+        if not got:
+            answer = self.ask(folder / self.cfg.exe, "--check-update", "--release-tag", self.tag)
+            got = answer.get("channel", "") if isinstance(answer, dict) else ""
         if got != channel:
             raise ReleaseError(f"{folder} declares channel {got or 'nothing'!r}, expected {channel!r}.")
         say(f"  channel: {got}")

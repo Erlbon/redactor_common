@@ -189,6 +189,25 @@ def test_the_gate_wants_a_previous_release_or_says_how_to_go_on(tmp_path, monkey
     assert (tmp_path / "gate" / f"app-{cfg.tag}").is_dir()          # kept for a look after a failure
 
 
+def test_the_gate_asks_a_one_file_exe_for_the_channel_it_carries_inside(tmp_path, monkeypatch):
+    """2026-11-07, Dossier 0.8: the one-file dossier.exe bundles "windows-exe" (no file beside it), and the gate read
+    only the folder, so it said the copy declared nothing."""
+    cfg = repo(tmp_path)
+    folder = tmp_path / "program"
+    folder.mkdir()
+    gate = release.Gate(cfg, cfg.tag, tmp_path / "scratch", FakeRunner())
+    asked = []
+    monkeypatch.setattr(gate, "ask", lambda exe, *args: asked.append(args) or {"channel": "windows-exe"})
+    gate.expect_channel(folder, "windows-exe")
+    assert asked == [("--check-update", "--release-tag", cfg.tag)]
+    with pytest.raises(release.ReleaseError, match="declares channel 'windows-exe', expected 'windows-installer'"):
+        gate.expect_channel(folder, "windows-installer")
+    update_manifest.write_channel(folder, "windows-installer")             # a file beside the exe wins, nothing asked
+    asked.clear()
+    gate.expect_channel(folder, "windows-installer")
+    assert asked == []
+
+
 def test_the_build_uses_the_repositorys_own_venv(tmp_path):
     cfg = repo(tmp_path)
     assert release.build_env(cfg)["PATH"] == release.os.environ.get("PATH", "")
