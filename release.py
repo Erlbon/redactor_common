@@ -18,7 +18,10 @@ Run from the app's repository (or pass --repo PATH). The app describes itself in
     exe = "Accipio.exe"                               # the program inside an install or the exe package itself
     installer_app_id = "{6C0E5D8A-...}"               # windows-installer only: its Inno Setup AppId
     after_gate = [["python", "-m", "accipio", "--register"]]     # optional: put back what an install changed
-    [tool.redactor-release.zip]                       # optional: zip a folder build ("{build}" = 2026-11-07-02)
+    title = "Dossier {release} (build {version})"     # optional: the release's title (default "{name} {version}");
+                                                      # {release} is RELEASE = "0.8" in version_file
+    notes = "docs/releases/v{release}.md"             # optional: the notes file (default: this version's CHANGELOG section)
+    [tool.redactor-release.zip]                     # optional: zip a folder build ("{build}" = 2026-11-07-02)
     folder = "dist/Accipio"
     file = "dist/Accipio-{build}-windows-x64.zip"
     [tool.redactor-release.packages]                  # channel -> built file; becomes update-manifest.json
@@ -93,6 +96,8 @@ class Config:
     zip_file: str = ""
     after_gate: list[list[str]] = field(default_factory=list)
     extra_assets: list[str] = field(default_factory=list)
+    title: str = "{name} {version}"
+    notes: str = ""
 
     @property
     def version(self) -> str:
@@ -101,6 +106,21 @@ class Config:
         if not m:
             raise ReleaseError(f"No APP_VERSION = \"YYYY-MM-DD#NN\" in {self.version_file}")
         return m.group(1)
+
+    @property
+    def release(self) -> str:
+        """RELEASE = "0.8" in version_file, for an app that names its releases by a number ("" when it has none)."""
+        m = re.search(r'(?m)^RELEASE\s*=\s*"([^"]+)"', self.version_file.read_text(encoding="utf-8"))
+        return m.group(1) if m else ""
+
+    def fill(self, pattern: str) -> str:
+        if "{release}" in pattern and not self.release:
+            raise ReleaseError(f"{pattern!r} uses {{release}}, but {self.version_file} has no RELEASE = \"...\"")
+        return pattern.format(name=self.name, version=self.version, build=self.build_name, release=self.release)
+
+    @property
+    def release_title(self) -> str:
+        return self.fill(self.title)
 
     @property
     def build_name(self) -> str:
@@ -146,7 +166,7 @@ def load_config(root: Path) -> Config:
     return Config(root, raw["app"], raw["name"], raw["repo"], root / raw["version_file"], list(raw["build"]),
                   raw["exe"], packages, raw.get("installer_app_id", ""), zip_cfg.get("folder", ""),
                   zip_cfg.get("file", ""), [list(c) for c in raw.get("after_gate", [])],
-                  list(raw.get("extra_assets", [])))
+                  list(raw.get("extra_assets", [])), raw.get("title") or "{name} {version}", raw.get("notes", ""))
 
 
 # --- running things ---------------------------------------------------------------------------------------------------
@@ -246,7 +266,14 @@ def write_manifest(cfg: Config) -> Path:
 
 
 def release_notes(cfg: Config) -> str:
-    """This version's section of CHANGELOG.md (its "## <version>" heading up to the next "## ")."""
+    """The `notes` file when the app names one (it must exist), else this version's section of CHANGELOG.md (its
+    "## <version>" heading up to the next "## ")."""
+    if cfg.notes:
+        path = cfg.root / cfg.fill(cfg.notes)
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raise ReleaseError(f"There are no release notes: write {path} first.") from None
     try:
         lines = (cfg.root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -531,7 +558,8 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
     from, such as an app's first framework release)."""
     preflight(cfg, runner)
     tag = cfg.tag
-    say(f"Releasing {cfg.name} {cfg.version} as {tag}")
+    notes_text = release_notes(cfg)                 # a missing notes file stops here, before anything is built or tagged
+    say(f"Releasing {cfg.release_title} as {tag}")
     if not skip_build:
         say("Building...")
         runner(build_command(cfg), cwd=cfg.root, capture=False, env=build_env(cfg))
@@ -546,10 +574,10 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
     if runner(["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"], cwd=cfg.root).stdout.strip() == "":
         runner(["git", "push", "origin", f"refs/tags/{tag}"], cwd=cfg.root)
     notes = cfg.root / "dist" / "release-notes.md"
-    notes.write_text(release_notes(cfg) or f"{cfg.name} {cfg.version}", encoding="utf-8")
+    notes.write_text(notes_text or f"{cfg.name} {cfg.version}", encoding="utf-8")
     if release_exists(cfg, tag, runner) is None:
         runner(["gh", "release", "create", tag, "--repo", cfg.repo, "--prerelease", "--title",
-                f"{cfg.name} {cfg.version}", "--notes-file", str(notes), "--verify-tag", *map(str, assets)],
+                cfg.release_title, "--notes-file", str(notes), "--verify-tag", *map(str, assets)],
                cwd=cfg.root)
     else:
         runner(["gh", "release", "upload", tag, "--repo", cfg.repo, "--clobber", *map(str, assets)], cwd=cfg.root)

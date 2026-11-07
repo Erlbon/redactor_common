@@ -91,7 +91,24 @@ def test_the_manifest_lists_the_configured_packages(tmp_path):
 
 
 def test_the_notes_are_this_versions_changelog_section(tmp_path):
-    assert release.release_notes(repo(tmp_path)) == "- one\n- two"
+    cfg = repo(tmp_path)
+    assert release.release_notes(cfg) == "- one\n- two"
+    assert cfg.release_title == "The App 2026-11-07#02"
+
+
+def test_an_app_can_name_its_title_and_notes_file_by_its_release_number(tmp_path):
+    """Dossier: "Dossier 0.8 (build 2026-11-07#02)", notes in docs/releases/v0.8.md."""
+    cfg = repo(tmp_path, PYPROJECT.replace('exe = "App.exe"', 'exe = "App.exe"\ntitle = "{name} {release} (build {version})"\n'
+                                                              'notes = "docs/releases/v{release}.md"'))
+    with pytest.raises(release.ReleaseError, match="no RELEASE"):
+        cfg.release_title
+    (tmp_path / "app" / "version.py").write_text('RELEASE = "0.8"\nAPP_VERSION = "2026-11-07#02"\n', encoding="utf-8")
+    assert cfg.release_title == "The App 0.8 (build 2026-11-07#02)"
+    with pytest.raises(release.ReleaseError, match="write .*v0.8.md first"):
+        release.release_notes(cfg)
+    (tmp_path / "docs" / "releases").mkdir(parents=True)
+    (tmp_path / "docs" / "releases" / "v0.8.md").write_text("Notes for 0.8\n", encoding="utf-8")
+    assert release.release_notes(cfg) == "Notes for 0.8"
 
 
 class FakeRunner:
