@@ -432,8 +432,7 @@ class Gate:
             return
         gate_root = Path(os.environ.get("REDACTOR_GATE_DIR") or DEFAULT_GATE_DIR)
         if gate_root in Path(location).parents:
-            say(f"  removing a scratch install a failed gate left in {location}")
-            self.uninstall(Path(location))
+            remove_leftover_install(self.cfg, Path(location), lambda target: self.uninstall(target))
             return
         raise ReleaseError(f"{self.cfg.name} is installed on this PC ({location}). The gate's scratch install would take "
                            "over its uninstall entry and shortcuts: uninstall it first, or run the gate on another PC.")
@@ -597,9 +596,42 @@ def previous_release(cfg: Config, tag: str, runner: Runner = run) -> str:
     return latest
 
 
+def remove_leftover_install(cfg: Config, location: Path, uninstall: Callable[[Path], None]) -> None:
+    """A scratch install a failed gate left: uninstalled with its own uninstaller; when its folder is already gone
+    (an older gate wiped the scratch first), its uninstall entry and Start menu shortcuts are removed by hand."""
+    say(f"  removing a scratch install a failed gate left in {location}")
+    if (location / "unins000.exe").is_file():
+        uninstall(location)
+        return
+    import winreg
+    key = UNINSTALL_KEY.format(app_id=cfg.installer_app_id)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as entry:
+            group = winreg.QueryValueEx(entry, "Inno Setup: Icon Group")[0]
+    except OSError:
+        group = ""
+    programs = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    shortcut = programs / f"{group}.lnk"
+    if group and shortcut.is_file():
+        held = shortcut.read_bytes()
+        if any(str(location).encode(code) in held for code in ("utf-16-le", "mbcs")):    # only one into the scratch
+            shortcut.unlink()
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+    except OSError:
+        pass
+    if installed_location(cfg.installer_app_id) is not None:
+        raise ReleaseError(f"The uninstall entry of the scratch install in {location} could not be removed.")
+
+
 def gate(cfg: Config, tag: str, previous: str = "", first: bool = False, runner: Runner = run) -> None:
     scratch_root = Path(os.environ.get("REDACTOR_GATE_DIR") or DEFAULT_GATE_DIR)
     scratch = scratch_root / f"{cfg.app}-{tag}"
+    leftover = installed_location(cfg.installer_app_id) if cfg.installer_app_id else None
+    if leftover is not None and scratch_root in Path(leftover).parents:     # before its folder is wiped below
+        remove_leftover_install(cfg, Path(leftover),
+                                lambda target: Gate(cfg, tag, scratch_root / "leftover", runner).uninstall(target))
+        shutil.rmtree(scratch_root / "leftover", ignore_errors=True)
     if scratch.exists():
         shutil.rmtree(scratch)
     scratch.mkdir(parents=True)

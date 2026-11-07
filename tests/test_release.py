@@ -3,6 +3,8 @@ release and the refusals). The gate itself runs against real releases; see docs/
 
 import json
 import subprocess
+import sys
+import types
 import zipfile
 
 import pytest
@@ -298,6 +300,35 @@ def test_only_what_follows_the_start_markers_is_a_crash():
     assert release.crash_entries(started) == ""
     assert release.crash_entries(started + "Windows fatal exception: access violation") == \
         "Windows fatal exception: access violation"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Inno Setup's uninstall entry is in Windows' registry")
+def test_a_dead_scratch_install_is_forgotten(tmp_path, monkeypatch):
+    """2026-11-07: a failed gate's scratch folder was wiped before its install was uninstalled, so the next gate
+    found an uninstall entry (and a Start menu shortcut) pointing at nothing."""
+    import uuid
+    import winreg
+    app_id = "{" + str(uuid.uuid4()).upper() + "}"
+    location = tmp_path / "gate" / "x-v1" / "windows-installer" / "program"        # never created: wiped
+    key = release.UNINSTALL_KEY.format(app_id=app_id)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as entry:
+        winreg.SetValueEx(entry, "InstallLocation", 0, winreg.REG_SZ, str(location) + "\\")
+        winreg.SetValueEx(entry, "Inno Setup: Icon Group", 0, winreg.REG_SZ, "Thing")
+    programs = tmp_path / "appdata" / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    programs.mkdir(parents=True)
+    (programs / "Thing.lnk").write_bytes(b"lnk" + str(location / "Thing.exe").encode("utf-16-le"))
+    (programs / "Other.lnk").write_bytes(b"lnk elsewhere")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    cfg = types.SimpleNamespace(installer_app_id=app_id)
+    try:
+        release.remove_leftover_install(cfg, location, lambda target: pytest.fail("there is no uninstaller"))
+        assert release.installed_location(app_id) is None
+        assert not (programs / "Thing.lnk").exists() and (programs / "Other.lnk").exists()
+    finally:
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+        except OSError:
+            pass
 
 
 def test_a_program_that_stops_by_itself_fails_the_gate(tmp_path, monkeypatch):
