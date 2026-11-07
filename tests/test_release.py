@@ -364,3 +364,48 @@ def test_the_installer_log_shows_a_forced_close(tmp_path, monkeypatch):
 def test_contract_path_cli(capsys):
     assert release.main(["contract-path"]) == 0
     assert capsys.readouterr().out.strip().endswith("update-contract.iss")
+
+
+def test_detach_passes_on_everything_but_itself(tmp_path, monkeypatch):
+    got = {}
+    monkeypatch.setattr(release, "detach", lambda argv, log: got.update(argv=argv, log=log) or 0)
+    log = tmp_path / "r.log"
+    assert release.main(["--repo", "C:\\Dev\\x", "--detach", "--log", str(log), "publish", "--skip-build"]) == 0
+    assert got == {"argv": ["--repo", "C:\\Dev\\x", "publish", "--skip-build"], "log": log}
+
+
+def test_detach_starts_a_process_of_its_own(tmp_path):
+    started = {}
+
+    def popen(command, **kw):
+        started.update(command=command, **kw)
+        return types.SimpleNamespace(pid=4242)
+    log = tmp_path / "logs" / "r.log"
+    assert release.detach(["publish"], log, popen) == 0
+    assert started["command"][1:] == ["-m", "redactor_common.release", "publish"] and log.is_file()
+    assert started["env"][release.DETACHED_ENV] == "1" and started["stdin"] == subprocess.DEVNULL
+    if sys.platform == "win32":
+        assert started["creationflags"] & subprocess.DETACHED_PROCESS
+
+
+def test_a_detached_run_logs_its_end_line(tmp_path):
+    """A real detached child: its log ends with the line a watcher waits for, after this test's process let go."""
+    import time
+    log = tmp_path / "r.log"
+    assert release.main(["--detach", "--log", str(log), "contract-path"]) == 0
+    deadline = time.monotonic() + 60
+    while release.FINISHED.format(code=0) not in (log.read_text(encoding="utf-8") if log.is_file() else ""):
+        assert time.monotonic() < deadline, log.read_text(encoding="utf-8")
+        time.sleep(0.2)
+    assert "update-contract.iss" in log.read_text(encoding="utf-8")
+
+
+def test_a_detached_run_that_crashes_still_writes_its_end_line(monkeypatch, capsys):
+    monkeypatch.setenv(release.DETACHED_ENV, "1")
+
+    def boom(argv):
+        raise RuntimeError("the build exploded")
+    monkeypatch.setattr(release, "run_command", boom)
+    assert release.main(["publish"]) == 1
+    captured = capsys.readouterr()
+    assert "the build exploded" in captured.err and release.FINISHED.format(code=1) in captured.out

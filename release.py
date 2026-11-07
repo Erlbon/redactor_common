@@ -6,6 +6,7 @@ redactor_common/release.py: the family's release tool and its release gate (docs
     python -m redactor_common.release promote --tag vX
     python -m redactor_common.release manifest            (build the manifest from dist\\ only)
     python -m redactor_common.release contract-path       (where installer/update-contract.iss is, for the build)
+    python -m redactor_common.release --detach [--log FILE] publish ...   (on its own: outlives the terminal)
 
 Run from the app's repository (or pass --repo PATH). The app describes itself in its pyproject.toml:
 
@@ -55,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -716,9 +718,57 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
         say(f"{tag} passed the gate and stays a pre-release (--no-promote).")
 
 
+DETACHED_ENV = "REDACTOR_RELEASE_DETACHED"
+FINISHED = "release finished: exit {code}"      # the last line of a detached run's log
+
+
+def detach(argv: Sequence[str], log: Path, popen: Callable = subprocess.Popen) -> int:
+    """Run this command again as a process of its own and return at once. A release started from a session that
+    ends (a terminal closed, an agent's shell torn down) died with it halfway through the build on 2026-11-07; the
+    detached run is not its child, and its log ends with FINISHED so a watcher knows when and how it ended."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    flags = 0
+    if sys.platform == "win32":
+        flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                 | subprocess.CREATE_NO_WINDOW)
+    env = {**os.environ, DETACHED_ENV: "1", "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    command = [sys.executable, "-m", "redactor_common.release", *argv]
+    with open(log, "w", encoding="utf-8") as out:
+        try:
+            child = popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env,
+                          creationflags=flags | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))
+        except OSError:         # a job that forbids breaking away: still a process of its own, just inside the job
+            child = popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env,
+                          creationflags=flags)
+    print(f"Release running on its own (pid {child.pid}); its log: {log}")
+    print(f"It ends with the line \"{FINISHED.format(code='N')}\" (0 = done).")
+    return 0
+
+
+def default_log(repo: str) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return Path(DEFAULT_GATE_DIR).parent / "release-logs" / f"{Path(repo).resolve().name}-{stamp}.log"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not os.environ.get(DETACHED_ENV):
+        return run_command(argv)
+    try:
+        code = run_command(argv)
+    except Exception:           # nobody watches a detached run's stderr: the traceback goes to its log, then the end line
+        traceback.print_exc()
+        code = 1
+    say(FINISHED.format(code=code))
+    return code
+
+
+def run_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m redactor_common.release")
     parser.add_argument("--repo", default=".", help="the app's repository (default: here)")
+    parser.add_argument("--detach", action="store_true",
+                        help="run as a process of its own that outlives this terminal; prints where its log is")
+    parser.add_argument("--log", default="", help="with --detach: the log file (default: under C:\\Temp\\Claude)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("contract-path")
     sub.add_parser("manifest")
@@ -734,6 +784,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         group.add_argument("--first-framework-release", action="store_true")
     sub.add_parser("promote").add_argument("--tag", required=True)
     args = parser.parse_args(argv)
+    if args.detach:
+        rest = [a for i, a in enumerate(argv)
+                if a != "--detach" and not a.startswith("--log=") and a != "--log"
+                and not (i > 0 and argv[i - 1] == "--log")]
+        return detach(rest, Path(args.log) if args.log else default_log(args.repo))
     if args.command == "contract-path":
         print(contract_path())
         return 0
