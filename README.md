@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-07#09`.
+Currently: `2026-11-07#10`.
 
 ## Self-update: the update framework (`docs/update-framework.md`)
 
