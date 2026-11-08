@@ -315,7 +315,7 @@ def verify_release(cfg: Config, tag: str, scratch: Path, runner: Runner = run) -
     """Every package the release's manifest names is an asset with the manifest's size and digest, on GitHub and when
     downloaded back. Returns the manifest."""
     data = gh_json(cfg, f"releases/tags/{tag}", runner)
-    assets = selfupdate._assets(data)
+    assets = selfupdate._assets(data, cfg.repo)
     entry = assets.get(MANIFEST_NAME)
     if entry is None or not entry["sha256"]:
         raise ReleaseError(f"Release {tag} has no {MANIFEST_NAME} with a digest.")

@@ -139,6 +139,7 @@ class Release:
     asset_url: str = ""
     asset_size: int = 0
     sha256: str = ""            # lower-case hex, "" when GitHub lists no digest
+    asset_api_url: str = ""     # the same file by GitHub's API, when its github.com address fails
 
     @property
     def display(self) -> str:
@@ -192,16 +193,40 @@ def release_info(data: object) -> Release:
     return Release(tag, version, lookup_client.as_text(data.get("body")), page)
 
 
-def _assets(data: dict) -> dict[str, dict]:
-    """The release's files by name, each with its https://github.com/ URL, size and sha256 ("" when none)."""
+def _assets(data: dict, repo: str) -> dict[str, dict]:
+    """The release's files by name, each with its https://github.com/ URL, its API URL, size and sha256 ("" when
+    none)."""
     found = {}
+    api_prefix = f"https://api.github.com/repos/{repo}/releases/assets/"
     for asset in lookup_client.dict_items(data.get("assets")):
         url = lookup_client.as_text(asset.get("browser_download_url"))
+        api_url = lookup_client.as_text(asset.get("url"))
         m = _SHA256.fullmatch(lookup_client.as_text(asset.get("digest")))
         found[lookup_client.as_text(asset.get("name"))] = {
             "url": url if url.startswith("https://github.com/") else "",
+            "api_url": api_url if api_url.startswith(api_prefix) and api_url[len(api_prefix):].isdigit() else "",
             "size": lookup_client.as_int(asset.get("size")), "sha256": m.group(1).lower() if m else ""}
     return found
+
+
+def api_request(api_url: str) -> urllib.request.Request:
+    """The API's way to a release file: it answers with the file itself (by a redirect) for this Accept header."""
+    return urllib.request.Request(api_url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
+
+
+def _fetch_asset(entry: dict, fetch: lookup_client.FetchFn, what: str) -> bytes:
+    """A release file by its github.com address, else by the API (2026-11-08: github.com's release downloads
+    answered 504 for an hour while the API served the same files). When both fail, the first failure is told."""
+    try:
+        return lookup_client.fetch_bytes(entry["url"], fetch, error_cls=UpdateError, what=what)
+    except UpdateError:
+        if not entry.get("api_url"):
+            raise
+        first = sys.exc_info()[1]
+    try:
+        return lookup_client.fetch_bytes(api_request(entry["api_url"]), fetch, error_cls=UpdateError, what=what)
+    except UpdateError:
+        raise first from None
 
 
 def fetch_release(repo: str, fetch: lookup_client.FetchFn | None = None, tag: str = "") -> dict:
@@ -248,7 +273,7 @@ def decide(repo: str, slug: str, current_version: str, channel: str, fetch: look
         return Decision(NONE, f"You have the newest version ({current_version}).", channel, current_version, release)
     if channel not in update_manifest.SELF_UPDATING:
         return page(_CANNOT.get(channel, _CANNOT[""]))
-    assets = _assets(data)
+    assets = _assets(data, repo)
     entry = assets.get(MANIFEST_NAME)
     if entry is None:
         return page(f"Release {release.display} has no {MANIFEST_NAME}: it was made before this program's update "
@@ -256,7 +281,7 @@ def decide(repo: str, slug: str, current_version: str, channel: str, fetch: look
     if not (entry["url"] and entry["size"] > 0 and entry["sha256"]):
         return page(f"GitHub lists no checksum for release {release.display}'s {MANIFEST_NAME}, so it cannot be "
                     "trusted. Use the release page.")
-    raw = lookup_client.fetch_bytes(entry["url"], fetch, error_cls=UpdateError, what=f"the release's {MANIFEST_NAME}")
+    raw = _fetch_asset(entry, fetch, f"the release's {MANIFEST_NAME}")
     if len(raw) != entry["size"] or hashlib.sha256(raw).hexdigest() != entry["sha256"]:
         return page(f"Release {release.display}'s {MANIFEST_NAME} does not match the checksum GitHub lists for it; "
                     "it was not used. Use the release page.")
@@ -289,7 +314,7 @@ def decide(repo: str, slug: str, current_version: str, channel: str, fetch: look
         if not can:
             return page(why)
     release = Release(release.tag, release.version, release.notes, release.page_url, package.file, held["url"],
-                      package.size, package.sha256)
+                      package.size, package.sha256, held["api_url"])
     return Decision(INSTALL, "", channel, current_version, release)
 
 
@@ -338,9 +363,30 @@ def download(release: Release, dest: Path, progress: Callable[[int, int], None] 
     if release.asset_size > MAX_ASSET_BYTES:
         raise UpdateError("The download is larger than any version of this program could be.")
     dest = Path(dest)
-    part = dest.with_name(dest.name + ".part")
     opener = opener or urllib.request.build_opener(lookup_client.SafeRedirects())
-    request = urllib.request.Request(release.asset_url, headers={"User-Agent": USER_AGENT})
+    first = urllib.request.Request(release.asset_url, headers={"User-Agent": USER_AGENT})
+    try:
+        return _download_from(first, release, dest, progress, cancel, opener)
+    except _Unreachable as failed:
+        if not release.asset_api_url:
+            raise failed.error from None
+        try:                    # github.com's download failed, not the file: the API's way (2026-11-08)
+            return _download_from(api_request(release.asset_api_url), release, dest, progress, cancel, opener)
+        except _Unreachable:
+            raise failed.error from None
+
+
+class _Unreachable(Exception):
+    """A download that could not be fetched (as opposed to a file that came and was wrong): `error` says how."""
+
+    def __init__(self, error: UpdateError):
+        super().__init__(str(error))
+        self.error = error
+
+
+def _download_from(request: urllib.request.Request, release: Release, dest: Path,
+                   progress: Callable[[int, int], None] | None, cancel: threading.Event | None, opener) -> Path | None:
+    part = dest.with_name(dest.name + ".part")
     digest = hashlib.sha256()
     done = 0
     ok = False
@@ -369,7 +415,7 @@ def download(release: Release, dest: Path, progress: Callable[[int, int], None] 
     except UpdateError:
         raise
     except (OSError, ValueError) as exc:
-        raise UpdateError(f"Could not download the update: {lookup_client.redact_text(exc)}") from exc
+        raise _Unreachable(UpdateError(f"Could not download the update: {lookup_client.redact_text(exc)}")) from exc
     finally:
         if not ok:
             _remove_quietly(part)

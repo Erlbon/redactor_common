@@ -3,6 +3,7 @@ makes about a release, with every way of not updating named. Driven against a fa
 
 import hashlib
 import json
+import urllib.error
 
 import pytest
 
@@ -24,6 +25,7 @@ def sha(data):
 
 def asset(name, data, digest=True):
     entry = {"name": name, "size": len(data),
+             "url": f"https://api.github.com/repos/{REPO}/releases/assets/{abs(hash(name)) % 10 ** 9}",
              "browser_download_url": f"https://github.com/{REPO}/releases/download/{TAG}/{name}"}
     if digest:
         entry["digest"] = "sha256:" + sha(data)
@@ -50,15 +52,23 @@ class FakeGitHub:
             if self.manifest is not False:
                 assets.append(asset(update_manifest.MANIFEST_NAME, self.manifest))
         for entry in assets:
-            self.files[entry["browser_download_url"]] = {SETUP_NAME: SETUP, ZIP_NAME: ZIP}.get(
-                entry["name"], self.manifest)
+            data = {SETUP_NAME: SETUP, ZIP_NAME: ZIP}.get(entry["name"], self.manifest)
+            self.files[entry["browser_download_url"]] = data
+            if "url" in entry:
+                self.files[entry["url"]] = data
         self.answer = {"tag_name": tag, "html_url": f"https://github.com/{REPO}/releases/tag/{tag}",
                        "body": "* new things", "assets": assets}
         self.urls = []
+        self.failing = set()          # URLs GitHub answers with 504 (its Frankfurt edge, 2026-11-08)
 
     def __call__(self, request):
         url = request.full_url if hasattr(request, "full_url") else request
         self.urls.append(url)
+        if url in self.failing or (url.startswith("https://github.com/") and "github.com/" in self.failing):
+            raise urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None)
+        if "/releases/assets/" in url:                # the API's way to a file: only with Accept octet-stream
+            assert request.get_header("Accept") == "application/octet-stream"
+            return self.files[url]
         if url.startswith("https://api.github.com/"):
             return json.dumps(self.answer).encode()
         return self.files[url]
@@ -212,6 +222,34 @@ def test_a_github_failure_is_an_update_error():
         raise OSError("no network")
     with pytest.raises(UpdateError, match="GitHub"):
         selfupdate.decide(REPO, "accipio", "2026-11-06#13", WINDOWS_INSTALLER, fetch=offline)
+
+
+def test_a_manifest_github_will_not_serve_comes_through_its_api():
+    """2026-11-08: github.com's release downloads answered 504 for an hour while the API served the same files."""
+    github = FakeGitHub()
+    github.failing.add("github.com/")
+    d = decide(github)
+    assert d.action == INSTALL
+    assert d.release.asset_api_url.startswith(f"https://api.github.com/repos/{REPO}/releases/assets/")
+    assert any("/releases/assets/" in url for url in github.urls)
+
+
+def test_when_both_ways_fail_the_first_failure_is_told():
+    github = FakeGitHub()
+    github.failing.add("github.com/")
+    github.failing.update(url for url in github.files if "/releases/assets/" in url)
+    with pytest.raises(UpdateError, match="504"):
+        decide(github)
+
+
+def test_an_api_address_off_github_is_not_used():
+    assets = [asset(SETUP_NAME, SETUP), asset(update_manifest.MANIFEST_NAME, manifest_bytes())]
+    assets[1]["url"] = "https://evil.example/repos/x/releases/assets/1"
+    github = FakeGitHub(assets=assets)
+    github.failing.add("github.com/")
+    with pytest.raises(UpdateError, match="504"):
+        decide(github)
+    assert not any("evil" in url for url in github.urls)
 
 
 def test_the_decision_reads_as_json_and_as_details():

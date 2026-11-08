@@ -102,7 +102,7 @@ def test_a_release_without_digest_is_not_downloadable():
 def test_a_download_url_off_github_is_dropped():
     data = api_answer()
     data["assets"][1]["browser_download_url"] = "https://evil.example/cbzredactor.exe"
-    assert selfupdate._assets(data)["cbzredactor.exe"]["url"] == ""
+    assert selfupdate._assets(data, "Erlbon/cbzredactor")["cbzredactor.exe"]["url"] == ""
 
 
 def test_odd_answers_raise_update_error_not_a_crash():
@@ -111,7 +111,7 @@ def test_odd_answers_raise_update_error_not_a_crash():
             selfupdate.release_info(data)
     r = selfupdate.release_info({"tag_name": "v2026-11-02-03", "assets": "x", "body": None})
     assert not r.downloadable and r.notes == ""
-    assert selfupdate._assets({"assets": "x"}) == {}
+    assert selfupdate._assets({"assets": "x"}, "Erlbon/cbzredactor") == {}
 
 
 def test_fetch_release_asks_the_right_url():
@@ -179,6 +179,51 @@ def test_a_network_failure_is_an_update_error_and_leaves_nothing(tmp_path):
     with pytest.raises(UpdateError, match="Could not download"):
         selfupdate.download(release(), tmp_path / "a.new", opener=FakeOpener(error=OSError("reset")))
     assert list(tmp_path.iterdir()) == []
+
+
+API_URL = "https://api.github.com/repos/Erlbon/cbzredactor/releases/assets/42"
+
+
+class EdgeDown(FakeOpener):
+    """github.com's release downloads answer 504; the API's way to the same file works (2026-11-08)."""
+
+    def __init__(self, data=PAYLOAD, api_error=None):
+        super().__init__(data)
+        self.api_error, self.accepts = api_error, []
+
+    def open(self, request, timeout=None):
+        self.urls.append(request.full_url)
+        if request.full_url.startswith("https://github.com/"):
+            raise urllib.error.HTTPError(request.full_url, 504, "Gateway Time-out", {}, None)
+        self.accepts.append(request.get_header("Accept"))
+        if self.api_error:
+            raise self.api_error
+        return io.BytesIO(self.data)
+
+
+def test_a_download_github_will_not_serve_comes_through_its_api(tmp_path):
+    opener = EdgeDown()
+    dest = tmp_path / "a.new"
+    assert selfupdate.download(api(release()), dest, opener=opener) == dest and dest.read_bytes() == PAYLOAD
+    assert opener.urls[1] == API_URL and opener.accepts == ["application/octet-stream"]
+
+
+def test_when_both_downloads_fail_the_first_failure_is_told(tmp_path):
+    with pytest.raises(UpdateError, match="504"):
+        selfupdate.download(api(release()), tmp_path / "a.new", opener=EdgeDown(api_error=OSError("reset")))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_wrong_file_is_not_fetched_again_another_way(tmp_path):
+    opener = FakeOpener(PAYLOAD[:-1] + b"X")
+    with pytest.raises(UpdateError, match="checksum"):
+        selfupdate.download(api(release()), tmp_path / "a.new", opener=opener)
+    assert len(opener.urls) == 1
+
+
+def api(r):
+    import dataclasses
+    return dataclasses.replace(r, asset_api_url=API_URL)
 
 
 def test_cancel_stops_and_removes_the_partial_file(tmp_path):
