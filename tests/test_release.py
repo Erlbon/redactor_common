@@ -2,6 +2,7 @@
 release and the refusals). The gate itself runs against real releases; see docs/update-framework.md."""
 
 import json
+import os
 import subprocess
 import sys
 import types
@@ -398,6 +399,15 @@ def test_a_detached_run_logs_its_end_line(tmp_path):
         assert time.monotonic() < deadline, log.read_text(encoding="utf-8")
         time.sleep(0.2)
     assert "update-contract.iss" in log.read_text(encoding="utf-8")
+
+
+def test_only_the_detached_run_itself_writes_the_end_line(monkeypatch):
+    """The build calls `contract-path` and reads its output: a child of the detached run must answer plainly."""
+    monkeypatch.setenv(release.DETACHED_ENV, "1")
+    seen = {}
+    monkeypatch.setattr(release, "run_command", lambda argv: seen.update(env=release.DETACHED_ENV in os.environ) or 0)
+    release.main(["publish"])
+    assert seen["env"] is False
 
 
 def test_a_detached_run_that_crashes_still_writes_its_end_line(monkeypatch, capsys):

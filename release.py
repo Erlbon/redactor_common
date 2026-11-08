@@ -752,7 +752,9 @@ def default_log(repo: str) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not os.environ.get(DETACHED_ENV):
+    # taken out, not just read: the build calls this tool again (contract-path), and a child that also printed
+    # the end line put it into the installer script (2026-11-08)
+    if not os.environ.pop(DETACHED_ENV, None):
         return run_command(argv)
     try:
         code = run_command(argv)
