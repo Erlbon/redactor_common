@@ -381,6 +381,7 @@ class Gate:
     def __init__(self, cfg: Config, tag: str, scratch: Path, runner: Runner = run):
         self.cfg, self.tag, self.scratch, self.runner = cfg, tag, scratch, runner
         self.profile = scratch / "profile"
+        self.started: list[subprocess.Popen] = []
         self.env = dict(os.environ)
         for key, sub in (("REDACTOR_CONFIG_DIR", "profile"), ("APPDATA", "appdata"), ("TEMP", "temp"),
                          ("TMP", "temp")):
@@ -504,12 +505,28 @@ class Gate:
         if not self.cfg.gate_run:
             return None
         process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
+        self.started.append(process)
         time.sleep(RUN_SETTLE)
         if process.poll() is not None:
             raise ReleaseError(f"{exe.name} {' '.join(self.cfg.gate_run)} stopped right after starting "
                                f"(exit {process.returncode}).")
         say(f"  running: {exe.name} {' '.join(self.cfg.gate_run)}")
         return process
+
+    def stop_started(self) -> None:
+        """A failed gate stops what it started, with the programs those started (Accipio's aria2): left running,
+        they held the scratch install (2026-11-08)."""
+        for process in self.started:
+            if process.poll() is not None:
+                continue
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+            else:
+                process.kill()
+            try:
+                process.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
 
     def expect_stopped_by_itself(self, running: subprocess.Popen | None, log: str) -> None:
         """The update stopped the running program the way it asked (exit 0), not Windows by force."""
@@ -544,6 +561,7 @@ class Gate:
         if crash is not None and crash.exists():
             crash.unlink()
         process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
+        self.started.append(process)
         time.sleep(self.cfg.gate_live)
         alive = process.poll() is None
         crashed = crash is not None and crash.exists() and crash_entries(crash.read_text(encoding="utf-8",
@@ -639,6 +657,7 @@ def gate(cfg: Config, tag: str, previous: str = "", first: bool = False, runner:
     scratch.mkdir(parents=True)
     say(f"Gate for {cfg.name} {tag} in {scratch}")
     ok = False
+    gate_run = None
     try:
         new = verify_release(cfg, tag, scratch / "new", runner)
         old_tag, old = "", None
@@ -668,6 +687,8 @@ def gate(cfg: Config, tag: str, previous: str = "", first: bool = False, runner:
         ok = True
         say(f"Gate passed for {tag}.")
     finally:
+        if gate_run is not None and not ok:
+            gate_run.stop_started()
         for command in cfg.after_gate:
             runner(command, cwd=cfg.root, check=False)
         if ok:

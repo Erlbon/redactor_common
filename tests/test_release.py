@@ -260,6 +260,10 @@ if mode == "dies":
 open(os.path.join(profile, "crash.log"), "a").write(chr(10) + "=" * 70 + chr(10) + "2026-11-07 16:54:21 started: pid 1" + chr(10))
 if mode == "crashes":
     open(os.path.join(profile, "crash.log"), "a").write("Traceback: ConnectionResetError")
+if mode == "with helper":                       # as Accipio starts aria2
+    import subprocess
+    helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    open(os.path.join(profile, "helper"), "w").write(str(helper.pid))
 while not os.path.exists(stop):
     time.sleep(0.05)
 os.remove(stop)
@@ -330,6 +334,35 @@ def test_a_dead_scratch_install_is_forgotten(tmp_path, monkeypatch):
             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
         except OSError:
             pass
+
+
+def alive(pid):
+    if sys.platform == "win32":
+        found = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in found
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def test_a_failed_gate_stops_what_it_started(tmp_path, monkeypatch):
+    """2026-11-08: a gate that failed while the old copy ran left it and its aria2 running in the scratch."""
+    import time
+    gate, exe = running_gate(tmp_path, monkeypatch, "with helper")
+    running = gate.start_running(exe)
+    deadline = time.monotonic() + 20
+    while not (gate.profile / "helper").exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    helper = int((gate.profile / "helper").read_text())
+    gate.stop_started()
+    assert running.poll() is not None
+    deadline = time.monotonic() + 10
+    while alive(helper):
+        assert time.monotonic() < deadline, "its helper still runs"
+        time.sleep(0.2)
 
 
 def test_a_program_that_stops_by_itself_fails_the_gate(tmp_path, monkeypatch):
