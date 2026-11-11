@@ -132,6 +132,13 @@ Publishing a release goes like this:
    also runs the program as a user does: the old copy is running while it updates itself and must stop by
    itself (exit 0; the installer log must show no program closed by force), and afterwards the new program
    must start, keep running for `live` seconds with no crash log, and stop when asked.
+   **When the app is installed on the PC that releases** (the owner's option D, 2026-11-11), the installer
+   channel uses that copy instead of a scratch install: with its own profile it runs `--check-update` and
+   `--update` to the new release, the installer must finish with exit 0 and close nothing by force, and the copy
+   must then report the new version and channel. It stays installed. This is how browsers test their builds on
+   their developers' own copies. Before this the gate refused to run until the app was uninstalled, because a
+   scratch install takes over the real one's uninstall entry, shortcuts and taskbar id. Where the app is not
+   installed, the scratch install is used as before; the one-file exe is always tested in its scratch folder.
 5. Only then mark the release "Latest".
 
 If the gate fails, the release stays a pre-release and nothing reaches anyone. The first release of each app on

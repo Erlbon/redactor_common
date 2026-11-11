@@ -39,8 +39,11 @@ C:\\Temp\\Claude\\release-gate) with a scratch profile (REDACTOR_CONFIG_DIR, APP
   windows-installer: install the PREVIOUS release with its real installer; it must report its version and channel;
       its `--check-update --release-tag <new>` must say "install" with the manifest's file; its `--update` must
       install the new release, after which the program reports the new version and channel; then uninstall, which
-      must leave nothing in the program folder. Refused when the app is installed on this PC for real (the scratch
-      install would take over its uninstall entry and shortcuts).
+      must leave nothing in the program folder.
+      When the app is installed on this PC for real, that copy is the test instead (the owner's option D,
+      2026-11-11): with its own profile it must update itself to the new release (check-update, update, the
+      installer's exit and log, the new version and channel) and it stays installed. No scratch install is made
+      there, as it would take over the real copy's uninstall entry, shortcuts and taskbar id.
   windows-exe: the same with the previous exe in a scratch folder, without install and uninstall.
 `--first-framework-release`: the previous release cannot answer --check-update yet; the NEW release is installed
 instead and must report its version and channel and uninstall cleanly. Copies of the old releases are updated by hand.
@@ -429,16 +432,43 @@ class Gate:
         return done
 
     # the installer channel
-    def guard_install(self) -> None:
+    def installed_for_real(self) -> Path | None:
+        """Where the app is installed on this PC for real; None when it is not (a scratch install a failed gate left is
+        removed on the way)."""
         location = installed_location(self.cfg.installer_app_id)
         if location is None:
-            return
+            return None
         gate_root = Path(os.environ.get("REDACTOR_GATE_DIR") or DEFAULT_GATE_DIR)
         if gate_root in Path(location).parents:
             remove_leftover_install(self.cfg, Path(location), lambda target: self.uninstall(target))
+            return None
+        return Path(location)
+
+    def run_installed(self, new: update_manifest.Manifest, location: Path) -> None:
+        """The copy installed on this PC is the test (the owner's option D, 2026-11-11, as browsers test on their
+        developers' own copies): it updates itself to the new release with its own profile and stays installed. A
+        scratch install would take over its uninstall entry, shortcuts and taskbar id, so it is never made here."""
+        exe = location / self.cfg.exe
+        self.env = dict(os.environ)                     # its real profile and TEMP, as when the owner updates it
+        got = self.ask(exe, "--version")
+        say(f"  the copy installed on this PC: {location}, version {got}")
+        if got == new.version:
+            say("  it already runs the new release (a gate run again after it updated); nothing to update")
             return
-        raise ReleaseError(f"{self.cfg.name} is installed on this PC ({location}). The gate's scratch install would take "
-                           "over its uninstall entry and shortcuts: uninstall it first, or run the gate on another PC.")
+        self.expect_channel(location, WINDOWS_INSTALLER)
+        done = self.expect_update(exe, new, WINDOWS_INSTALLER)
+        self.expect_installer_finished(done)
+        self.expect_no_forced_close(done.get("log", ""))
+        self.expect_version(exe, new.version)
+        self.expect_channel(location, WINDOWS_INSTALLER)
+        say("  it updated itself and stays installed")
+
+    def expect_installer_finished(self, done: dict) -> None:
+        code = wait_for_pid(int(done.get("pid") or 0), INSTALL_WAIT)
+        if code is None:
+            raise ReleaseError(f"The installer started by --update was still running after {INSTALL_WAIT} s.")
+        if code != 0:
+            raise ReleaseError(f"The installer started by --update failed (exit {code}).")
 
     def install(self, setup: Path) -> Path:
         target = self.scratch / "program"
@@ -470,7 +500,14 @@ class Gate:
 
     def run_installer(self, new: update_manifest.Manifest, previous_setup: Path | None, previous_version: str,
                       new_setup: Path) -> None:
-        self.guard_install()
+        real = self.installed_for_real()
+        if real is not None:
+            if previous_setup is None:
+                raise ReleaseError(f"{self.cfg.name} is installed on this PC ({real}) and there is no previous framework "
+                                   "release for it to update from: the first framework release is gated where it is "
+                                   "not installed.")
+            self.run_installed(new, real)
+            return
         exe_of = lambda folder: folder / self.cfg.exe  # noqa: E731
         if previous_setup is None:
             target = self.install(new_setup)
@@ -486,11 +523,7 @@ class Gate:
             self.expect_channel(target, WINDOWS_INSTALLER)
             running = self.start_running(exe_of(target))        # 81A: the update happens over a running copy
             done = self.expect_update(exe_of(target), new, WINDOWS_INSTALLER)
-            code = wait_for_pid(int(done.get("pid") or 0), INSTALL_WAIT)
-            if code is None:
-                raise ReleaseError(f"The installer started by --update was still running after {INSTALL_WAIT} s.")
-            if code != 0:
-                raise ReleaseError(f"The installer started by --update failed (exit {code}).")
+            self.expect_installer_finished(done)
             self.expect_stopped_by_itself(running, done.get("log", ""))
             self.expect_version(exe_of(target), new.version)
             self.expect_channel(target, WINDOWS_INSTALLER)
@@ -540,6 +573,10 @@ class Gate:
         if code != 0:
             raise ReleaseError(f"The update closed the running program by force (exit {code}), not by asking it.")
         say("  the running copy stopped by itself for the update")
+        self.expect_no_forced_close(log)
+
+    def expect_no_forced_close(self, log: str) -> None:
+        """The installer's log shows no program it had to close by force."""
         if not log:
             say("  (that release's --update keeps no installer log: from redactor_common 2026-11-07-09 it does)")
             return

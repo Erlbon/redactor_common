@@ -211,6 +211,65 @@ def test_the_gate_asks_a_one_file_exe_for_the_channel_it_carries_inside(tmp_path
     assert asked == []
 
 
+def installed_copy(tmp_path, monkeypatch, versions):
+    """A gate on a PC where the app is installed for real: `versions` are what its --version says, one per ask."""
+    cfg = repo(tmp_path)
+    location = tmp_path / "Programs" / "App"
+    location.mkdir(parents=True)
+    update_manifest.write_channel(location, WINDOWS_INSTALLER)
+    monkeypatch.setenv("REDACTOR_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setattr(release, "installed_location", lambda app_id: str(location))
+    monkeypatch.setattr(release, "wait_for_pid", lambda pid, timeout: 0)
+    gate = release.Gate(cfg, cfg.tag, tmp_path / "gate" / "scratch", FakeRunner())
+    asked = []
+
+    def ask(exe, *args):
+        asked.append((exe, args, dict(gate.env)))
+        if "--version" in args:
+            return versions.pop(0)
+        if "--check-update" in args:
+            return {"action": "install", "file": "App-setup.exe"}
+        return {"action": "started", "pid": 4242, "log": ""}
+
+    monkeypatch.setattr(gate, "ask", ask)
+    monkeypatch.setattr(gate, "install", lambda setup: pytest.fail("the scratch install must not be used"))
+    monkeypatch.setattr(gate, "uninstall", lambda target: pytest.fail("the real copy must never be uninstalled"))
+    new = types.SimpleNamespace(version="2026-11-07#02",
+                                packages={WINDOWS_INSTALLER: types.SimpleNamespace(file="App-setup.exe")})
+    return gate, new, location, asked
+
+
+def test_an_installed_copy_is_the_gate_it_updates_itself_in_place(tmp_path, monkeypatch):
+    """The owner, 2026-11-11 (option D): the gate refused to run while Dossier was installed for real and wanted it
+    uninstalled first. Now the installed copy is the test: it updates itself to the new release, with its own profile,
+    and stays installed."""
+    gate, new, location, asked = installed_copy(tmp_path, monkeypatch, ["2026-11-01#05", "2026-11-07#02"])
+    gate.run_installer(new, tmp_path / "old-setup.exe", "2026-11-06#01", tmp_path / "new-setup.exe")
+    assert [a[1][0] for a in asked] == ["--version", "--check-update", "--update", "--version"]
+    assert all(a[0] == location / "App.exe" for a in asked)
+    assert asked[2][2].get("APPDATA") == os.environ.get("APPDATA")       # its real profile, not the scratch one
+
+
+def test_an_installed_copy_that_does_not_update_fails_the_gate(tmp_path, monkeypatch):
+    gate, new, _location, _asked = installed_copy(tmp_path, monkeypatch, ["2026-11-01#05", "2026-11-01#05"])
+    with pytest.raises(release.ReleaseError, match="expected '2026-11-07#02'"):
+        gate.run_installer(new, tmp_path / "old-setup.exe", "2026-11-06#01", tmp_path / "new-setup.exe")
+
+
+def test_an_installed_copy_already_on_the_new_release_passes(tmp_path, monkeypatch):
+    """A gate run again after it updated the copy (and failed later, on the exe) finds it already updated."""
+    gate, new, _location, asked = installed_copy(tmp_path, monkeypatch, ["2026-11-07#02"])
+    gate.run_installer(new, tmp_path / "old-setup.exe", "2026-11-06#01", tmp_path / "new-setup.exe")
+    assert [a[1][0] for a in asked] == ["--version"]
+
+
+def test_the_first_framework_release_still_needs_no_installed_copy(tmp_path, monkeypatch):
+    """With no previous framework release there is nothing for the installed copy to update with."""
+    gate, new, _location, _asked = installed_copy(tmp_path, monkeypatch, [])
+    with pytest.raises(release.ReleaseError, match="is installed on this PC"):
+        gate.run_installer(new, None, "", tmp_path / "new-setup.exe")
+
+
 def test_the_build_uses_the_repositorys_own_venv(tmp_path):
     cfg = repo(tmp_path)
     assert release.build_env(cfg)["PATH"] == release.os.environ.get("PATH", "")
