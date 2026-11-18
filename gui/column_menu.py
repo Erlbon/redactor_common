@@ -51,7 +51,7 @@ def show_column_header_context_menu(
     is_visible: Callable[[Hashable, set[Hashable]], bool],
     on_toggle: Callable[[Hashable, bool], None],
     open_column_settings_dialog: Callable[[], None] | None = None,
-    top_actions: Sequence[tuple[str, Callable[[], None], bool]] = (),
+    top_actions: Sequence[tuple] = (),
 ) -> None:
     """`is_visible` is redactor_common.core.table_settings.is_column_visible
     (or a project's PROTECTED_COLUMNS-bound wrapper around it, same
@@ -66,8 +66,18 @@ def show_column_header_context_menu(
     menu = QMenu(window)
 
     # (label, callback, enabled) entries above the checklist, e.g. "Clear All Filters" (column_filter.py).
-    for label, callback, enabled in top_actions:
-        entry = menu.addAction(label, callback)
+    # An optional fourth item `checked` (True/False) makes the entry an on/off switch with a tick mark;
+    # its callback then gets the new state, e.g. Dossier's "Fit Columns to Panel". None or absent: a plain entry.
+    for item in top_actions:
+        label, callback, enabled = item[:3]
+        checked = item[3] if len(item) > 3 else None
+        if checked is None:
+            entry = menu.addAction(label, callback)
+        else:
+            entry = menu.addAction(label)
+            entry.setCheckable(True)
+            entry.setChecked(bool(checked))
+            entry.toggled.connect(lambda on, cb=callback: cb(on))
         entry.setEnabled(enabled)
     if top_actions:
         menu.addSeparator()
