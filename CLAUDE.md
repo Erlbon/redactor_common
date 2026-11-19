@@ -26,6 +26,8 @@ The project skill in `.claude/skills/redactor-conventions/SKILL.md` holds the fu
 
 10. **No label wider than 80% of the screen.** A QLabel whose natural single-line width would exceed 80% of the screen's available width MUST word-wrap, so text never runs off the window (Erlend, 2026-10-18; trigger: a ~400-char intro cut off in epubredactor's Remove Running Headers dialog). `redactor_common.gui.label_wrap` enforces it: `run_app()` installs the guard (`install_label_wrap_guard(app)`; call it yourself from a custom bootstrap), which wraps labels on show; `lint_label_wrap(folder)` flags long inline `addWidget(QLabel("..."))` without `setWordWrap`. Still call `setWordWrap(True)` on long intro labels yourself.
 
+11. **Icons instead of text where possible.** A button whose meaning an icon can carry (back, forward, use, stop, cancel, add, remove, search...) gets an icon, with the text kept as tooltip and accessible name (Erlend, 2026-11-19; trigger: cbzredactor's Comic Vine lookup, six long text buttons turned into ◀◀ ▶ ▶▶ ■ ✕). Draw icons in the theme's text colour so they show on light and dark; colour only the most-used action (green) and the one that discards work (red); keep repeated actions within a short mouse reach. Details in the skill.
+
 Full text of these rules: `.claude/skills/redactor-conventions/SKILL.md` in redactor_common.
 
 ## Releases and updates

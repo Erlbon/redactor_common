@@ -96,6 +96,22 @@ event filter wrapping labels on Show; `run_app()` installs it, apps with their o
 `lint_label_wrap(folder)` (flags long inline `addWidget(QLabel("..."))` with no `setWordWrap`; exempt a line with
 `# wrap-ok: <reason>`). Short labels are never wrapped. Still wrap long intro labels explicitly in the dialog code.
 
+## Icons instead of text where possible (Erlend, 2026-11-19)
+
+Prefer an icon to a text label on a button wherever an icon can carry the meaning (back, forward, play/use,
+stop, cancel, add, remove, search...). Trigger: cbzredactor's Comic Vine lookup, whose six long text buttons
+("Yes – Use This Issue", "No – Skip This File", "Stop – Keep Matches So Far"...) were hard to read at a glance;
+they became player controls ◀◀ ▶ ▶▶ ■ ✕. What that pass taught:
+- Keep the text as the tooltip and as `setAccessibleName()` (screen readers and tests read that).
+- Draw the icon in the theme's text colour (`palette().color(QPalette.ColorRole.ButtonText)`), or it vanishes on
+  one of the themes: Qt's `QStyle` standard media icons are black on the dark theme, and Unicode triangles come
+  out at very different sizes in the same font. cbzredactor's `gui/comicvine_browse_dialog.py` `_media_icon()`
+  draws them with QPainter; promote it here once a second app needs it.
+- Colour sparingly: only the action pressed most (green) and the one that throws work away (red).
+- Lay buttons out for the work: actions that mean opposite things (back / forward) are kept apart enough to be
+  told apart, but the ones used over and over on a long list stay within a short mouse reach.
+- Keep text where no icon is clear on its own (for example "Show Issues of This Series").
+
 ## Progress feedback is mandatory for EVERYTHING that can take a moment
 
 **The owner's rule (2026-10-13): everything slow gets a progress dialog, not only loops over books.** A folder
