@@ -7,7 +7,10 @@ front.jpg ...), found by name, case-insensitively. Reads only the folder listing
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+from redactor_common.core.long_paths import literal
 
 # Filenames checked, in order -- the first one present wins.
 FOLDER_IMAGE_NAMES = (
@@ -20,8 +23,9 @@ FOLDER_IMAGE_NAMES = (
 
 def find_image_in_folder(folder: str | Path) -> Path | None:
     """The album-art image in `folder` (cover.jpg, folder.jpg, front.jpg, ... case-insensitively), or None."""
-    try:
-        by_lower = {entry.name.lower(): entry for entry in Path(folder).iterdir() if entry.is_file()}
+    try:  # literal(): also a folder whose name ends in a dot ('R.E.M.'); the path given back is plain
+        with os.scandir(literal(folder)) as entries:
+            by_lower = {entry.name.lower(): Path(folder) / entry.name for entry in entries if entry.is_file()}
     except OSError:
         return None
     for name in FOLDER_IMAGE_NAMES:

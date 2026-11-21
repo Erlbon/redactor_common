@@ -42,3 +42,15 @@ def test_a_note_is_written_found_and_read_in_a_folder_whose_name_ends_in_a_dot(t
     assert write_note(folder, "artist", "# again\n").status == STATUS_EXISTS  # never overwritten
     names = os.listdir(literal(folder))
     assert names == ["artist.md"]  # no temp file left behind
+
+
+@windows_only
+def test_the_folder_cover_is_found_in_a_folder_whose_name_ends_in_a_dot(tmp_path):
+    from redactor_common.core.lookups.cover_finder import find_folder_image
+
+    album = tmp_path / "R.E.M." / "Murmur."
+    os.makedirs(literal(album))
+    with open(literal(album / "Folder.jpg"), "wb") as handle:
+        handle.write(b"\xff\xd8\xff")
+    found = find_folder_image(album / "01 Radio Free Europe.mp3")
+    assert found == album / "Folder.jpg" and os.path.isfile(literal(found))
