@@ -56,7 +56,7 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-18#01`.
+Currently: `2026-11-21#01`.
 
 ## Self-update: the update framework (`docs/update-framework.md`)
 
@@ -483,6 +483,11 @@ Rules: UTF-8 without BOM, LF newlines, at most 64 KB; every created note says `s
 note is never overwritten**, and ANY recognised `.md` note (any letter case, any of the five names) in the
 folder blocks a write, because Pluteus shows the first one in its priority order and a new note must not hide
 a person's own. `.nfo` / `.opf` sidecars do not block (Pluteus shows our `.md` instead of them).
+
+Folders whose names end in a dot or a space (`R.E.M.`) are read and written too (since `2026-11-21#01`): the OS
+calls go through `core/long_paths.py` `literal()` (the Windows extended-length prefix, only where a name needs it),
+and every path handed back stays plain. Use `literal()` the same way in an app for any file it opens in such a
+folder. The Recycle Bin does not take these paths, so `replace_note()` refuses there (the old note is kept).
 
 | API | What it does |
 |---|---|

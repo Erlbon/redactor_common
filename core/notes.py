@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from redactor_common.core import temp_names
+from redactor_common.core.long_paths import literal
 
 # Note kind -> file name. The order is Pluteus's priority order (pluteus/notes.py NOTE_NAMES[:5]): the first
 # existing one wins on the folder page.
@@ -279,14 +280,14 @@ def _files_by_lower_name(folder: str | os.PathLike) -> dict[str, str]:
     A missing or unreadable folder gives {}."""
     found: dict[str, str] = {}
     try:
-        with os.scandir(folder) as entries:
+        with os.scandir(literal(folder)) as entries:  # also 'R.E.M.' (core/long_paths.py); the paths given back are plain
             for entry in entries:
                 try:
                     if entry.is_dir(follow_symlinks=False):
                         continue
                 except OSError:
                     continue
-                found.setdefault(entry.name.lower(), entry.path)
+                found.setdefault(entry.name.lower(), os.path.join(os.fspath(folder), entry.name))
     except OSError:
         return {}
     return found
@@ -394,7 +395,7 @@ def write_note(folder: str | os.PathLike, kind: str, text: str, *, dry_run: bool
     except ValueError as exc:
         return NoteWriteResult(STATUS_ERROR, "", str(exc), dry_run)
     target = os.path.join(folder_s, file_name)
-    if not os.path.isdir(folder_s):
+    if not os.path.isdir(literal(folder_s)):
         return NoteWriteResult(STATUS_ERROR, target, f"The folder does not exist: {folder_s}", dry_run)
     data = normalize_note_text(text).encode("utf-8")
     if len(data) > MAX_NOTE_BYTES:
@@ -405,12 +406,12 @@ def write_note(folder: str | os.PathLike, kind: str, text: str, *, dry_run: bool
     existing = existing_note(folder_s)
     if existing:
         return NoteWriteResult(STATUS_EXISTS, existing, f"A note already exists: {existing}", dry_run)
-    if os.path.lexists(target):
+    if os.path.lexists(literal(target)):
         return NoteWriteResult(STATUS_EXISTS, target, f"Something named {file_name} already exists.", dry_run)
     if dry_run:
         return NoteWriteResult(STATUS_WRITTEN, target, f"Would write {len(data)} bytes to {target}", True)
 
-    temp = _temp_path(folder_s, file_name)
+    temp = literal(_temp_path(folder_s, file_name))
     try:
         try:
             fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
@@ -421,7 +422,7 @@ def write_note(folder: str | os.PathLike, kind: str, text: str, *, dry_run: bool
             existing = existing_note(folder_s)  # last check before the link
             if existing:
                 return NoteWriteResult(STATUS_EXISTS, existing, f"A note already exists: {existing}")
-            _link_or_reserve(temp, target)
+            _link_or_reserve(temp, literal(target))
         except FileExistsError:
             return NoteWriteResult(STATUS_EXISTS, target, f"A note already exists: {target}")
         except OSError as exc:
@@ -470,7 +471,7 @@ def note_status(path: str | os.PathLike, current_format: int = CURRENT_NOTE_FORM
     A file that cannot be read as UTF-8 text, or is over the size limit, is ``foreign``."""
     path = os.fspath(path)
     try:
-        with open(path, "rb") as handle:
+        with open(literal(path), "rb") as handle:
             raw = handle.read(MAX_NOTE_BYTES + 1)
         if len(raw) > MAX_NOTE_BYTES:
             return NoteState(STATE_FOREIGN, path, message="over the size limit")
@@ -544,7 +545,7 @@ def replace_note(
     from redactor_common.core.trash import TrashError, TrashUnavailable, trash_with_retries
 
     mover = trash or trash_with_retries()
-    temp = _temp_path(folder_s, file_name)
+    temp = literal(_temp_path(folder_s, file_name))
     try:
         try:
             fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
@@ -563,10 +564,10 @@ def replace_note(
                     "refused." if isinstance(exc, TrashUnavailable) else "")
             return NoteWriteResult(STATUS_ERROR, old, f"The old note could not be moved to the Recycle Bin, so it "
                                                       f"was kept: {exc}{hint}")
-        if os.path.lexists(old):
+        if os.path.lexists(literal(old)):
             return NoteWriteResult(STATUS_ERROR, old, "The old note is still there after the move: left alone.")
         try:
-            _link_or_reserve(temp, target)
+            _link_or_reserve(temp, literal(target))
         except FileExistsError:
             return NoteWriteResult(STATUS_EXISTS, target, f"A note appeared at {target} meanwhile: left alone.",
                                    replaced=old)
