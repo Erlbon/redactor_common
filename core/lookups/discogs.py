@@ -547,14 +547,17 @@ def fetch_release(client: DiscogsClient, release_id: int, cache: Optional[dict] 
 # A pasted link (2026-11-25): https://www.discogs.com/release/1234-Artist-Album,
 # /de/release/1234, the old /Artist-Album/release/1234, a master's /master/567,
 # Discogs' own "[r1234]" / "[m567]" shorthand, or a bare release number.
-_LINK_RE = re.compile(r"discogs\.com/(?:[^?#]*/)?(release|master)s?/(\d+)", re.IGNORECASE)
-_SHORT_RE = re.compile(r"^\[?([rm])(\d+)\]?$", re.IGNORECASE)
+# An id is 1-12 plain ASCII digits: pasted junk (a superscript, thousands of digits) is "no link", never a ValueError.
+_ID = r"([0-9]{1,12})(?![0-9])"
+_LINK_RE = re.compile(r"discogs\.com/(?:[^?#]*/)?(release|master)s?/" + _ID, re.IGNORECASE)
+_SHORT_RE = re.compile(r"^\[?([rm])" + _ID + r"\]?$", re.IGNORECASE)
+_BARE_RE = re.compile(_ID)
 
 
 def parse_discogs_link(text: str) -> Optional[tuple[str, int]]:
     """("release" | "master", id) from a pasted Discogs link or id, else None."""
     text = (text or "").strip()
-    if text.isdigit():
+    if _BARE_RE.fullmatch(text):
         return "release", int(text)
     found = _LINK_RE.search(text)
     if found:

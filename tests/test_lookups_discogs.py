@@ -637,6 +637,10 @@ def test_unconfigured_the_token_comes_only_from_the_environment(monkeypatch):
     ("https://www.discogs.com/artist/23755-Miles-Davis", None),
     ("Kind of Blue", None),
     ("", None),
+    ("9" * 5000, None),  # pasted junk: no ValueError (Python's int() refuses over 4300 digits)
+    ("²1", None),  # a superscript two passes str.isdigit() but int() refuses it
+    ("https://www.discogs.com/release/" + "9" * 5000, None),
+    ("[r" + "9" * 20 + "]", None),
 ])
 def test_parse_discogs_link(text, expected):
     assert dl.parse_discogs_link(text) == expected
@@ -658,3 +662,5 @@ def test_release_from_link_fetches_the_release_or_a_masters_main_release():
     assert not any("/database/search" in r.full_url for r in fake.requests)  # no search at all
     with pytest.raises(dl.DiscogsError, match="Not a Discogs release"):
         dl.release_from_link(client, "Kind of Blue")
+    with pytest.raises(dl.DiscogsError, match="Not a Discogs release"):
+        dl.release_from_link(client, "9" * 5000)
