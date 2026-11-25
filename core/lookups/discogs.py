@@ -364,6 +364,21 @@ def _artist_score(query_artist: str, release_artist: str, title_agreement: Optio
     return _similar(_artist_key(query_artist), _artist_key(release_artist))
 
 
+def _album_names(query: DiscogsQuery, release_artist: str) -> list[str]:
+    """The album as the query names it, and -- for a compilation looked for
+    under a series name -- the series name + album too: "Bloodstains
+    Across" + "Switzerland" is "Bloodstains Across Switzerland"."""
+    names = [query.album]
+    if _compilation_for_band(query.artist, release_artist) and query.album.strip():
+        names.append(f"{query.artist} {query.album}")
+    return names
+
+
+def _album_score(query: DiscogsQuery, release_artist: str, album: str) -> Optional[float]:
+    scores = [s for s in (_similar(name, album) for name in _album_names(query, release_artist)) if s is not None]
+    return max(scores) if scores else None
+
+
 def score_candidate(
     query: DiscogsQuery, artist: str, album: str, year: str = "",
     track_count: Optional[int] = None, file_count: Optional[int] = None,
@@ -379,7 +394,7 @@ def score_candidate(
     of the files' titles its tracks share (see title_agreement())."""
     weighted = [
         (_artist_score(query.artist, artist, title_agreement), 0.4),
-        (_similar(query.album, album), 0.4),
+        (_album_score(query, artist, album), 0.4),
         (_year_score(query.year, year), 0.1),
         (_count_score(file_count, track_count), 0.1),
     ]
@@ -390,10 +405,11 @@ def score_candidate(
 
 
 def _search_attempts(query: DiscogsQuery, limit: int) -> list[dict]:
-    """Artist + title (+ year), then without the year; a compilation is
-    listed under "Various" whatever its files' album artist says, so next
-    title + "Various" (as Mp3tag's Discogs source does), then the free text,
-    and last the title alone. Repeats are left out."""
+    """Artist + title (+ year), then without the year, then both as free
+    text (what Mp3tag's Discogs source searches: it finds "Bloodstains
+    Across" + "Switzerland"); a compilation is listed under "Various"
+    whatever its files' album artist says, so next title + "Various", and
+    last the title alone. Repeats are left out."""
     base = {"type": "release", "per_page": limit}
     attempts = []
     if query.album:
@@ -404,8 +420,8 @@ def _search_attempts(query: DiscogsQuery, limit: int) -> list[dict]:
         if query.year:
             attempts.append(dict(exact, year=query.year))
         attempts.append(exact)
-        attempts.append(dict(title_only, artist="Various"))
         attempts.append(dict(base, q=f"{query.artist} {query.album}".strip()))
+        attempts.append(dict(title_only, artist="Various"))
         attempts.append(title_only)
     else:
         attempts.append(dict(base, artist=query.artist, track=query.track))
@@ -436,7 +452,7 @@ def parse_candidates(data: dict, query: DiscogsQuery) -> list[Candidate]:
 
 def search_releases(client: DiscogsClient, query: DiscogsQuery, limit: int = 10) -> list[Candidate]:
     """Release summaries for the query, best first: artist + album (+ year),
-    then without the year, then album + "Various", then as free text, then
+    then without the year, then as free text, then album + "Various", then
     the album alone; an album-less query searches artist + track. Returns
     the first attempt that finds anything."""
     if not query.album and not (query.artist and query.track):
@@ -709,9 +725,10 @@ def title_agreement(files: list[FileFacts], assignment: dict[int, DiscogsTrack])
 def _is_exact(query: DiscogsQuery, release: DiscogsRelease, agreement: Optional[float] = None) -> bool:
     """The album equals the query's, normalised, and so does the artist
     ("VA" = "Various Artists") -- or, for a compilation looked for under
-    another artist name, most of the files' titles are its tracks' titles."""
-    album = normalize_words(query.album)
-    if not album or album != normalize_words(release.title):
+    another artist name, most of the files' titles are its tracks' titles
+    (and the album may be that name + the album, see _album_names)."""
+    title = normalize_words(release.title)
+    if not title or title not in {normalize_words(name) for name in _album_names(query, release.artist)}:
         return False
     if _compilation_for_band(query.artist, release.artist):
         return agreement is not None and agreement >= TITLE_AGREEMENT_EXACT

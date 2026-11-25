@@ -187,8 +187,7 @@ def test_search_loosens_step_by_step_until_something_is_found():
     assert [h.id for h in hits] == [1]
     attempts = fake.searches()
     assert "year" in attempts[0] and "year" not in attempts[1]
-    assert attempts[2]["artist"] == ["Various"] and attempts[2]["release_title"] == ["Kind of Blue"]
-    assert attempts[3]["q"] == ["Miles Davis Kind of Blue"]
+    assert attempts[2]["q"] == ["Miles Davis Kind of Blue"]
 
 
 def test_search_ends_with_the_title_alone_and_never_repeats_an_attempt():
@@ -499,13 +498,56 @@ def test_a_compilation_tagged_with_its_series_name_is_found_under_various():
     query = dl.discogs_query(["Bloodstains Across Norway"] * 5, ["Bloodstains Across"] * 5,
                              ["1983", "1983", "1979", "1980", "1980"], Path("[1993] - Bloodstains Across Norway"))
     matches = dl.find_release(_client(fake), _facts(5, NORWAY_FILE_TITLES), query)
-    attempts = fake.searches()
-    assert attempts[-1]["artist"] == ["Various"] and attempts[-1]["release_title"] == ["Bloodstains Across Norway"]
+    assert fake.searches()[-1]["q"] == ["Bloodstains Across Bloodstains Across Norway"]
     top = matches[0]
     assert top.release.id == 1815416 and top.matched == 5 and top.exact
     assert dl.confidence(matches) == dl.CONFIDENT
     assert dl.fields_for(top.release, top.assignment[0])["albumartist"] == "Various Artists"
     assert dl.fields_for(top.release, top.assignment[0])["artist"] == "Akutt Innleggelse"
+
+
+def test_the_search_order_after_artist_and_title_fail():
+    fake = FakeDiscogs(search_results=[])
+    dl.search_releases(_client(fake), dl.DiscogsQuery("Bloodstains Across", "Bloodstains Across Norway"))
+    assert fake.searches()[1:] == [
+        {"type": ["release"], "per_page": ["10"], "q": ["Bloodstains Across Bloodstains Across Norway"]},
+        {"type": ["release"], "per_page": ["10"], "release_title": ["Bloodstains Across Norway"], "artist": ["Various"]},
+        {"type": ["release"], "per_page": ["10"], "release_title": ["Bloodstains Across Norway"]},
+    ]
+
+
+def test_a_series_name_split_over_album_artist_and_album_is_found_and_exact():
+    """"Bloodstains Across Switzerland" (2026-11-25) is tagged album artist
+    "Bloodstains Across", album "  Switzerland". A title + "Various" search
+    finds Swiss folk LPs called "Switzerland"; the free text finds it."""
+    tracks = [{"position": str(i + 1), "title": t} for i, t in enumerate(["Mayday", "Mental Disaster", "Cry For Fame"])]
+
+    def results(params):
+        if params.get("q") == ["Bloodstains Across Switzerland"]:
+            return [_hit(1815291, "Various - Bloodstains Across Switzerland", year="", label=("Bloodstains",)),
+                    _hit(13488008, "Various - Bloodstains Across The World #3", year="2019", label=("Bloodstains",))]
+        if params.get("artist") == ["Various"]:
+            return [_hit(8554332, "Various - Switzerland", year="", label=("Philips",))]
+        return []
+
+    fake = FakeDiscogs(search_results=results, releases={
+        1815291: _release(1815291, title="Bloodstains Across Switzerland", artists=(("Various", ""),), year=0,
+                          tracklist=tracks),
+        13488008: _release(13488008, title="Bloodstains Across The World #3", artists=(("Various", ""),), year=2019,
+                           tracklist=[{"position": str(i + 1), "title": f"Other {i}"} for i in range(3)]),
+    })
+    query = dl.discogs_query(["  Switzerland"] * 3, ["Bloodstains Across"] * 3, ["2005"] * 3,
+                             Path("[2005] - Bloodstains Across Switzerland"))
+    assert (query.artist, query.album) == ("Bloodstains Across", "Switzerland")
+    matches = dl.find_release(_client(fake), _facts(3, ["Mayday", "Mental Disaster", "Cry For Fame"]), query)
+    assert [s.get("artist") for s in fake.searches()][-1] is None  # stopped at the free text, before "Various"
+    assert matches[0].release.id == 1815291 and matches[0].exact
+    assert not matches[1].exact
+    assert dl.confidence(matches) == dl.CONFIDENT
+    # The Swiss folk LP "Various - Switzerland" has the album name but none of the songs: never exact
+    folk = dl.parse_release(_release(8554332, title="Switzerland", artists=(("Various", ""),),
+                                     tracklist=[{"position": "1", "title": "Alpenrose"}]))
+    assert not dl.build_match(query, _facts(3, ["Mayday", "Mental Disaster", "Cry For Fame"]), folk).exact
 
 
 def test_a_compilation_is_judged_by_its_track_titles_not_the_series_name():
