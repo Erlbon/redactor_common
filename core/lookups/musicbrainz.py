@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import difflib
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote, urlencode
 
+from redactor_common.core.local_db import normalize_words
 from redactor_common.core.lookup_client import Throttle, fetch_bytes, fetch_json, make_default_fetch, throttled
 
 API_BASE = "https://musicbrainz.org/ws/2"
@@ -61,13 +63,29 @@ def configure(user_agent: str) -> None:
     _default_fetch = throttled(_raw_fetch, _throttle)
 
 
+# MusicBrainz answers 503 "currently busy" when overloaded (often, on 2026-11-25) and asks
+# clients to wait and try again: each request is retried after these pauses before it fails.
+RETRY_503 = (2.0, 5.0, 10.0)
+_sleep = time.sleep  # tests replace it
+
+
 def _get(path: str, fetch: Callable, **params) -> dict:
     params["fmt"] = "json"
     url = f"{API_BASE}/{path}?{urlencode(params, quote_via=quote)}"
     return fetch_json(
         url, fetch, error_cls=MusicBrainzError, source_name=_SOURCE_NAME,
         status_messages={503: "MusicBrainz is busy (rate limit) -- try again in a moment."},
+        retry_503=RETRY_503, sleep=lambda seconds: _sleep(seconds),
     ) or {}
+
+
+# What people tag a compilation's album artist with; Discogs says "Various", MusicBrainz "Various Artists".
+_VARIOUS_NAMES = {"various", "various artists", "va", "v a", "various artist"}
+
+
+def is_various(name: str) -> bool:
+    """"Various", "Various Artists", "VA", "V/A" -- a compilation's artist, not a real one."""
+    return normalize_words(name) in _VARIOUS_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +187,26 @@ def _lucene(text: str) -> str:
 
 
 def search_releases(query: AlbumQuery, fetch: Optional[Callable] = None, limit: int = 10) -> list[Release]:
-    """Release summaries (no track lists) for the album query; with an
-    artist first, then -- if that finds nothing -- by album alone."""
+    """Release summaries (no track lists) for the album query, from the
+    first search that finds anything: album + artist ("VA" searched as
+    "Various Artists"); for a compilation tagged with a series name as its
+    artist, the name + album as one title ("Bloodstains Across" +
+    "Switzerland") and the album under "Various Artists"; last the album
+    alone. The files' titles and lengths then decide (match_release)."""
     fetch = fetch or _default_fetch
     if not query.album:
         raise MusicBrainzError("needs an album name (Album tag or an 'Artist - Album' folder name)")
+    album, artist = query.album.strip(), query.artist.strip()
     searches = []
-    if query.artist:
-        searches.append(f"release:{_lucene(query.album)} AND artist:{_lucene(query.artist)}")
-    searches.append(f"release:{_lucene(query.album)}")
+    if artist:
+        searches.append(
+            f"release:{_lucene(album)} AND artist:{_lucene('Various Artists' if is_various(artist) else artist)}"
+        )
+    if artist and not is_various(artist):
+        if not normalize_words(album).startswith(normalize_words(artist)):
+            searches.append(f"release:{_lucene(f'{artist} {album}')}")
+        searches.append(f"release:{_lucene(album)} AND artist:{_lucene('Various Artists')}")
+    searches.append(f"release:{_lucene(album)}")
     for lucene in searches:
         data = _get("release", fetch, query=lucene, limit=limit)
         releases = [

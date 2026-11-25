@@ -50,7 +50,7 @@ from redactor_common.core.lookup_client import (
     Throttle, build_request, fetch_bytes, fetch_json, make_default_fetch, redact_text,
 )
 
-from redactor_common.core.lookups.musicbrainz import FileFacts, album_query
+from redactor_common.core.lookups.musicbrainz import FileFacts, album_query, is_various  # noqa: F401 -- is_various re-exported
 
 API_BASE = "https://api.discogs.com"
 USER_AGENT = "redactor_common +https://github.com/Erlbon/redactor_common"  # replaced by the app's configure()
@@ -315,15 +315,6 @@ def _split_title(title: str) -> tuple[str, str]:
     """Discogs search titles read "Artist - Album"."""
     artist, sep, album = title.partition(" - ")
     return (clean_artist_name(artist), album.strip()) if sep else ("", title.strip())
-
-
-# What people tag a compilation's album artist with; Discogs itself says "Various".
-_VARIOUS_NAMES = {"various", "various artists", "va", "v a", "various artist"}
-
-
-def is_various(name: str) -> bool:
-    """"Various", "Various Artists", "VA", "V/A" -- a compilation's artist, not a real one."""
-    return normalize_words(name) in _VARIOUS_NAMES
 
 
 def _artist_key(name: str) -> str:

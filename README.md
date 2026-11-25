@@ -56,7 +56,10 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-25#04` (Discogs finds compilations whose album artist is a series name or a band, such as
+Currently: `2026-11-25#05` (MusicBrainz: a 503 "currently busy" answer is retried after 2, 5 and 10 seconds instead of
+failing the lookup (`fetch_json(retry_503=)`); the search also tries album artist + album as one title ("Bloodstains
+Across" + "Switzerland", where the album alone finds 371 other "Switzerland"s) and the album under "Various Artists";
+"VA" is searched as "Various Artists"; `is_various()` now lives in `lookups/musicbrainz.py`). `2026-11-25#04`: Discogs finds compilations whose album artist is a series name or a band, such as
 "Bloodstains Across": after artist + title it searches the free text, then the title under "Various", then the
 title alone; "VA" / "V/A" / "Various Artists" are one artist; a Various release looked for under another name is
 exact when the files' titles are its tracks' titles, and its album may be that name + the Album tag

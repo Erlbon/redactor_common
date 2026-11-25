@@ -176,6 +176,16 @@ def test_retry_only_for_429():
     assert state["calls"] == 1
 
 
+def test_retry_503_succeeds_after_its_own_pauses_and_leaves_429_alone():
+    fetch, state = _flaky(2, code=503)
+    slept = []
+    data = fetch_json("https://x/", fetch, _SourceError, retry_503=(2.0, 5.0), sleep=slept.append)
+    assert data == {"ok": True} and slept == [2.0, 5.0] and state["calls"] == 3
+    fetch, state = _flaky(1, code=429)
+    with pytest.raises(_SourceError, match="HTTP 429"):
+        fetch_json("https://x/", fetch, _SourceError, retry_503=(2.0,), sleep=lambda s: pytest.fail("slept"))
+
+
 def test_fetch_bytes_retry_429():
     fetch, _ = _flaky(1, body=b"\xff\xd8")
     slept = []

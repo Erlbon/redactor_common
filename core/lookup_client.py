@@ -285,17 +285,19 @@ def build_request(
 
 
 def _fetch_with_retry(url: RequestLike, fetch: FetchFn, retry_429: Sequence[float],
-                      sleep: Callable[[float], None]) -> bytes:
+                      sleep: Callable[[float], None], retry_503: Sequence[float] = ()) -> bytes:
     """fetch(url), retrying an HTTP 429 once after each delay in
-    `retry_429`; the last 429 (or any other error) propagates unchanged.
-    A 429 is usually a short-lived limit, not a real failure."""
-    remaining = list(retry_429 or ())
+    `retry_429` (and a 503 after each in `retry_503`); the last one (or
+    any other error) propagates unchanged. A 429 is usually a short-lived
+    limit, not a real failure; so is MusicBrainz's 503 "busy"."""
+    remaining = {429: list(retry_429 or ()), 503: list(retry_503 or ())}
     while True:
         try:
             return fetch(url)
         except urllib.error.HTTPError as exc:
-            if exc.code == 429 and remaining:
-                sleep(remaining.pop(0))
+            delays = remaining.get(exc.code)
+            if delays:
+                sleep(delays.pop(0))
                 continue
             raise
 
@@ -328,6 +330,7 @@ def fetch_json(
     sleep: Callable[[float], None] = time.sleep,
     secrets: Iterable[str] = (),
     unreachable_message: str | None = None,
+    retry_503: Sequence[float] = (),
 ) -> Optional[dict]:
     """Runs one GET via `fetch`, parses the JSON body, and translates
     every way that can fail into `error_cls` with a friendly message --
@@ -360,6 +363,8 @@ def fetch_json(
     `retry_429`: delays in seconds, e.g. (1.0, 2.0): an HTTP 429 is
     retried after each one in turn before it counts as an error. Default
     () retries nothing. `sleep` is injectable for tests.
+    `retry_503`: the same for an HTTP 503 -- MusicBrainz answers 503 when
+    it is busy and asks clients to wait and try again (2026-11-25).
 
     `secrets`: values (a token, a password) to replace with *** in any
     message. URL query strings are always redacted from messages.
@@ -369,7 +374,7 @@ def fetch_json(
     (check your internet connection)". Default: "Could not reach <source_name>: <detail>".
     """
     try:
-        raw = _fetch_with_retry(url, fetch, retry_429, sleep)
+        raw = _fetch_with_retry(url, fetch, retry_429, sleep, retry_503)
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and ignore_404:
             return None

@@ -113,6 +113,83 @@ def test_search_falls_back_to_album_only():
     assert [r.id for r in mb.search_releases(mb.AlbumQuery("Wrong Artist", "Ring of Fire"), fake)] == ["za"]
 
 
+class _Searches(FakeMusicBrainz):
+    """Answers a search only when its Lucene query is the one given; records every query."""
+
+    def __init__(self, releases, answer_to):
+        super().__init__(releases)
+        self.answer_to = answer_to
+
+    def __call__(self, url):
+        url_text = unquote(getattr(url, "full_url", url))
+        if "/ws/2/release?" in url_text and f"query={self.answer_to}&" not in url_text:
+            self.urls.append(url_text)
+            return json.dumps({"releases": []}).encode()
+        return super().__call__(url)
+
+    def queries(self):
+        return [u.split("query=", 1)[1].split("&", 1)[0] for u in self.urls if "query=" in u]
+
+
+def test_a_series_name_split_over_album_artist_and_album_is_searched_as_one_title():
+    """"Bloodstains Across Switzerland" (2026-11-25): album artist "Bloodstains Across",
+    album "  Switzerland". The album alone finds 371 releases called "Switzerland"
+    (Electric Six first); the name + album as one title finds the compilation."""
+    fake = _Searches([_release_json("ch", "Bloodstains Across Switzerland", "XE", RING_OF_FIRE)],
+                     'release:"Bloodstains Across Switzerland"')
+    query = mb.album_query(["  Switzerland"], ["Bloodstains Across"], Path("x"))
+    assert [r.id for r in mb.search_releases(query, fake)] == ["ch"]
+    assert fake.queries() == [
+        'release:"Switzerland" AND artist:"Bloodstains Across"',
+        'release:"Bloodstains Across Switzerland"',
+    ]
+
+
+def test_search_order_when_nothing_is_found():
+    fake = _Searches([], "nothing")
+    assert mb.search_releases(mb.AlbumQuery("Bloodstains Across", "Bloodstains Across Norway"), fake) == []
+    # the album already starts with the artist name: no "name + album" search
+    assert fake.queries() == [
+        'release:"Bloodstains Across Norway" AND artist:"Bloodstains Across"',
+        'release:"Bloodstains Across Norway" AND artist:"Various Artists"',
+        'release:"Bloodstains Across Norway"',
+    ]
+
+
+@pytest.mark.parametrize("tagged", ["VA", "V/A", "Various", "Various Artists"])
+def test_a_various_artists_tag_is_searched_as_various_artists(tagged):
+    fake = _Searches([], "nothing")
+    mb.search_releases(mb.AlbumQuery(tagged, "Bloodstains Across Norway"), fake)
+    assert fake.queries() == [
+        'release:"Bloodstains Across Norway" AND artist:"Various Artists"',
+        'release:"Bloodstains Across Norway"',
+    ]
+
+
+def test_a_busy_503_is_retried_after_a_pause(monkeypatch):
+    import urllib.error
+    slept = []
+    monkeypatch.setattr(mb, "_sleep", slept.append)
+    calls = []
+
+    def busy_twice(url):
+        calls.append(url)
+        if len(calls) <= 2:
+            raise urllib.error.HTTPError("https://musicbrainz.org/ws/2/x", 503, "Service Temporarily Unavailable", {}, None)
+        return b'{"id": "abc", "title": "T"}'
+
+    assert mb.fetch_release("abc", busy_twice).title == "T"
+    assert slept == list(mb.RETRY_503[:2])
+
+    def always_busy(url):
+        raise urllib.error.HTTPError("https://musicbrainz.org/ws/2/x", 503, "Service Temporarily Unavailable", {}, None)
+
+    slept.clear()
+    with pytest.raises(mb.MusicBrainzError, match="busy"):
+        mb.fetch_release("abc", always_busy)
+    assert slept == list(mb.RETRY_503)
+
+
 def test_find_album_by_recordings_fetches_and_ranks_the_given_releases():
     fake = FakeMusicBrainz([_release_json("za", "Ring of Fire", "ZA", RING_OF_FIRE)])
     matches = mb.find_album_by_recordings(_files(), ["za"], fake)
