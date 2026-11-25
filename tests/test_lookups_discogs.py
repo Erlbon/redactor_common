@@ -620,3 +620,41 @@ def test_unconfigured_the_token_comes_only_from_the_environment(monkeypatch):
     assert dl.load_token() == ""
     monkeypatch.setenv("DISCOGS_TOKEN", " env-token ")
     assert dl.load_token() == "env-token"
+
+
+# ---------------------------------------------------------------------------
+# A pasted link (2026-11-25)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, expected", [
+    ("https://www.discogs.com/release/1234567-Miles-Davis-Kind-Of-Blue", ("release", 1234567)),
+    ("https://www.discogs.com/de/release/42-Some-Title?foo=1", ("release", 42)),
+    ("http://discogs.com/Miles-Davis-Kind-Of-Blue/release/99", ("release", 99)),
+    ("https://www.discogs.com/master/5460-Miles-Davis-Kind-Of-Blue", ("master", 5460)),
+    ("  1234  ", ("release", 1234)),
+    ("[r77]", ("release", 77)),
+    ("m88", ("master", 88)),
+    ("https://www.discogs.com/artist/23755-Miles-Davis", None),
+    ("Kind of Blue", None),
+    ("", None),
+])
+def test_parse_discogs_link(text, expected):
+    assert dl.parse_discogs_link(text) == expected
+
+
+class _FakeWithMaster(FakeDiscogs):
+    def __call__(self, request):
+        if "/masters/" in request.full_url:
+            self.requests.append(request)
+            return json.dumps({"id": 5460, "main_release": 2}).encode()
+        return super().__call__(request)
+
+
+def test_release_from_link_fetches_the_release_or_a_masters_main_release():
+    fake = _FakeWithMaster(releases={1: _release(1), 2: _release(2, year=1997)})
+    client = _client(fake)
+    assert dl.release_from_link(client, "https://www.discogs.com/release/1-Kind-Of-Blue").id == 1
+    assert dl.release_from_link(client, "https://www.discogs.com/master/5460").id == 2
+    assert not any("/database/search" in r.full_url for r in fake.requests)  # no search at all
+    with pytest.raises(dl.DiscogsError, match="Not a Discogs release"):
+        dl.release_from_link(client, "Kind of Blue")

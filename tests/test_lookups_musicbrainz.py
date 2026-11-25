@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from urllib.parse import unquote
 
+import pytest
+
 from redactor_common.core.lookup_client import Throttle
 from redactor_common.core.lookups import musicbrainz as mb
 
@@ -152,3 +154,27 @@ def test_configure_sets_the_user_agent_and_keeps_the_one_pace(monkeypatch):
     mb.configure("testredactor/1.0 ( https://example.invalid )")
     assert mb.USER_AGENT == "testredactor/1.0 ( https://example.invalid )"
     assert mb._throttle is throttle
+
+
+# A pasted link (2026-11-25)
+MBID = "5c2b4e7a-1f3d-4a8e-9c0b-1234567890ab"
+
+
+def test_parse_musicbrainz_link():
+    assert mb.parse_musicbrainz_link(f"https://musicbrainz.org/release/{MBID}") == ("release", MBID)
+    assert mb.parse_musicbrainz_link(f"https://musicbrainz.org/release/{MBID.upper()}/discids") == ("release", MBID)
+    assert mb.parse_musicbrainz_link(f"https://beta.musicbrainz.org/release-group/{MBID}") == ("release-group", MBID)
+    assert mb.parse_musicbrainz_link(f" {MBID} ") == ("release", MBID)
+    assert mb.parse_musicbrainz_link(f"https://musicbrainz.org/artist/{MBID}") is None
+    assert mb.parse_musicbrainz_link("Ring of Fire") is None
+
+
+def test_release_ids_from_link_lists_a_release_groups_releases():
+    fake = FakeMusicBrainz([_release_json("za", "Ring of Fire", "ZA", RING_OF_FIRE),
+                            _release_json("xe", "Ring of Fire", "XE", RING_OF_FIRE)])
+    assert mb.release_ids_from_link(f"https://musicbrainz.org/release/{MBID}", fake) == [MBID]
+    assert fake.urls == []  # a release link needs no request
+    assert mb.release_ids_from_link(f"https://musicbrainz.org/release-group/{MBID}", fake) == ["za", "xe"]
+    assert f"release-group={MBID}" in fake.urls[0]
+    with pytest.raises(mb.MusicBrainzError, match="Not a MusicBrainz"):
+        mb.release_ids_from_link("Ring of Fire", fake)

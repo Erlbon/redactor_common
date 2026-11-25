@@ -69,6 +69,13 @@ _MONTH_NAME_ALTERNATION = "|".join(sorted(MONTH_NAMES, key=len, reverse=True))
 MONTH_FIELD_PATTERN = rf"(?i:(?:\d{{1,2}}|{_MONTH_NAME_ALTERNATION})\.?)"
 
 _TOKEN_RE = re.compile(r"%(\w+)%")
+
+# %dummy% (2026-11-25): matches any text and throws it away -- for the
+# superfluous parts of a name ("%track% - %dummy% - %title% [%dummy%]").
+# It may appear any number of times in one pattern and is never returned.
+DUMMY_FIELD = "dummy"
+DUMMY_REGEX = "(?:.+?)"
+DUMMY_PLACEHOLDER = (DUMMY_FIELD, "Dummy (skipped text, may repeat)")
 _OPTIONAL_GROUP_RE = re.compile(r"\[([^\[\]]*)\]|\(([^()]*)\)|\{([^{}]*)\}")
 # The separator run right after an optional group's closing character,
 # folded into the same optional group (see build_parser_regex()).
@@ -188,7 +195,9 @@ def build_parser_regex(
             if literal:
                 parts.append(_flexible_literal_regex(literal, whitespace_optional))
             field = m.group(1)
-            if field in valid_field_keys and field not in seen_fields:
+            if field.lower() == DUMMY_FIELD:
+                parts.append(DUMMY_REGEX)  # skipped text: no group, so it may repeat
+            elif field in valid_field_keys and field not in seen_fields:
                 fragment = _field_regex(field, numeric_fields, isbn_like_fields, field_patterns)
                 parts.append(f"(?P<{field}>{fragment})")
                 seen_fields.add(field)

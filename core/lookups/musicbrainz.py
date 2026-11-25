@@ -343,6 +343,42 @@ def fields_for(release: Release, track: ReleaseTrack) -> dict[str, str]:
     return {k: v for k, v in fields.items() if v}
 
 
+# A pasted link (2026-11-25): https://musicbrainz.org/release/<id>, a
+# release group's /release-group/<id>, or a bare release id.
+_MBID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_LINK_RE = re.compile(rf"musicbrainz\.org/(?:[^?#]*/)?(release|release-group)/({_MBID})", re.IGNORECASE)
+_BARE_RE = re.compile(rf"^{_MBID}$", re.IGNORECASE)
+
+
+def parse_musicbrainz_link(text: str) -> Optional[tuple[str, str]]:
+    """("release" | "release-group", id) from a pasted MusicBrainz link or a
+    bare release id, else None."""
+    text = (text or "").strip()
+    if _BARE_RE.match(text):
+        return "release", text.lower()
+    found = _LINK_RE.search(text)
+    if found:
+        return found.group(1).lower(), found.group(2).lower()
+    return None
+
+
+def release_ids_from_link(text: str, fetch: Optional[Callable] = None, limit: int = 8) -> list[str]:
+    """The release id a pasted link names; for a release group, up to `limit`
+    of its releases (one request) so the caller can match each and keep the
+    best. Raises MusicBrainzError for text that is no release or group link."""
+    parsed = parse_musicbrainz_link(text)
+    if parsed is None:
+        raise MusicBrainzError(f"Not a MusicBrainz release or release group link: {text.strip()}")
+    kind, mbid = parsed
+    if kind == "release":
+        return [mbid]
+    data = _get("release", fetch or _default_fetch, **{"release-group": mbid, "limit": limit})
+    ids = [r["id"] for r in data.get("releases", []) if r.get("id")]
+    if not ids:
+        raise MusicBrainzError(f"MusicBrainz release group {mbid} has no releases.")
+    return ids
+
+
 def find_album_by_recordings(
     files: list[FileFacts], release_ids: list[str], fetch: Optional[Callable] = None,
 ) -> list[ReleaseMatch]:

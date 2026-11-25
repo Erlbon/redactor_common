@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from redactor_common.core.filename_parser import (
-    best_matching_pattern, normalize_field_value, parse_filename,
+    DUMMY_FIELD, DUMMY_PLACEHOLDER, best_matching_pattern, normalize_field_value, parse_filename,
 )
 from redactor_common.core.path_parser import (
     HIGH_CONFIDENCE, PathParseResult, folder_value_counts, is_path_pattern,
@@ -166,6 +166,9 @@ class ParseFilenameDialog(OwnedDialog):
         self.pattern_edit.textChanged.connect(self._refresh_preview)
         pattern_row.addWidget(self.pattern_edit, 1)
 
+        # %dummy% is always offered: it skips text and may repeat (core/filename_parser.py).
+        if all(key != DUMMY_FIELD for key, _label in placeholders):
+            placeholders = list(placeholders) + [DUMMY_PLACEHOLDER]
         self._panel = PatternFieldPanel(self.pattern_edit, placeholders, pattern_history, parent=self)
         pattern_row.addWidget(self._panel.recent_button)
         layout.addLayout(pattern_row)

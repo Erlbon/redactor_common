@@ -544,6 +544,42 @@ def fetch_release(client: DiscogsClient, release_id: int, cache: Optional[dict] 
     return release
 
 
+# A pasted link (2026-11-25): https://www.discogs.com/release/1234-Artist-Album,
+# /de/release/1234, the old /Artist-Album/release/1234, a master's /master/567,
+# Discogs' own "[r1234]" / "[m567]" shorthand, or a bare release number.
+_LINK_RE = re.compile(r"discogs\.com/(?:[^?#]*/)?(release|master)s?/(\d+)", re.IGNORECASE)
+_SHORT_RE = re.compile(r"^\[?([rm])(\d+)\]?$", re.IGNORECASE)
+
+
+def parse_discogs_link(text: str) -> Optional[tuple[str, int]]:
+    """("release" | "master", id) from a pasted Discogs link or id, else None."""
+    text = (text or "").strip()
+    if text.isdigit():
+        return "release", int(text)
+    found = _LINK_RE.search(text)
+    if found:
+        return found.group(1).lower(), int(found.group(2))
+    short = _SHORT_RE.match(text)
+    if short:
+        return ("release" if short.group(1).lower() == "r" else "master"), int(short.group(2))
+    return None
+
+
+def release_from_link(client: DiscogsClient, text: str, cache: Optional[dict] = None) -> DiscogsRelease:
+    """The release a pasted link names; a master link gives its main release.
+    Raises DiscogsError for text that is no Discogs release or master link."""
+    parsed = parse_discogs_link(text)
+    if parsed is None:
+        raise DiscogsError(f"Not a Discogs release or master link: {text.strip()}")
+    kind, number = parsed
+    if kind == "master":
+        main = client.get_json(f"masters/{number}").get("main_release")
+        if not main:
+            raise DiscogsError(f"Discogs master {number} has no main release.")
+        number = int(main)
+    return fetch_release(client, number, cache)
+
+
 def fetch_cover(client: DiscogsClient, release: DiscogsRelease) -> Optional[bytes]:
     """The release's main image (size-capped), or None. Only called where a
     cover is actually wanted -- never as part of a plain search."""

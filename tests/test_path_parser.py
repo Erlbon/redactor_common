@@ -235,3 +235,29 @@ def test_dialog_low_confidence_rows_start_unticked(qapp):
     d2 = _dialog(qapp, ["A/B/%author%/%title%"], paths=["C:/Lib/Ann/Book.epub"])
     assert d2.parse_results()[0].confidence < 0.5
     assert d2.accepted_changes() == {}
+
+
+# %dummy% (2026-11-25): skipped text, may repeat, never returned
+
+def test_dummy_skips_text_and_may_repeat():
+    keys = {"track", "title", "artist"}
+    parsed = filename_parser.parse_filename(
+        "03 - www.site.example - Big River [320kbps] {rip}", "%track% - %dummy% - %title% [%dummy%] {%dummy%}",
+        keys, numeric_fields={"track"},
+    )
+    assert parsed == {"track": "03", "title": "Big River"}
+
+
+def test_dummy_alone_extracts_nothing_and_counts_as_no_match():
+    assert filename_parser.parse_filename("anything", "%dummy%", {"title"}) == {}
+    assert filename_parser.count_matching_filenames(["anything"], "%dummy%", {"title"}) == 0
+
+
+def test_dummy_works_in_a_folder_segment(tmp_path):
+    folder = tmp_path / "Queen" / "1978 - Jazz (Remaster)"
+    path = str(folder / "03 Fat Bottomed Girls.mp3")
+    result = parse_path_detailed(
+        path, "%artist%/%dummy% - %album% (%dummy%)/%track% %title%", str(tmp_path),
+        {"artist", "album", "track", "title"}, numeric_fields={"track"},
+    )
+    assert result.values == {"artist": "Queen", "album": "Jazz", "track": "03", "title": "Fat Bottomed Girls"}
