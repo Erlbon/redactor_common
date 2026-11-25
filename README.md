@@ -56,7 +56,8 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-21#02`.
+Currently: `2026-11-25#01` (the Parse dialog can parse a tag field, not just the filename: `source_fields` +
+`get_field_text`).
 
 ## Self-update: the update framework (`docs/update-framework.md`)
 
@@ -246,7 +247,7 @@ past exactly that on 2026-09-23.
 | `auto_numbering_dialog.py` | Generalized Auto-Numbering dialog (field picker + start/increment/zero-pad/separator + preview), built on `preview_table.py` | video, generalized (epub's "Number Series" is a narrower, single-field version of the same idea and is unaffected; mp3/cbz had neither) |
 | `quick_series_number.py` | `prompt_and_generate_series_numbers()` — the one-prompt "starting value, +1 per row" quick numbering for a table right-click menu, no field picker/preview (that's what `auto_numbering_dialog.py` is for) | epub, generalized (its `quick_number_series()` right-click handler) |
 | `pattern_field_panel.py` | The ▼ recent-patterns menu + always-visible recent list + clickable placeholder-code side panel (epub v51/v54 UX) |
-| `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above |
+| `rename_pattern_dialog.py`, `parse_filename_dialog.py` | Generalized Rename/Export and Parse-Filename dialogs built on the above. Parse can also read a tag field (a "Parse from" dropdown, offered when the app passes `source_fields` + `get_field_text`; `source_key()` says which was used), like mp3tag's "Guess values" |
 | `move_runner.py` | `run_planned_moves(parent, planned, copy, rename_log, label)` — executes the Rename dialog's "Move into folders" plan under a cancellable progress dialog (per-file error isolation, `summarize_errors`), records one `RenameLog` batch (so Undo Last Rename restores the moves and offers to remove the folders the move created), then asks once whether to remove the now-empty source folders | 2026-09-30 |
 | `rename_single_file.py` | `rename_single_file()` — quick, direct rename of one file (QInputDialog prompt, current stem pre-filled, extension kept automatically), for fixing a typo without the batch pattern tool above; wraps `core/rename_pattern.py`'s already-generic `rename_file_on_disk()` | mp3, generalized off its own copy — itself independently re-derived from epub's original, which now uses this too (2026-09-23) |
 | `sortable_table.py` | `NumericTableWidgetItem` (compares numerically when it can — an optional explicit `sort_value` covers a suffixed display like "128.5 LUFS"/"44100 Hz" whose text alone isn't a bare number — falling back to normal text comparison otherwise) + `suspend_sorting(table)` (a context manager disabling `setSortingEnabled()` for a bulk `setItem()` populate loop, restoring whatever state was in effect before — REQUIRED around one, since Qt re-sorts as items land and can relocate an earlier row's items before a later row is even written) | epub, generalized off nine hand-written copies of the same `was_sorting = table.isSortingEnabled(); ...` block at each of its own bulk-repopulate call sites. Only safe to pair with `Qt.UserRole`-based row→item mapping, NOT list-index-based mapping — see cbzredactor's own deliberate non-native sort implementation, which exists specifically because native sort doesn't fit its architecture |

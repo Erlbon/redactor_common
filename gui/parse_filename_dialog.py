@@ -18,6 +18,11 @@ dialog then shows a Library Root row (remembered through
 `on_library_root_changed`, exactly as RenamePatternDialog does) and adds
 Confidence and Matched-segments columns. Patterns without a separator
 behave exactly as before. accepted_changes() is unchanged either way.
+
+SOURCE (2026-11-25): with `source_fields` + `get_field_text`, a "Parse
+from" dropdown lets the pattern read a tag field instead of the
+filename -- e.g. a Title of "Artist - Song" with %artist% - %title%.
+Path mode is off for a field source (a "/" in a title is no folder).
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ import os
 from typing import Callable, TypeVar
 
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -65,6 +70,9 @@ class ParseFilenameDialog(OwnedDialog):
         parent=None,
         library_root: str = "",
         on_library_root_changed: Callable[[str], None] | None = None,
+        source_fields: list[tuple[str, str]] | None = None,  # (field_key, label) offered besides the filename
+        get_field_text: Callable[[T, str], str] | None = None,
+        initial_source: str = "",
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -79,7 +87,14 @@ class ParseFilenameDialog(OwnedDialog):
         # core/filename_parser.py) -- e.g. epub's series-index ranges
         # and month names.
         self._parse_kwargs = {"field_patterns": field_patterns, "normalizers": normalizers}
-        self._stems = [os.path.splitext(os.path.basename(get_current_path(item)))[0] for item in items]
+        self._filename_stems = [os.path.splitext(os.path.basename(get_current_path(item)))[0] for item in items]
+        self._stems = self._filename_stems
+        # Source (2026-11-25): parse a tag field instead of the filename, like mp3tag's
+        # "Guess values" (e.g. Title "Artist - Song" -> %artist% - %title%). Only offered
+        # when the caller passes source_fields + get_field_text; "" means the filename.
+        self._source_fields = list(source_fields or []) if get_field_text is not None else []
+        self._get_field_text = get_field_text
+        self._source = initial_source if initial_source in {k for k, _l in self._source_fields} else ""
         self._checkboxes: dict[int, QCheckBox] = {}
         self._parsed: dict[int, dict[str, str]] = {}
         # Path mode (pattern contains a separator): see core/path_parser.py.
@@ -90,7 +105,25 @@ class ParseFilenameDialog(OwnedDialog):
         self._path_mode = False
 
         self._item_noun = item_noun
+        self._stems = self._source_texts()
         self._build_ui(placeholders, pattern_history, default_pattern, item_noun)
+        self._refresh_preview()
+
+    def _source_texts(self) -> list[str]:
+        if not self._source:
+            return self._filename_stems
+        return [(self._get_field_text(item, self._source) or "").strip() for item in self.items]
+
+    def _source_label(self) -> str:
+        return dict(self._source_fields).get(self._source, "Filename")
+
+    def source_key(self) -> str:
+        """The field the pattern was parsed from; "" for the filename."""
+        return self._source
+
+    def _on_source_changed(self) -> None:
+        self._source = self.source_combo.currentData() or ""
+        self._stems = self._source_texts()
         self._refresh_preview()
 
     def _build_ui(self, placeholders, pattern_history, default_pattern, item_noun) -> None:
@@ -102,6 +135,23 @@ class ParseFilenameDialog(OwnedDialog):
             f"Applies to {len(self.items)} {item_noun}(s). Only fields present in the pattern "
             "are extracted and offered; everything else is left untouched."
         ))
+
+        self.source_combo = QComboBox()
+        if self._source_fields:
+            source_row = QHBoxLayout()
+            source_row.addWidget(QLabel("Parse from:"))
+            self.source_combo.addItem("Filename", "")
+            for key, label in self._source_fields:
+                self.source_combo.addItem(label, key)
+            self.source_combo.setCurrentIndex(max(0, self.source_combo.findData(self._source)))
+            self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+            self.source_combo.setToolTip(
+                "Filename, or a field whose text holds several values (e.g. a Title like "
+                "\"Artist - Song\" parsed with %artist% - %title%)"
+            )
+            source_row.addWidget(self.source_combo)
+            source_row.addStretch(1)
+            layout.addLayout(source_row)
 
         pattern_row = QHBoxLayout()
         pattern_row.addWidget(QLabel("Pattern:"))
@@ -225,19 +275,23 @@ class ParseFilenameDialog(OwnedDialog):
 
     def _refresh_preview(self) -> None:
         pattern = self.pattern_edit.text()
-        self._path_mode = is_path_pattern(pattern)
+        # A field's text has no folders: path mode is for the filename source only.
+        self._path_mode = is_path_pattern(pattern) and not self._source
         self._root_row.setVisible(self._path_mode)
         if self._path_mode:
             self._refresh_path_preview(pattern)
             return
         self._results = {}
         self.preview_table.setColumnCount(3)
-        self.preview_table.setHorizontalHeaderLabels([self._item_noun.capitalize(), "Extracted fields", "Apply"])
+        first_header = self._source_label() if self._source else self._item_noun.capitalize()
+        self.preview_table.setHorizontalHeaderLabels([first_header, "Extracted fields", "Apply"])
         self._checkboxes = {}
         self._parsed = {}
         rows: list[tuple[int, str, dict[str, str]]] = []
 
         for i, stem in enumerate(self._stems):
+            if not stem:
+                continue  # an empty field has nothing to parse
             parsed = parse_filename(
                 stem, pattern, self._valid_field_keys, self._numeric_fields,
                 self._isbn_like_fields, self._strip_leading_zeros_fields,
@@ -260,12 +314,13 @@ class ParseFilenameDialog(OwnedDialog):
 
         self.preview_table.resizeColumnsToContents()
 
-        if pattern == getattr(self, "_auto_detected_pattern", None):
+        noun = f"{self._source_label()} value(s)" if self._source else "filename(s)"
+        if pattern == getattr(self, "_auto_detected_pattern", None) and not self._source:
             self.status_label.setText(
-                f"{len(rows)} of {len(self.items)} filename(s) match. Auto-detected from your pattern history."
+                f"{len(rows)} of {len(self.items)} {noun} match. Auto-detected from your pattern history."
             )
         else:
-            self.status_label.setText(f"{len(rows)} of {len(self.items)} filename(s) match this pattern.")
+            self.status_label.setText(f"{len(rows)} of {len(self.items)} {noun} match this pattern.")
         self._ok_button.setEnabled(any(cb.isChecked() for cb in self._checkboxes.values()))
 
     def _refresh_path_preview(self, pattern: str) -> None:

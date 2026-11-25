@@ -337,6 +337,48 @@ def test_parse_filename_dialog_uses_field_patterns_and_normalizers():
     assert changes[1]["month"] == "3"
 
 
+def test_parse_dialog_can_parse_a_field_instead_of_the_filename():
+    from redactor_common.gui.parse_filename_dialog import ParseFilenameDialog
+
+    items = [
+        {"path": "01.mp3", "title": "Johnny Cash - Big River"},
+        {"path": "02.mp3", "title": "No separator here"},
+        {"path": "03.mp3", "title": ""},
+    ]
+    dialog = ParseFilenameDialog(
+        items, [("artist", "Artist"), ("title", "Title")], lambda item: item["path"],
+        pattern_history=["%artist% - %title%"], default_pattern="%title%",
+        valid_field_keys={"artist", "title"},
+        source_fields=[("title", "Title"), ("artist", "Artist")],
+        get_field_text=lambda item, key: item[key] if key in item else "",
+    )
+    assert dialog.source_key() == "" and dialog.accepted_changes() == {}  # filenames "01" etc. don't match
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("title"))
+    assert dialog.source_key() == "title"
+    assert dialog.accepted_changes() == {0: {"artist": "Johnny Cash", "title": "Big River"}}
+    assert dialog.preview_table.horizontalHeaderItem(0).text() == "Title"
+
+    dialog.pattern_edit.setText("%artist%/%title%")  # a "/" is no folder in a field's text
+    assert not dialog.is_path_mode()
+
+
+def test_parse_dialog_starts_on_a_remembered_source_and_hides_it_when_not_offered():
+    from redactor_common.gui.parse_filename_dialog import ParseFilenameDialog
+
+    items = [{"path": "x.mp3", "title": "A - B"}]
+    common = dict(pattern_history=["%artist% - %title%"], default_pattern="%title%",
+                  valid_field_keys={"artist", "title"})
+    dialog = ParseFilenameDialog(
+        items, [("artist", "Artist"), ("title", "Title")], lambda item: item["path"],
+        source_fields=[("title", "Title")], get_field_text=lambda item, key: item[key],
+        initial_source="title", **common,
+    )
+    assert dialog.accepted_changes() == {0: {"artist": "A", "title": "B"}}
+    plain = ParseFilenameDialog(items, [("title", "Title")], lambda item: item["path"], **common)
+    assert plain.source_combo.count() == 0 and plain.source_key() == ""
+
+
 def test_rename_pattern_dialog_plans_unique_paths(tmp_path):
     from redactor_common.gui.rename_pattern_dialog import RenamePatternDialog
 
