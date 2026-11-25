@@ -317,6 +317,19 @@ def _split_title(title: str) -> tuple[str, str]:
     return (clean_artist_name(artist), album.strip()) if sep else ("", title.strip())
 
 
+# What people tag a compilation's album artist with; Discogs itself says "Various".
+_VARIOUS_NAMES = {"various", "various artists", "va", "v a", "various artist"}
+
+
+def is_various(name: str) -> bool:
+    """"Various", "Various Artists", "VA", "V/A" -- a compilation's artist, not a real one."""
+    return normalize_words(name) in _VARIOUS_NAMES
+
+
+def _artist_key(name: str) -> str:
+    return "various artists" if is_various(name) else name
+
+
 def _similar(a: str, b: str) -> Optional[float]:
     a, b = normalize_words(a), normalize_words(b)
     if not a or not b:
@@ -338,16 +351,34 @@ def _count_score(wanted: Optional[int], found: Optional[int]) -> Optional[float]
     return 1.0 if gap == 0 else 0.7 if gap == 1 else 0.4 if gap <= 3 else 0.1
 
 
+def _compilation_for_band(query_artist: str, release_artist: str) -> bool:
+    """A Various Artists release looked for under some other artist name: a
+    compilation whose files carry a series name ("Bloodstains Across") or a
+    band as album artist. That name says nothing about the release."""
+    return is_various(release_artist) and bool(query_artist.strip()) and not is_various(query_artist)
+
+
+def _artist_score(query_artist: str, release_artist: str, title_agreement: Optional[float]) -> Optional[float]:
+    if _compilation_for_band(query_artist, release_artist):
+        return title_agreement  # the files' own track titles judge it instead (None before the track list is known)
+    return _similar(_artist_key(query_artist), _artist_key(release_artist))
+
+
 def score_candidate(
     query: DiscogsQuery, artist: str, album: str, year: str = "",
     track_count: Optional[int] = None, file_count: Optional[int] = None,
+    title_agreement: Optional[float] = None,
 ) -> float:
     """0..1: how well a release fits the query -- normalised artist and album
     (weight .4 each), year closeness (.1) and, once the track list is known,
     how close its track count is to the folder's (.1). A part the query or
-    the release can't supply is left out rather than counted against it."""
+    the release can't supply is left out rather than counted against it.
+    "VA", "Various" and "Various Artists" are one artist. A Various Artists
+    release looked for under another artist name (a compilation tagged with
+    its series name) has its artist part judged by `title_agreement`: how many
+    of the files' titles its tracks share (see title_agreement())."""
     weighted = [
-        (_similar(query.artist, artist), 0.4),
+        (_artist_score(query.artist, artist, title_agreement), 0.4),
         (_similar(query.album, album), 0.4),
         (_year_score(query.year, year), 0.1),
         (_count_score(file_count, track_count), 0.1),
@@ -359,19 +390,30 @@ def score_candidate(
 
 
 def _search_attempts(query: DiscogsQuery, limit: int) -> list[dict]:
+    """Artist + title (+ year), then without the year; a compilation is
+    listed under "Various" whatever its files' album artist says, so next
+    title + "Various" (as Mp3tag's Discogs source does), then the free text,
+    and last the title alone. Repeats are left out."""
     base = {"type": "release", "per_page": limit}
     attempts = []
     if query.album:
-        exact = dict(base, release_title=query.album)
+        title_only = dict(base, release_title=query.album)
+        exact = dict(title_only)
         if query.artist:
-            exact["artist"] = query.artist
+            exact["artist"] = "Various" if is_various(query.artist) else query.artist
         if query.year:
             attempts.append(dict(exact, year=query.year))
         attempts.append(exact)
+        attempts.append(dict(title_only, artist="Various"))
         attempts.append(dict(base, q=f"{query.artist} {query.album}".strip()))
+        attempts.append(title_only)
     else:
         attempts.append(dict(base, artist=query.artist, track=query.track))
-    return attempts
+    unique = []
+    for params in attempts:
+        if params not in unique:
+            unique.append(params)
+    return unique
 
 
 def parse_candidates(data: dict, query: DiscogsQuery) -> list[Candidate]:
@@ -394,8 +436,9 @@ def parse_candidates(data: dict, query: DiscogsQuery) -> list[Candidate]:
 
 def search_releases(client: DiscogsClient, query: DiscogsQuery, limit: int = 10) -> list[Candidate]:
     """Release summaries for the query, best first: artist + album (+ year),
-    then without the year, then as free text; an album-less query searches
-    artist + track. Returns the first attempt that finds anything."""
+    then without the year, then album + "Various", then as free text, then
+    the album alone; an album-less query searches artist + track. Returns
+    the first attempt that finds anything."""
     if not query.album and not (query.artist and query.track):
         raise DiscogsError("needs an album name (Album tag or an 'Artist - Album' folder name)")
     for params in _search_attempts(query, limit):
@@ -645,18 +688,48 @@ class DiscogsMatch:
         return f"{self.matched} of {self.file_count} files matched, {round(self.score * 100)}%"
 
 
-def _is_exact(query: DiscogsQuery, release: DiscogsRelease) -> bool:
-    artist, album = normalize_words(query.artist), normalize_words(query.album)
-    return bool(artist and album) and artist == normalize_words(release.artist) and album == normalize_words(release.title)
+TITLE_AGREEMENT_EXACT = 0.8  # share of the files' titles a compilation's tracks must carry to count as exact
+_TITLE_ALIKE = 0.8  # "Diggin' Tv" ~ "Diggin' T.V.", "Uknown" ~ "Unknown"
+
+
+def title_agreement(files: list[FileFacts], assignment: dict[int, DiscogsTrack]) -> Optional[float]:
+    """0..1: of the files that have a title, the share whose paired track
+    has (nearly) the same title; None when no file has a title."""
+    titled = [i for i, f in enumerate(files) if normalize_words(f.title)]
+    if not titled:
+        return None
+    alike = 0
+    for i in titled:
+        track = assignment.get(i)
+        score = _similar(files[i].title, track.title) if track else None
+        alike += bool(score is not None and score >= _TITLE_ALIKE)
+    return alike / len(titled)
+
+
+def _is_exact(query: DiscogsQuery, release: DiscogsRelease, agreement: Optional[float] = None) -> bool:
+    """The album equals the query's, normalised, and so does the artist
+    ("VA" = "Various Artists") -- or, for a compilation looked for under
+    another artist name, most of the files' titles are its tracks' titles."""
+    album = normalize_words(query.album)
+    if not album or album != normalize_words(release.title):
+        return False
+    if _compilation_for_band(query.artist, release.artist):
+        return agreement is not None and agreement >= TITLE_AGREEMENT_EXACT
+    artist = normalize_words(_artist_key(query.artist))
+    return bool(artist) and artist == normalize_words(_artist_key(release.artist))
 
 
 def build_match(query: DiscogsQuery, files: list[FileFacts], release: DiscogsRelease) -> DiscogsMatch:
+    assignment = assign_tracks(files, release)
+    agreement = title_agreement(files, assignment)
     return DiscogsMatch(
         release=release,
-        score=score_candidate(query, release.artist, release.title, release.year, release.track_count, len(files)),
-        assignment=assign_tracks(files, release),
+        score=score_candidate(
+            query, release.artist, release.title, release.year, release.track_count, len(files), agreement,
+        ),
+        assignment=assignment,
         file_count=len(files),
-        exact=_is_exact(query, release),
+        exact=_is_exact(query, release, agreement),
     )
 
 
@@ -689,7 +762,7 @@ CLEAR_MARGIN = 0.05  # how far the best release's score must lead the runner-up
 
 def confidence(matches: list[DiscogsMatch]) -> float:
     """How far to trust the best match: 0.93 when artist and album are
-    exactly the query's, the track count equals the folder's and no other
+    exactly the query's (see _is_exact for compilations), the track count equals the folder's and no other
     release scores within CLEAR_MARGIN of it; 0.7 when artist and album are
     exact but the track count differs or the best release is not clearly
     ahead (several pressings of one album); at most 0.6 otherwise."""

@@ -104,6 +104,23 @@ def test_search_this_item_runs_off_the_gui_thread():
     assert dialog.accepted_metadata() == {0: {"title": "corrected"}}
 
 
+def test_search_this_item_sends_a_cleared_field_as_blank():
+    """A cleared field means "search without it", not "use the default
+    again" -- before 2026-11-25 a cleared Artist silently came back."""
+    calls = []
+
+    def search_one(item, override):
+        calls.append(dict(override))
+        return LookupResult(fields={"title": item}, used_query={"q": override.get("q", "default q")})
+
+    dialog = _Dialog(["a"], search_one)
+    dialog.table.selectRow(0)
+    assert dialog._query_edits["q"].text() == "default q"
+    dialog._query_edits["q"].setText("   ")
+    dialog._search_current_row()
+    assert calls[-1] == {"q": ""}
+
+
 def test_search_exception_still_surfaces():
     def search_one(_item, _override):
         raise RuntimeError("bug in a subclass")

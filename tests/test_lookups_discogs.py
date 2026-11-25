@@ -187,7 +187,30 @@ def test_search_loosens_step_by_step_until_something_is_found():
     assert [h.id for h in hits] == [1]
     attempts = fake.searches()
     assert "year" in attempts[0] and "year" not in attempts[1]
-    assert attempts[2]["q"] == ["Miles Davis Kind of Blue"]
+    assert attempts[2]["artist"] == ["Various"] and attempts[2]["release_title"] == ["Kind of Blue"]
+    assert attempts[3]["q"] == ["Miles Davis Kind of Blue"]
+
+
+def test_search_ends_with_the_title_alone_and_never_repeats_an_attempt():
+    fake = FakeDiscogs(search_results=[])
+    assert dl.search_releases(_client(fake), dl.DiscogsQuery("Various Artists", "Bloodstains Across Norway")) == []
+    attempts = fake.searches()
+    # "Various Artists" is searched as Discogs' "Various", so the Various attempt is not made twice
+    assert attempts == [
+        {"type": ["release"], "per_page": ["10"], "release_title": ["Bloodstains Across Norway"], "artist": ["Various"]},
+        {"type": ["release"], "per_page": ["10"], "q": ["Various Artists Bloodstains Across Norway"]},
+        {"type": ["release"], "per_page": ["10"], "release_title": ["Bloodstains Across Norway"]},
+    ]
+
+
+@pytest.mark.parametrize("name", ["Various", "Various Artists", "VA", "V/A", "V.A.", "various-artists"])
+def test_various_artist_names(name):
+    assert dl.is_various(name)
+
+
+@pytest.mark.parametrize("name", ["", "Vanilla Fudge", "Bloodstains Across", "Various Positions"])
+def test_real_artist_names_are_not_various(name):
+    assert not dl.is_various(name)
 
 
 def test_search_without_an_album_searches_artist_and_track_or_refuses():
@@ -442,6 +465,84 @@ def test_exact_artist_and_album_with_a_different_track_count_is_seventy_percent(
     matches = dl.find_release(_client(fake), _facts(3), dl.DiscogsQuery("Miles Davis", "Kind of Blue", "1959"))
     assert matches[0].exact and not matches[0].count_equal
     assert dl.confidence(matches) == 0.7
+
+
+# "Bloodstains Across Norway" (2026-11-25): a punk compilation whose files carry the
+# series name "Bloodstains Across" as album artist, the bands as track artists and
+# the songs' own years. Discogs lists it under "Various", without a year.
+NORWAY_TRACKS = [
+    {"position": "1", "title": "C.I.A. - K.G.B.", "artists": [{"name": "Akutt Innleggelse"}]},
+    {"position": "2", "title": "Superstjerne", "artists": [{"name": "Akutt Innleggelse"}]},
+    {"position": "3", "title": "Pop Star", "artists": [{"name": "Børres Kork"}]},
+    {"position": "4", "title": "Uknown", "artists": [{"name": "De Press"}]},
+    {"position": "5", "title": "Diggin' T.V.", "artists": [{"name": "Rough Trade"}]},
+]
+NORWAY_FILE_TITLES = ["CIA-KGB", "Superstjerne", "Pop Star", "Unknown", "Diggin' Tv"]
+
+
+def _norway_fake(year_found=False):
+    """Discogs as it answered on 2026-11-25: nothing under the artist
+    "Bloodstains Across", the release under "Various"."""
+    def results(params):
+        if params.get("artist") == ["Bloodstains Across"] or ("year" in params and not year_found):
+            return []
+        return [_hit(1815416, "Various - Bloodstains Across Norway", year="", country="",
+                     label=("Bloodstains",), catno="BSN1", formats=("CD", "Compilation"))]
+
+    release = _release(1815416, title="Bloodstains Across Norway", artists=(("Various", ""),), year=0, country="",
+                       label="Bloodstains", catno="BSN1", tracklist=NORWAY_TRACKS, genres=("Rock",), styles=("Punk",))
+    return FakeDiscogs(search_results=results, releases={1815416: release})
+
+
+def test_a_compilation_tagged_with_its_series_name_is_found_under_various():
+    fake = _norway_fake()
+    query = dl.discogs_query(["Bloodstains Across Norway"] * 5, ["Bloodstains Across"] * 5,
+                             ["1983", "1983", "1979", "1980", "1980"], Path("[1993] - Bloodstains Across Norway"))
+    matches = dl.find_release(_client(fake), _facts(5, NORWAY_FILE_TITLES), query)
+    attempts = fake.searches()
+    assert attempts[-1]["artist"] == ["Various"] and attempts[-1]["release_title"] == ["Bloodstains Across Norway"]
+    top = matches[0]
+    assert top.release.id == 1815416 and top.matched == 5 and top.exact
+    assert dl.confidence(matches) == dl.CONFIDENT
+    assert dl.fields_for(top.release, top.assignment[0])["albumartist"] == "Various Artists"
+    assert dl.fields_for(top.release, top.assignment[0])["artist"] == "Akutt Innleggelse"
+
+
+def test_a_compilation_is_judged_by_its_track_titles_not_the_series_name():
+    tracks = [{"position": str(i + 1), "title": t} for i, t in enumerate(["A", "B", "C", "D", "E"])]
+    release = dl.parse_release(_release(7, title="Bloodstains Across Norway", artists=(("Various", ""),), tracklist=tracks))
+    query = dl.DiscogsQuery("Bloodstains Across", "Bloodstains Across Norway")
+    # Same album name, same track count, but none of the songs: never exact
+    wrong = dl.build_match(query, _facts(5, NORWAY_FILE_TITLES), release)
+    assert not wrong.exact and dl.confidence([wrong]) <= dl.FUZZY_CAP
+    # Files without titles give no evidence either way: not exact
+    blind = dl.build_match(query, _facts(5), release)
+    assert not blind.exact
+
+
+def test_a_band_album_never_turns_into_a_various_artists_one_by_name_alone():
+    """"The Clash - Greatest Hits" must not be taken for "Various - Greatest Hits"."""
+    release = dl.parse_release(_release(8, title="Greatest Hits", artists=(("Various", ""),),
+                                        tracklist=[{"position": str(i + 1), "title": f"Song {i}"} for i in range(5)]))
+    match = dl.build_match(dl.DiscogsQuery("The Clash", "Greatest Hits"),
+                           _facts(5, ["London Calling", "Train in Vain", "Clampdown", "Bankrobber", "Rudie"]), release)
+    assert not match.exact
+
+
+@pytest.mark.parametrize("tagged", ["VA", "Various", "Various Artists", "V/A"])
+def test_a_various_artists_tag_matches_discogs_various(tagged):
+    release = dl.parse_release(_release(9, title="Bloodstains Across Norway", artists=(("Various", ""),),
+                                        tracklist=NORWAY_TRACKS))
+    match = dl.build_match(dl.DiscogsQuery(tagged, "Bloodstains Across Norway"), _facts(5), release)
+    assert match.exact and match.score == 1.0
+
+
+def test_title_agreement_counts_near_identical_titles_and_ignores_untitled_files():
+    release = dl.parse_release(_release(1, tracklist=NORWAY_TRACKS))
+    files = _facts(5, NORWAY_FILE_TITLES)
+    agreement = dl.title_agreement(files, dl.assign_tracks(files, release))
+    assert agreement == 0.8  # "CIA-KGB" vs "C.I.A. - K.G.B." is too far apart; "Uknown" and "Diggin' T.V." pass
+    assert dl.title_agreement(_facts(5), dl.assign_tracks(_facts(5), release)) is None
 
 
 def test_a_fuzzy_match_never_exceeds_sixty_percent():

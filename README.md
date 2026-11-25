@@ -56,8 +56,12 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-25#03` (a pasted Discogs "link" of junk digits, such as thousands of them or a superscript, is
-"not a Discogs link" instead of a ValueError). `2026-11-25#02`: `%dummy%` in parse patterns skips text and may repeat; Discogs and MusicBrainz read a
+Currently: `2026-11-25#04` (Discogs finds compilations whose album artist is a series name or a band, such as
+"Bloodstains Across": it also searches the title under "Various", then the title alone; "VA" / "V/A" / "Various
+Artists" are one artist; a Various release looked for under another name is exact when the files' titles are its
+tracks' titles. The lookup dialogs' "Search This Item" now sends a cleared query field as blank instead of reusing
+the default). `2026-11-25#03`: a pasted Discogs "link" of junk digits, such as thousands of them or a superscript, is
+"not a Discogs link" instead of a ValueError. `2026-11-25#02`: `%dummy%` in parse patterns skips text and may repeat; Discogs and MusicBrainz read a
 pasted release link: `parse_discogs_link()` / `release_from_link()`, `parse_musicbrainz_link()` /
 `release_ids_from_link()`). `2026-11-25#01`: the Parse dialog can parse a tag field, not just the filename
 (`source_fields` + `get_field_text`).

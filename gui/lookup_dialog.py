@@ -24,7 +24,9 @@ what was found. A subclass supplies:
     search. `query_override` is a `{field_key: value}` dict -- empty
     the first time (meaning "use your own default query-building
     logic"), populated once the user edits a query field and clicks
-    "Search This Item" for that row. Set `LookupResult.used_query` to
+    "Search This Item" for that row -- then with every query field, a
+    cleared one as "" (so `override.get(key, default)` honours a cleared
+    field; `override.get(key) or default` keeps the default for it). Set `LookupResult.used_query` to
     whatever query values were actually used (whether from the
     override or your own default) so the correction form can show
     them.
@@ -623,7 +625,10 @@ class LookupDialogBase(OwnedDialog):
         row = self._current_detail_row
         if row < 0:
             return
-        override = {key: edit.text().strip() for key, edit in self._query_edits.items() if edit.text().strip()}
+        # Every field, blanks included: a field the user cleared (a wrong
+        # artist, a year to drop) must search without it, not fall back to
+        # the default it was cleared of (2026-11-25).
+        override = {key: edit.text().strip() for key, edit in self._query_edits.items()}
         self._query_overrides[row] = override
         result = self._run_single(self._search_label, self._search_one, self.items[row], override)
         if result is None:
