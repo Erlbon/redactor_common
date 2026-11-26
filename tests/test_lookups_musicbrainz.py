@@ -190,6 +190,45 @@ def test_a_busy_503_is_retried_after_a_pause(monkeypatch):
     assert slept == list(mb.RETRY_503)
 
 
+def _busy():
+    import urllib.error
+    return urllib.error.HTTPError("https://musicbrainz.org/ws/2/x", 503, "Service Temporarily Unavailable", {}, None)
+
+
+def test_the_bare_get_is_one_request_without_a_retry(monkeypatch):
+    """mp3redactor's notes flow imports _get as its single attempt and retries (announced) around it:
+    a retry inside _get made the two layers multiply and wait silently (2026-11-26)."""
+    monkeypatch.setattr(mb, "_sleep", lambda s: pytest.fail("slept"))
+    calls = []
+
+    def busy(url):
+        calls.append(url)
+        raise _busy()
+
+    with pytest.raises(mb.MusicBrainzError, match="busy"):
+        mb._get("release/abc", busy)
+    assert len(calls) == 1
+
+
+def test_a_fetch_with_an_on_busy_hook_is_told_before_each_wait(monkeypatch):
+    slept, told = [], []
+    monkeypatch.setattr(mb, "_sleep", slept.append)
+
+    class Busy:
+        def __init__(self):
+            self.calls = 0
+            self.on_busy = told.append
+
+        def __call__(self, url):
+            self.calls += 1
+            if self.calls == 1:
+                raise _busy()
+            return b'{"id": "abc", "title": "T"}'
+
+    assert mb.fetch_release("abc", Busy()).title == "T"
+    assert told == slept == [mb.RETRY_503[0]]
+
+
 def test_find_album_by_recordings_fetches_and_ranks_the_given_releases():
     fake = FakeMusicBrainz([_release_json("za", "Ring of Fire", "ZA", RING_OF_FIRE)])
     matches = mb.find_album_by_recordings(_files(), ["za"], fake)

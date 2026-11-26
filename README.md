@@ -56,8 +56,12 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-25#05` (MusicBrainz: a 503 "currently busy" answer is retried after 2, 5 and 10 seconds instead of
-failing the lookup (`fetch_json(retry_503=)`); the search also tries album artist + album as one title ("Bloodstains
+Currently: `2026-11-26#01` (MusicBrainz's `_get` is one request again, as before `#05`: mp3redactor's notes flow
+imports it as its single attempt and runs its own announced retries, and the extra layer made them multiply and wait
+silently. The 503 retries now live in `_get_retrying`, used by `search_releases`, `fetch_release` and
+`release_ids_from_link`, and a fetch's `on_busy(seconds)` hook is told before each wait). `2026-11-25#05`:
+MusicBrainz: a 503 "currently busy" answer is retried after 2, 5 and 10 seconds instead of failing the lookup
+(`fetch_json(retry_503=)`); the search also tries album artist + album as one title ("Bloodstains
 Across" + "Switzerland", where the album alone finds 371 other "Switzerland"s) and the album under "Various Artists";
 "VA" is searched as "Various Artists"; `is_various()` now lives in `lookups/musicbrainz.py`). `2026-11-25#04`: Discogs finds compilations whose album artist is a series name or a band, such as
 "Bloodstains Across": after artist + title it searches the free text, then the title under "Various", then the

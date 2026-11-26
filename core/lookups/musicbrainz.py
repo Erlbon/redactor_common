@@ -70,13 +70,31 @@ _sleep = time.sleep  # tests replace it
 
 
 def _get(path: str, fetch: Callable, **params) -> dict:
+    """ONE request, no retry: a 503 raises MusicBrainzError("...busy..."). Kept so on purpose --
+    mp3redactor's notes flow imports it as its single attempt and runs its own announced retries
+    around it (a retry here too made the two layers multiply and wait silently, 2026-11-26)."""
     params["fmt"] = "json"
     url = f"{API_BASE}/{path}?{urlencode(params, quote_via=quote)}"
     return fetch_json(
         url, fetch, error_cls=MusicBrainzError, source_name=_SOURCE_NAME,
         status_messages={503: "MusicBrainz is busy (rate limit) -- try again in a moment."},
-        retry_503=RETRY_503, sleep=lambda seconds: _sleep(seconds),
     ) or {}
+
+
+def _get_retrying(path: str, fetch: Callable, **params) -> dict:
+    """_get, asked again after each pause in RETRY_503 while MusicBrainz says it is busy. A fetch
+    with an `on_busy(seconds)` hook is told before each wait, so its caller can say so."""
+    for delay in (*RETRY_503, None):
+        try:
+            return _get(path, fetch, **dict(params))
+        except MusicBrainzError as exc:
+            if delay is None or "busy" not in str(exc):
+                raise
+            hook = getattr(fetch, "on_busy", None)
+            if hook is not None:
+                hook(delay)
+            _sleep(delay)
+    return {}
 
 
 # What people tag a compilation's album artist with; Discogs says "Various", MusicBrainz "Various Artists".
@@ -208,7 +226,7 @@ def search_releases(query: AlbumQuery, fetch: Optional[Callable] = None, limit: 
         searches.append(f"release:{_lucene(album)} AND artist:{_lucene('Various Artists')}")
     searches.append(f"release:{_lucene(album)}")
     for lucene in searches:
-        data = _get("release", fetch, query=lucene, limit=limit)
+        data = _get_retrying("release", fetch, query=lucene, limit=limit)
         releases = [
             Release(
                 id=r["id"], title=r.get("title") or "", artist=_credit(r.get("artist-credit")),
@@ -228,7 +246,7 @@ def search_releases(query: AlbumQuery, fetch: Optional[Callable] = None, limit: 
 def fetch_release(release_id: str, fetch: Optional[Callable] = None) -> Release:
     """A release with its full track list (recordings, lengths, artists)."""
     fetch = fetch or _default_fetch
-    r = _get(f"release/{release_id}", fetch, inc="recordings+artist-credits")
+    r = _get_retrying(f"release/{release_id}", fetch, inc="recordings+artist-credits")
     release = Release(
         id=r.get("id", release_id), title=r.get("title") or "", artist=_credit(r.get("artist-credit")),
         date=r.get("date") or "", country=r.get("country") or "", status=r.get("status") or "",
@@ -401,7 +419,7 @@ def release_ids_from_link(text: str, fetch: Optional[Callable] = None, limit: in
     kind, mbid = parsed
     if kind == "release":
         return [mbid]
-    data = _get("release", fetch or _default_fetch, **{"release-group": mbid, "limit": limit})
+    data = _get_retrying("release", fetch or _default_fetch, **{"release-group": mbid, "limit": limit})
     ids = [r["id"] for r in data.get("releases", []) if r.get("id")]
     if not ids:
         raise MusicBrainzError(f"MusicBrainz release group {mbid} has no releases.")
