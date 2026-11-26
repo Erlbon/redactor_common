@@ -313,11 +313,24 @@ def standard_file_items(
               tooltip="Save portable settings to a file"),
          _std("import_settings", labels.IMPORT_SETTINGS, import_settings,
               tooltip="Load settings from a file exported by this program")],
-        [_std("remove_from_list", labels.REMOVE_FROM_LIST, remove_from_list, keys.REMOVE_FROM_LIST),
+        # With Delete Files the Delete key asks which of the two is meant (remove_or_delete_action, in the
+        # app's hidden list), so Remove from List has no shortcut of its own there.
+        [_std("remove_from_list", labels.REMOVE_FROM_LIST, remove_from_list,
+              None if delete_files else keys.REMOVE_FROM_LIST),
          _std("clear_list", labels.CLEAR_LIST, clear_list)]
         + ([_std("delete_files", labels.DELETE_FILES, delete_files, keys.DELETE_FILES)] if delete_files else [])
         + list(extra_destructive),
         [MenuAction(KEY_EXIT, labels.EXIT, exit_slot or _noop, enabled=exit_slot is not None)],
+    )
+
+
+def remove_or_delete_action(slot: Callable[[], None]) -> MenuAction:
+    """The Delete key in an app that passes delete_files to standard_file_items: put it in the spec's
+    `hidden` list. Its slot asks Remove from List / Delete Files / Cancel (gui/remove_or_delete.py,
+    ask_remove_or_delete). It is in no menu, but the Command Palette lists it."""
+    return MenuAction(
+        "remove_or_delete", labels.REMOVE_OR_DELETE, slot, shortcut=keys.REMOVE_OR_DELETE,
+        tooltip="Asks whether to remove the selected files from the list or send them to the Recycle Bin",
     )
 
 

@@ -50,6 +50,8 @@ IMPORT_SETTINGS = "&Import Settings…"
 REMOVE_FROM_LIST = "Re&move from List"
 CLEAR_LIST = "&Clear List"
 DELETE_FILES = "&Delete Files…"
+# The Delete key's question in an app with Delete Files (no menu entry; Command Palette only).
+REMOVE_OR_DELETE = "Remove from List or Delete Files…"
 EXIT = "E&xit"
 
 # --- Edit ---------------------------------------------------------------------

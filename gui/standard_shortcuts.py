@@ -41,6 +41,10 @@ SAVE = "Ctrl+S"  # QKeySequence::Save
 SAVE_AS = "Ctrl+Shift+S"  # QKeySequence::SaveAs -- NEVER Save All (video's old Ctrl+Shift+S was a platform violation)
 SAVE_ALL = "Ctrl+Shift+A"  # no StandardKey for "save all"; distinct from SAVE_AS on purpose
 REMOVE_FROM_LIST = "Delete"  # QKeySequence::Delete
+# In an app that has Delete Files, the Delete key asks "Remove from List or
+# Delete Files?" instead (gui/remove_or_delete.py, 2026-11-26); Remove from
+# List then has no shortcut of its own.
+REMOVE_OR_DELETE = "Delete"
 # Delete Files (to the Recycle Bin): Shift+Delete is the Explorer convention;
 # epub's old F8 stays as a secondary alias for one release.
 DELETE_FILES = "Shift+Delete"

@@ -56,7 +56,11 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-26#01` (MusicBrainz's `_get` is one request again, as before `#05`: mp3redactor's notes flow
+Currently: `2026-11-26#02` (the Delete key in an app with Delete Files asks "Remove from List / Delete Files
+(Recycle Bin) / Cancel", with Remove from List as the default button: `gui/remove_or_delete.py`
+(`ask_remove_or_delete`) and `standard_menus.remove_or_delete_action(slot)` for the app's hidden list. In such an
+app Remove from List has no shortcut; Shift+Delete stays Delete Files. Apps without Delete Files keep
+Delete = Remove from List). `2026-11-26#01`: MusicBrainz's `_get` is one request again, as before `#05`: mp3redactor's notes flow
 imports it as its single attempt and runs its own announced retries, and the extra layer made them multiply and wait
 silently. The 503 retries now live in `_get_retrying`, used by `search_releases`, `fetch_release` and
 `release_ids_from_link`, and a fetch's `on_busy(seconds)` hook is told before each wait). `2026-11-25#05`:
