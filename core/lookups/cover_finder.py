@@ -12,12 +12,13 @@ from pathlib import Path
 
 from redactor_common.core.long_paths import literal
 
-# Filenames checked, in order -- the first one present wins.
+# Filenames checked, in order -- the first one present wins. Not albumartsmall.jpg: Windows Media Player's
+# thumbnail (about 75 px) would be embedded as the album's cover (mp3redactor review card 68, 2026-11-27).
 FOLDER_IMAGE_NAMES = (
     "cover.jpg", "cover.jpeg", "cover.png",
     "folder.jpg", "folder.jpeg", "folder.png",
     "front.jpg", "front.jpeg", "front.png",
-    "albumart.jpg", "albumartsmall.jpg",
+    "albumart.jpg",
 )
 
 

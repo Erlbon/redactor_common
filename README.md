@@ -56,7 +56,10 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#05` (tests only, CI green again: the fake tools in the tests are executable, as `find_tool`
+Currently: `2026-11-27#06` (mp3redactor's review of 2026-11-27, cards 67 and 68: `sanitize_filename` puts "_"
+before a Windows device name such as CON, AUX or NUL, as `render_filename` already did, so a book titled "Con" no
+longer becomes a name Windows refuses; the folder-cover finder no longer takes Windows Media Player's
+`albumartsmall.jpg` thumbnail as the album's cover). `2026-11-27#05` (tests only, CI green again: the fake tools in the tests are executable, as `find_tool`
 now wants on Linux/Mac, and the trash test stubs the pywin32 check; no library change from #04). `2026-11-27#04`
 (review of 2026-11-27, batch 4, the checks found real: on Windows `move_to_trash`
 refuses (or uses the fallback folder) when send2trash's modern back-end cannot load, because the legacy one deletes

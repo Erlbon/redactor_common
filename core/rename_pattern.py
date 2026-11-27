@@ -104,6 +104,10 @@ def sanitize_filename(name: str) -> str:
     name = _REPEATED_SEPARATOR_RE.sub(" - ", name)
     name = _TRIM_SEPARATORS_RE.sub("", name)
     name = name.strip(" .")  # trailing dots/spaces are invalid on Windows (" . " needs both stripped together)
+    if is_reserved_name(name):
+        # CON, AUX, NUL... are device names Windows refuses as a file or folder name (mp3redactor review card 67,
+        # 2026-11-27: a book titled "Con" became Con.m4b). The same "_" prefix render_filename() uses.
+        name = f"_{name}"
     return name
 
 
