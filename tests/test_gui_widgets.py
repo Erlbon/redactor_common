@@ -586,3 +586,24 @@ def test_auto_numbering_dialog_restores_and_reports_padding():
     assert seen == []
     dialog.padding_spin.setValue(3)
     assert seen == [3]
+
+
+def test_lookup_dialog_shows_a_search_error_on_its_row_and_keeps_the_rest():
+    """A source or parser exception in one search must not lose the batch."""
+    from redactor_common.gui.lookup_dialog import FOUND_COL, LookupDialogBase, LookupResult
+
+    def search(item, _q):
+        if item == "b":
+            raise ValueError("bad reply")
+        return LookupResult(fields={"x": item})
+
+    dialog = LookupDialogBase(
+        ["a", "b", "c"], None, window_title="T", info_text="i", search_label="s", item_label=str,
+        search_one=search,
+    )
+    assert dialog.table.rowCount() == 3
+    assert dialog.table.item(0, FOUND_COL).text() != "(error)"
+    assert dialog.table.item(1, FOUND_COL).text() == "(error)"
+    assert dialog.row_results()[1].error == "ValueError: bad reply"
+    assert dialog.row_results()[2].found
+    assert "1 error(s)" in dialog.status_label.text()

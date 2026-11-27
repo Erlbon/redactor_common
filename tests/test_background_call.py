@@ -121,9 +121,10 @@ def test_search_this_item_sends_a_cleared_field_as_blank():
     assert calls[-1] == {"q": ""}
 
 
-def test_search_exception_still_surfaces():
+def test_search_exception_is_shown_on_the_row():
+    # Until 2026-11-27 this escaped the dialog and lost the whole batch.
     def search_one(_item, _override):
         raise RuntimeError("bug in a subclass")
 
-    with pytest.raises(RuntimeError, match="bug in a subclass"):
-        _Dialog(["a"], search_one)
+    dialog = _Dialog(["a"], search_one)
+    assert dialog.row_results()[0].error == "RuntimeError: bug in a subclass"

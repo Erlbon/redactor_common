@@ -56,7 +56,9 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#07` (the overwrite review reads an enum field by its value: `str()` of a text-based enum
+Currently: `2026-11-27#08` (the shared lookup dialog catches an exception from a search per row: the row shows "(error)"
+with the message and the status line counts it, instead of the exception escaping and losing every result of the batch;
+"Search This Item" is guarded the same way; cbzredactor review card 63). `2026-11-27#07` (the overwrite review reads an enum field by its value: `str()` of a text-based enum
 gives "ContentType.UNSET", so videoredactor's unset Content Type looked like a value to overwrite and every scene
 lookup opened the review for nothing). `2026-11-27#06` (mp3redactor's review of 2026-11-27, cards 67 and 68: `sanitize_filename` puts "_"
 before a Windows device name such as CON, AUX or NUL, as `render_filename` already did, so a book titled "Con" no

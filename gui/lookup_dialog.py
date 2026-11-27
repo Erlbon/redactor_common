@@ -428,12 +428,24 @@ class LookupDialogBase(OwnedDialog):
         if self.table.rowCount() > 0:
             self.table.selectRow(0)
 
+    def _guarded_search(self, item: object, query_override: dict) -> LookupResult:
+        """search_one() for one row with the error handler: an exception
+        from a parser or a source becomes that row's error result
+        (shown in the Found column and the status line) instead of
+        escaping and losing the results of every row searched so far
+        (card 63 of cbzredactor's review, 2026-11-27)."""
+        try:
+            return self._search_one(item, query_override)
+        except Exception as exc:  # noqa: BLE001 -- shown on the row, never fatal
+            text = str(exc)
+            return LookupResult(error=f"{type(exc).__name__}: {text}" if text else type(exc).__name__)
+
     def _process_row(self, row: int, item: object, query_override: dict, cancel_signal=None) -> None:
         """Runs search_one() for one row (on a worker thread) and
         updates its table cells -- used both for the initial batch
         search and for "Search This Item" re-running just the selected
         row. Raises BackgroundCancelled if `cancel_signal` fires first."""
-        result = call_in_background(self._search_one, item, query_override, cancel_signal=cancel_signal)
+        result = call_in_background(self._guarded_search, item, query_override, cancel_signal=cancel_signal)
         self._row_results[row] = result
         self._update_row_cells(row, item, result)
 
@@ -630,7 +642,7 @@ class LookupDialogBase(OwnedDialog):
         # the default it was cleared of (2026-11-25).
         override = {key: edit.text().strip() for key, edit in self._query_edits.items()}
         self._query_overrides[row] = override
-        result = self._run_single(self._search_label, self._search_one, self.items[row], override)
+        result = self._run_single(self._search_label, self._guarded_search, self.items[row], override)
         if result is None:
             return  # cancelled -- the row keeps its previous result
         self._row_results[row] = result
