@@ -97,8 +97,12 @@ def parse_release_name(filename_stem: str) -> ReleaseGuess:
     can still edit, not a final answer -- consistent with this
     project's "never auto-apply, always let the user confirm" rule.
     """
-    stem = _normalize_separators(filename_stem or "")
-    stem = _TRAILING_GROUP_RE.sub("", stem).strip()
+    raw = filename_stem or ""
+    stem = _normalize_separators(raw)
+    # Only a dotted/underscored scene name carries a "-GROUP" tag: in "Spider-Man" or "Wall-E" the dash is part of
+    # the title (card 43, 2026-11-27: they were looked up as "Spider" and "Wall").
+    if "." in raw or "_" in raw:
+        stem = _TRAILING_GROUP_RE.sub("", stem).strip()
 
     # --- TV: a season/episode marker wins if present -- everything
     # before it is the show title, everything after (episode title,
@@ -119,8 +123,8 @@ def parse_release_name(filename_stem: str) -> ReleaseGuess:
 
     # --- Movie: a bounded year token, if present -- everything before
     # it is the title, the year itself narrows the TMDB search.
-    m = _YEAR_RE.search(stem)
-    if m:
+    # The last year token with a title before it: "Blade Runner 2049 (2017)" is the 2017 film "Blade Runner 2049".
+    for m in reversed(list(_YEAR_RE.finditer(stem))):
         title = _strip_junk_tags(stem[:m.start()].strip(" -_")).strip(" -_")
         if title:
             return ReleaseGuess(kind="movie", title=title, year=m.group(1))

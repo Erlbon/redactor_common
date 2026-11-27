@@ -14,8 +14,10 @@ excluded from an undo stack) -- see FILENAME_FIELD_KEY.
 
 from __future__ import annotations
 
+import time
 from typing import Callable, TypeVar
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QLabel, QLineEdit, QTableWidget, QVBoxLayout,
@@ -26,6 +28,8 @@ from redactor_common.gui.preview_table import PreviewRow, PreviewTableController
 from redactor_common.gui.owned_dialog import OwnedDialog
 
 FILENAME_FIELD_KEY = "__filename__"
+PREVIEW_DELAY_MS = 250          # the preview waits this long after the last change
+PREVIEW_BUDGET_S = 1.0          # a regex preview pass that takes longer stops with "too slow"
 
 T = TypeVar("T")
 
@@ -60,8 +64,28 @@ class SearchReplaceDialog(OwnedDialog):
         self._get_display_name = get_display_name
         self._is_excluded = is_excluded or (lambda _item: False)
 
+        # The preview runs 250 ms after the last keystroke, not on every one (card 31, 2026-11-27: a regex such as
+        # (a+)+$ ran over every value on each key press and froze the window).
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(PREVIEW_DELAY_MS)
+        self._preview_timer.timeout.connect(self._refresh_preview)
         self._build_ui(fields, include_filename, item_noun)
         self._refresh_preview()
+
+    def _schedule_preview(self, *_args) -> None:
+        self._preview_timer.start()
+
+    def _flush_preview(self) -> None:
+        """Runs a preview that is still waiting for its timer, so Apply never uses an out-of-date one."""
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self._refresh_preview()
+
+    def accept(self) -> None:
+        self._flush_preview()
+        if self._ok_button.isEnabled():
+            super().accept()
 
     def _build_ui(self, fields: list[tuple[str, str]], include_filename: bool, item_noun: str) -> None:
         layout = QVBoxLayout(self)
@@ -74,32 +98,32 @@ class SearchReplaceDialog(OwnedDialog):
             self.field_combo.addItem("Filename", FILENAME_FIELD_KEY)
         for key, label in fields:
             self.field_combo.addItem(label, key)
-        self.field_combo.currentIndexChanged.connect(self._refresh_preview)
+        self.field_combo.currentIndexChanged.connect(self._schedule_preview)
         field_row.addWidget(self.field_combo, 1)
         layout.addLayout(field_row)
 
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("Find:"))
         self.search_edit = QLineEdit()
-        self.search_edit.textChanged.connect(self._refresh_preview)
+        self.search_edit.textChanged.connect(self._schedule_preview)
         search_row.addWidget(self.search_edit, 1)
         layout.addLayout(search_row)
 
         replace_row = QHBoxLayout()
         replace_row.addWidget(QLabel("Replace with:"))
         self.replace_edit = QLineEdit()
-        self.replace_edit.textChanged.connect(self._refresh_preview)
+        self.replace_edit.textChanged.connect(self._schedule_preview)
         replace_row.addWidget(self.replace_edit, 1)
         layout.addLayout(replace_row)
 
         options_row = QHBoxLayout()
         self.case_sensitive_cb = QCheckBox("Case sensitive")
-        self.case_sensitive_cb.stateChanged.connect(self._refresh_preview)
+        self.case_sensitive_cb.stateChanged.connect(self._schedule_preview)
         options_row.addWidget(self.case_sensitive_cb)
 
         self.regex_cb = QCheckBox("Use regular expression")
         self.regex_cb.setToolTip("Enables regex patterns and \\1, \\2... backreferences in Replace with")
-        self.regex_cb.stateChanged.connect(self._refresh_preview)
+        self.regex_cb.stateChanged.connect(self._schedule_preview)
         options_row.addWidget(self.regex_cb)
         options_row.addStretch(1)
         layout.addLayout(options_row)
@@ -136,9 +160,15 @@ class SearchReplaceDialog(OwnedDialog):
         error_msg = ""
 
         if search:
+            deadline = time.monotonic() + PREVIEW_BUDGET_S
             for i, item in enumerate(self.items):
                 if self._is_excluded(item):
                     continue
+                if use_regex and time.monotonic() > deadline:
+                    error_msg = ("This pattern is too slow to try on every item. Make it simpler (nested repeats "
+                                 "such as (a+)+ take very long).")
+                    rows = []
+                    break
                 old_value = self._get_value(item, field_key) or ""
                 try:
                     new_value = apply_replace(old_value, search, replace, use_regex, case_sensitive)
@@ -172,4 +202,5 @@ class SearchReplaceDialog(OwnedDialog):
     def accepted_changes(self) -> dict[int, str]:
         """item index (into the list passed to the constructor) -> new
         value, for every row whose checkbox is still ticked."""
+        self._flush_preview()
         return self._preview.accepted_changes()

@@ -140,11 +140,14 @@ class SecretField(QWidget):
             else:
                 secret_store.delete_secret(self.app, self.name)
             changed = True
-        elif self.edit.text():
+        elif self.edit.text().strip():
+            # stripped: a pasted "abc123 " failed every request with 401 while the field said "stored" (card 51);
+            # an all-blank box counts as "keep"
+            value = self.edit.text().strip()
             if self.shared:
-                secret_store.set_key(self.name, self.edit.text(), allow_unencrypted_fallback)
+                secret_store.set_key(self.name, value, allow_unencrypted_fallback)
             else:
-                secret_store.set_secret(self.app, self.name, self.edit.text(), allow_unencrypted_fallback)
+                secret_store.set_secret(self.app, self.name, value, allow_unencrypted_fallback)
             changed = True
         if changed:
             self.refresh()

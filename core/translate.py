@@ -159,9 +159,12 @@ def translate_cues(
     if current:
         groups.append(current)
 
+    translated_ok: set[int] = set()     # what was translated, even when it reads the same ("OK", a name, "♪")
+
     def store(index: int, text: str) -> None:
         out[index].text = wrap_line(text.strip(), wrap_columns) if wrap_columns else text.strip()
         result.translated += 1
+        translated_ok.add(index)
 
     consecutive_single_failures = 0
     for group in groups:
@@ -224,7 +227,8 @@ def translate_cues(
             progress(min(done, total), total)
 
     if result.cancelled or result.error:
-        translated_ok = {i for i, c in enumerate(out) if c.text != cues[i].text}
+        # card 47 (2026-11-27): "translated" was "the text differs", so a cue that is the same in both languages
+        # was listed as failed
         result.failed = sorted(set(result.failed) | {i for i in pending if i not in translated_ok})
     else:
         result.failed = sorted(set(result.failed))

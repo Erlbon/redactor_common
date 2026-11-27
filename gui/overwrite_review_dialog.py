@@ -225,9 +225,14 @@ def build_overwrite_review_rows(
     `metadata_changes`) -- matches every consuming project's own
     book/file object as-is, no adapter needed."""
     rows: list[PreviewRow] = []
+    # One entry per file, not per file name: twelve albums' "01 - Intro.mp3" were one entry with twelve Title rows
+    # (card 34, 2026-11-27). A name that more than one file has is labelled with its folder too.
+    names = [os.path.basename(target_items[index].path) for index in metadata_changes]
     for index, fields in metadata_changes.items():
         item = target_items[index]
         display_name = os.path.basename(item.path)
+        if names.count(display_name) > 1:
+            display_name = f"{display_name}  (in {os.path.dirname(item.path) or '.'})"
         for attr, new_value in fields.items():
             current_value = (getattr(item.metadata, attr, "") or "").strip()
             rows.append(

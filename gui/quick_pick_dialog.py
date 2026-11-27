@@ -135,11 +135,14 @@ class QuickPickDialog(OwnedDialog):
         """The key(s) for whatever's checked (multi-select) or
         currently selected (single-select) -- 0 or 1 items in the
         single-select case."""
+        # A row the filter hides is never returned: pick "Rock", filter to "jazz", press Use, and the field got
+        # "Rock" (card 60, 2026-11-27).
         if self._multi_select:
             return [
                 self._keys_by_row[row]
                 for row in range(self.list_widget.count())
                 if self.list_widget.item(row).checkState() == Qt.CheckState.Checked
+                and not self.list_widget.item(row).isHidden()
             ]
         row = self.list_widget.currentRow()
-        return [self._keys_by_row[row]] if row >= 0 else []
+        return [self._keys_by_row[row]] if row >= 0 and not self.list_widget.item(row).isHidden() else []

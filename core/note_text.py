@@ -17,8 +17,11 @@ from urllib.parse import quote
 _DISAMBIGUATION = re.compile(r"\s+\(\d+\)$")
 _NAMED_REF = re.compile(r"\[([a-z])=([^\]]*)\]", re.IGNORECASE)
 _ID_REF = re.compile(r"\[[a-z]\d+\]", re.IGNORECASE)
-_URL_PAIR = re.compile(r"\[url=([^\]]*)\](.*?)\[/url\]", re.IGNORECASE | re.DOTALL)
-_URL_BARE = re.compile(r"\[url\](.*?)\[/url\]", re.IGNORECASE | re.DOTALL)
+_URL_OPEN = re.compile(r"\[url=([^\]]*)\]", re.IGNORECASE)
+_URL_BARE_OPEN = re.compile(r"\[url\]", re.IGNORECASE)
+_URL_CLOSE = re.compile(r"\[/url\]", re.IGNORECASE)
+_A_OPEN = re.compile(r'(?is)<a\b[^>]*?href\s*=\s*["\']([^"\']*)["\'][^>]*>')
+_A_CLOSE = re.compile(r"(?i)</a>")
 _URL_DANGLING = re.compile(r"\[/?url(?:=[^\]]*)?\]", re.IGNORECASE)
 _SAFE_URL = re.compile(r"^(?:https?://|mailto:)", re.IGNORECASE)
 
@@ -30,6 +33,26 @@ def _named_ref(match: re.Match[str]) -> str:
     if kind in ("a", "l"):
         return _DISAMBIGUATION.sub("", value)
     return value
+
+
+def _sub_pairs(text: str, opening: re.Pattern, closing: re.Pattern, make) -> str:
+    """Replaces each `opening` ... `closing` pair with make(opening match, inner text), as a lazy `(.*?)` regex
+    would, but in linear time: once no closing tag follows, none of the later openings can have one either.
+    The regex form rescanned to the end for every unclosed opening; 8000 unclosed <a href> took 2.9 s and a 2 MB
+    sidecar would take about 20 minutes (card 38, 2026-11-27)."""
+    out, pos = [], 0
+    while True:
+        start = opening.search(text, pos)
+        if start is None:
+            break
+        end = closing.search(text, start.end())
+        if end is None:
+            break
+        out.append(text[pos:start.start()])
+        out.append(make(start, text[start.end():end.start()]))
+        pos = end.end()
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _link(url: str, label: str) -> str:
@@ -48,8 +71,8 @@ def clean_discogs_markup(text: str) -> str:
     ``[u]``, ``[color]``, ``[size]`` tags are dropped; line endings become LF, spaces left by removals are
     tidied and runs of blank lines collapse to one."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = _URL_PAIR.sub(lambda m: _link(m.group(1), m.group(2)), text)
-    text = _URL_BARE.sub(lambda m: _link(m.group(1), m.group(1)), text)
+    text = _sub_pairs(text, _URL_OPEN, _URL_CLOSE, lambda m, inner: _link(m.group(1), inner))
+    text = _sub_pairs(text, _URL_BARE_OPEN, _URL_CLOSE, lambda m, inner: _link(inner, inner))
     text = _URL_DANGLING.sub("", text)
     text = _NAMED_REF.sub(_named_ref, text)
     text = _ID_REF.sub("", text)
@@ -83,8 +106,8 @@ def html_to_markdown(text: str) -> str:
     text = re.sub(r"(?i)<li\b[^>]*>", "\n- ", text)
     text = re.sub(r"(?i)</?(b|strong)\b[^>]*>", "**", text)
     text = re.sub(r"(?i)</?(i|em)\b[^>]*>", "*", text)
-    text = re.sub(r'(?is)<a\b[^>]*?href\s*=\s*["\']([^"\']*)["\'][^>]*>(.*?)</a>',
-                  lambda m: _link(unescape(m.group(1)), re.sub(r"<[^>]+>", "", m.group(2))), text)
+    text = _sub_pairs(text, _A_OPEN, _A_CLOSE,
+                      lambda m, inner: _link(unescape(m.group(1)), re.sub(r"<[^>]+>", "", inner)))
     text = re.sub(r"<[^>]*>", "", text)
     text = unescape(text).replace("\xa0", " ")
     return _tidy(text.replace("\r\n", "\n").replace("\r", "\n"))

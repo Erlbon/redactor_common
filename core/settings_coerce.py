@@ -346,7 +346,7 @@ def parse_json(raw: Any, default: Any = None) -> Any:
         return default
     try:
         return json.loads(text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):     # deep nesting (card 48)
         return default
 
 

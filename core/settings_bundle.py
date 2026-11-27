@@ -72,8 +72,13 @@ BUNDLE_VERSION = 1
 # Substrings that mark a key as a credential wherever they appear; "pin" and
 # "key" pairs are matched as whole words instead so "pinned" / "sort_key"
 # are not caught.
-_SECRET_SUBSTRINGS = ("password", "passwd", "secret", "token", "apikey", "bearer", "credential")
-_SECRET_WORDS = {"pin"}
+_SECRET_SUBSTRINGS = ("password", "passwd", "passphrase", "secret", "token", "apikey", "bearer", "credential",
+                      "cookie")
+_SECRET_WORDS = {"pin", "auth", "oauth", "key", "keys"}     # card 49: comicvine_key, license_key, auth...
+# "key" as a word is a credential except in these pairs, which name a setting about keys, not a key itself
+_NOT_SECRET_KEY_PAIRS = {("sort", "key"), ("hot", "key"), ("shortcut", "key"), ("primary", "key"),
+                         ("column", "key"), ("group", "key"), ("field", "key"), ("sort", "keys"), ("hot", "keys"),
+                         ("shortcut", "keys"), ("column", "keys"), ("field", "keys")}
 
 
 class SettingsBundleError(Exception):
@@ -87,8 +92,9 @@ def looks_secret(name: str) -> bool:
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(name))
     lowered = spaced.lower()
     words = [w for w in re.split(r"[^a-z0-9]+", lowered) if w]
-    if any(w in _SECRET_WORDS for w in words):
-        return True
+    for i, w in enumerate(words):
+        if w in _SECRET_WORDS and not (i and (words[i - 1], w) in _NOT_SECRET_KEY_PAIRS):
+            return True
     for a, b in zip(words, words[1:]):
         if (a, b) in (("api", "key"), ("private", "key"), ("access", "key")):
             return True
@@ -172,12 +178,36 @@ def _json_safe(value: Any) -> bool:
         return False
 
 
+def _scrub(value: Any) -> Any:
+    """`value` with every secret-looking key dropped at any depth (card 49: nested dicts were not scanned)."""
+    if isinstance(value, dict):
+        return {str(k): _scrub(v) for k, v in value.items() if not looks_secret(str(k))}
+    if isinstance(value, list):
+        return [_scrub(v) for v in value]
+    return value
+
+
 def _clean_items(items: dict) -> dict[str, Any]:
-    """Drops secret-looking and non-JSON-able entries."""
+    """Drops secret-looking and non-JSON-able entries, at every depth."""
     return {
-        str(k): v for k, v in items.items()
+        str(k): _scrub(v) for k, v in items.items()
         if not looks_secret(str(k)) and _json_safe(v)
     }
+
+
+def _same_kind(new: Any, current: Any) -> bool:
+    """An imported value may replace the current one only when it is the same kind of value (card 49): a file
+    saying "zoom": "big" must not reach a setting that is a number. None on either side, and an int for a float,
+    are fine."""
+    if new is None or current is None:
+        return True
+    if isinstance(current, bool) or isinstance(new, bool):
+        return isinstance(current, bool) and isinstance(new, bool)
+    if isinstance(current, float) and isinstance(new, int):
+        return True
+    if isinstance(current, (list, tuple)) and isinstance(new, list):     # JSON has no tuples
+        return True
+    return type(new) is type(current) or (isinstance(current, str) and isinstance(new, str))
 
 
 def default_selection(adapter: SettingsAdapter) -> set[str]:
@@ -232,7 +262,7 @@ def parse_bundle(text: str, expected_app: str) -> Bundle:
     not a usable file for `expected_app`; tolerates junk inside sections."""
     try:
         data = json.loads(text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):     # RecursionError: 100,000 "[" (card 48)
         raise SettingsBundleError("This file is not a settings file (it isn't valid JSON).") from None
     if not isinstance(data, dict) or data.get("format") != BUNDLE_FORMAT:
         raise SettingsBundleError("This file is not a Redactor settings file.")
@@ -279,8 +309,8 @@ def _importable(adapter: SettingsAdapter, bundle: Bundle, section: str) -> dict[
         current = adapter.read_section(section)
     except Exception:
         return {}
-    return {k: v for k, v in sec.items.items()
-            if k in current and not looks_secret(k)}
+    return {k: _scrub(v) for k, v in sec.items.items()
+            if k in current and not looks_secret(k) and _same_kind(v, current[k])}
 
 
 def diff_bundle(adapter: SettingsAdapter, bundle: Bundle) -> list[Change]:

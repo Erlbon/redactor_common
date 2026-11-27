@@ -278,6 +278,18 @@ def set_secret(app: str, name: str, value: str,
         except SecretStoreUnavailable:
             if not allow:
                 raise
+            # Reads try the keyring first: an older entry left there would hide the new key in the file (card 50,
+            # 2026-11-27). Remove it; if it cannot be removed, say so instead of saving a key that is never read.
+            try:
+                _keyring_delete(backend, app, name)
+            except SecretStoreUnavailable:
+                pass
+            stale = _keyring_get(app, name)
+            if stale and stale != value:
+                raise SecretStoreUnavailable(
+                    f"The OS credential store refused to save '{name}' for {app}, and its older value could not "
+                    "be removed, so a copy in the fallback file would never be used."
+                ) from None
         else:
             # A stale fallback copy must not outlive the secure one.
             values = _read_fallback(app)

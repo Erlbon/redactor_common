@@ -189,9 +189,9 @@ def _index(value: str) -> str:
     value = value.strip()
     try:
         number = float(value)
-    except ValueError:
+        return str(int(number)) if number == int(number) else value
+    except (ValueError, OverflowError):     # "inf" / "nan" (card 42): this module promises never to raise
         return value
-    return str(int(number)) if number == int(number) else value
 
 
 # ---- OPF (Calibre metadata.opf, EPUB package document) -------------------------------------------------------------

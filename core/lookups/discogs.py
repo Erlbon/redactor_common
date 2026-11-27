@@ -47,7 +47,7 @@ from typing import Callable, Optional
 from redactor_common.core import secret_store
 from redactor_common.core.local_db import normalize_words
 from redactor_common.core.lookup_client import (
-    Throttle, build_request, fetch_bytes, fetch_json, make_default_fetch, redact_text,
+    Throttle, as_int, build_request, fetch_bytes, fetch_json, make_default_fetch, redact_text,
 )
 
 from redactor_common.core.lookups.musicbrainz import FileFacts, album_query, is_various  # noqa: F401 -- is_various re-exported
@@ -627,9 +627,10 @@ def release_from_link(client: DiscogsClient, text: str, cache: Optional[dict] = 
     kind, number = parsed
     if kind == "master":
         main = client.get_json(f"masters/{number}").get("main_release")
-        if not main:
-            raise DiscogsError(f"Discogs master {number} has no main release.")
-        number = int(main)
+        # server data: "12a" or an object is DiscogsError, not a ValueError (card 46, 2026-11-27)
+        number = as_int(main, 0) if isinstance(main, (int, str)) else 0
+        if number <= 0:
+            raise DiscogsError(f"Discogs master {parsed[1]} has no usable main release.")
     return fetch_release(client, number, cache)
 
 

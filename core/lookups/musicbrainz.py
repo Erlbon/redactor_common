@@ -35,7 +35,9 @@ from typing import Callable, Optional
 from urllib.parse import quote, urlencode
 
 from redactor_common.core.local_db import normalize_words
-from redactor_common.core.lookup_client import Throttle, fetch_bytes, fetch_json, make_default_fetch, throttled
+from redactor_common.core.lookup_client import (
+    Throttle, as_text, dict_items, fetch_bytes, fetch_json, json_object, make_default_fetch, throttled,
+)
 
 API_BASE = "https://musicbrainz.org/ws/2"
 COVER_ART_BASE = "https://coverartarchive.org"
@@ -75,10 +77,11 @@ def _get(path: str, fetch: Callable, **params) -> dict:
     around it (a retry here too made the two layers multiply and wait silently, 2026-11-26)."""
     params["fmt"] = "json"
     url = f"{API_BASE}/{path}?{urlencode(params, quote_via=quote)}"
-    return fetch_json(
+    # json_object: a list or null where an object belongs is "unreadable", not an AttributeError (card 45)
+    return json_object(fetch_json(
         url, fetch, error_cls=MusicBrainzError, source_name=_SOURCE_NAME,
         status_messages={503: "MusicBrainz is busy (rate limit) -- try again in a moment."},
-    ) or {}
+    ), MusicBrainzError, _SOURCE_NAME)
 
 
 def _get_retrying(path: str, fetch: Callable, **params) -> dict:
@@ -196,7 +199,7 @@ class Release:
 
 
 def _credit(artist_credit) -> str:
-    return "".join(f"{c.get('name', '')}{c.get('joinphrase', '')}" for c in artist_credit or [])
+    return "".join(f"{as_text(c.get('name'))}{as_text(c.get('joinphrase'))}" for c in dict_items(artist_credit))
 
 
 def _lucene(text: str) -> str:
@@ -232,10 +235,11 @@ def search_releases(query: AlbumQuery, fetch: Optional[Callable] = None, limit: 
                 id=r["id"], title=r.get("title") or "", artist=_credit(r.get("artist-credit")),
                 date=r.get("date") or "", country=r.get("country") or "", status=r.get("status") or "",
                 disambiguation=r.get("disambiguation") or "",
-                media_formats=", ".join(dict.fromkeys(m.get("format", "") for m in r.get("media", []) if m.get("format"))),
+                media_formats=", ".join(dict.fromkeys(as_text(m.get("format")) for m in dict_items(r.get("media"))
+                                                      if m.get("format"))),
                 track_count=r.get("track-count", 0) or 0,
             )
-            for r in data.get("releases", [])
+            for r in dict_items(data.get("releases"))
             if r.get("id")
         ]
         if releases:
@@ -253,18 +257,21 @@ def fetch_release(release_id: str, fetch: Optional[Callable] = None) -> Release:
         disambiguation=r.get("disambiguation") or "",
     )
     formats = []
-    for medium in r.get("media", []):
+    for medium in dict_items(r.get("media")):
         disc = medium.get("position") or 1
         if medium.get("format"):
-            formats.append(medium["format"])
-        for t in medium.get("tracks", []):
-            length = t.get("length") or (t.get("recording") or {}).get("length")
+            formats.append(as_text(medium["format"]))
+        for t in dict_items(medium.get("tracks")):
+            recording = t.get("recording") if isinstance(t.get("recording"), dict) else {}
+            length = t.get("length") or recording.get("length")
+            if not isinstance(length, (int, float)) or isinstance(length, bool):
+                length = None
             release.tracks.append(ReleaseTrack(
                 disc=disc,
                 position=t.get("position") or _leading_int(str(t.get("number", ""))) or 0,
-                title=t.get("title", "") or (t.get("recording") or {}).get("title", ""),
+                title=t.get("title", "") or recording.get("title", ""),
                 seconds=length / 1000 if length else None,
-                recording_id=(t.get("recording") or {}).get("id", ""),
+                recording_id=recording.get("id", ""),
                 artist=_credit(t.get("artist-credit")) or release.artist,
             ))
     release.media_formats = ", ".join(dict.fromkeys(formats))
@@ -420,7 +427,7 @@ def release_ids_from_link(text: str, fetch: Optional[Callable] = None, limit: in
     if kind == "release":
         return [mbid]
     data = _get_retrying("release", fetch or _default_fetch, **{"release-group": mbid, "limit": limit})
-    ids = [r["id"] for r in data.get("releases", []) if r.get("id")]
+    ids = [r["id"] for r in dict_items(data.get("releases")) if r.get("id")]
     if not ids:
         raise MusicBrainzError(f"MusicBrainz release group {mbid} has no releases.")
     return ids

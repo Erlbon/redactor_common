@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
-from redactor_common.core.lookup_client import Throttle, fetch_json, make_default_fetch, throttled
+from redactor_common.core.lookup_client import Throttle, fetch_json, json_object, make_default_fetch, throttled
 
 SUMMARY_URL = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 SEARCH_URL = "https://{lang}.wikipedia.org/w/rest.php/v1/search/title"
@@ -41,8 +41,14 @@ def make_fetch(user_agent: str, timeout: float = 30.0) -> Callable:
 
 
 def _get(url: str, fetch: Callable) -> Optional[dict]:
-    return fetch_json(url, fetch, error_cls=WikipediaError, source_name=_SOURCE_NAME, ignore_404=True,
-                      retry_429=(2.0, 5.0))
+    # json_object: a list or null where an object belongs is WikipediaError, not an AttributeError (card 45)
+    return json_object(fetch_json(url, fetch, error_cls=WikipediaError, source_name=_SOURCE_NAME, ignore_404=True,
+                                  retry_429=(2.0, 5.0)), WikipediaError, _SOURCE_NAME)
+
+
+def _obj(value: object) -> dict:
+    """A nested JSON object, or {} when the answer has something else there."""
+    return value if isinstance(value, dict) else {}
 
 
 @dataclass
@@ -92,7 +98,7 @@ def get_summary(title: str, fetch: Callable, lang: str = "en") -> Optional[Page]
     data = _get(url, fetch)
     if not isinstance(data, dict) or not data.get("title"):
         return None
-    page_url = ((data.get("content_urls") or {}).get("desktop") or {}).get("page") or ""
+    page_url = str(_obj(_obj(data.get("content_urls")).get("desktop")).get("page") or "")
     return Page(
         title=str(data["title"]), extract=str(data.get("extract") or "").strip(),
         description=str(data.get("description") or "").strip(), url=page_url, kind=str(data.get("type") or "standard"),
@@ -123,8 +129,8 @@ def title_from_wikidata(entity_id: str, fetch: Callable, lang: str = "en") -> st
         "action": "wbgetentities", "ids": entity_id, "props": "sitelinks", "sitefilter": f"{lang}wiki", "format": "json",
     })
     data = _get(url, fetch) or {}
-    entity = (data.get("entities") or {}).get(entity_id) or {}
-    return str((entity.get("sitelinks") or {}).get(f"{lang}wiki", {}).get("title") or "")
+    entity = _obj(_obj(data.get("entities")).get(entity_id))
+    return str(_obj(_obj(entity.get("sitelinks")).get(f"{lang}wiki")).get("title") or "")
 
 
 def wikidata_claims(properties: dict[str, str], title: str = "", entity_id: str = "", fetch: Optional[Callable] = None,
@@ -143,14 +149,14 @@ def wikidata_claims(properties: dict[str, str], title: str = "", entity_id: str 
     else:
         return found
     data = _get(WIKIDATA_URL + "?" + urlencode(params), fetch) or {}
-    for qid, entity in (data.get("entities") or {}).items():
+    for qid, entity in _obj(data.get("entities")).items():
         if not isinstance(entity, dict) or "missing" in entity or not str(qid).startswith("Q"):
             continue
         found["qid"] = str(qid)
-        claims = entity.get("claims") or {}
+        claims = _obj(entity.get("claims"))
         for prop, key in properties.items():
-            for claim in claims.get(prop) or []:
-                value = (((claim.get("mainsnak") or {}).get("datavalue") or {}).get("value"))
+            for claim in claims.get(prop) if isinstance(claims.get(prop), list) else []:
+                value = _obj(_obj(_obj(claim).get("mainsnak")).get("datavalue")).get("value")
                 if isinstance(value, str) and value.strip():
                     found[key] = value.strip()
                     break
@@ -168,7 +174,8 @@ def qid_by_statement(prop: str, value: str, fetch: Callable) -> str:
         "format": "json",
     })
     data = _get(url, fetch) or {}
-    hits = ((data.get("query") or {}).get("search")) or []
+    hits = _obj(data.get("query")).get("search")
+    hits = hits if isinstance(hits, list) else []
     ids = [str(h.get("title")) for h in hits if isinstance(h, dict) and re.fullmatch(r"Q\d+", str(h.get("title") or ""))]
     return ids[0] if len(ids) == 1 else ""
 

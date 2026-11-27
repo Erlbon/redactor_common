@@ -49,9 +49,11 @@ _NUM = re.compile(r"(\d+)")
 
 
 def natural_sort_key(text: str) -> tuple:
-    """Case-insensitive natural order: 'Vol 2' sorts before 'Vol 10'."""
+    """Case-insensitive natural order: 'Vol 2' sorts before 'Vol 10'. The family's one natural sort key
+    (gui/sortable_table.natural_key is this). isdecimal, not isdigit: a superscript "²" is a digit to isdigit but
+    int() refuses it, which crashed every header click on "Track 10²" (card 29, 2026-11-27)."""
     parts = _NUM.split((text or "").casefold())
-    return tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in parts)
+    return tuple((0, int(p), "") if p.isdecimal() else (1, 0, p) for p in parts if p != "")
 
 
 def insert_path_key(keys: Iterable[str], after: str = FILENAME_KEY) -> list[str]:

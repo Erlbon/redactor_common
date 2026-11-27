@@ -57,7 +57,9 @@ _INSERT = re.compile(rb"^INSERT INTO `([^`]+)` (?:\(([^)]*)\) )?VALUES ")
 # line fails fast instead of backtracking for minutes.
 _STRING = rb"'[^'\\]*(?:(?:\\.|'')[^'\\]*)*'"
 _ROW = re.compile(rb"\(([^'()]*(?:" + _STRING + rb"[^'()]*)*)\)", re.DOTALL)
-_FIELD = re.compile(rb"(" + _STRING + rb")|([^,']+)", re.DOTALL)
+# A charset introducer before a string (MySQL 8 writes BLOBs as _binary '...') belongs to that one value: read
+# as two, it made the row one value too wide and the whole INSERT line was dropped (card 37, 2026-11-27).
+_FIELD = re.compile(rb"(?:_[A-Za-z0-9]+\s*)?(" + _STRING + rb")|([^,']+)", re.DOTALL)
 _ESCAPE = re.compile(rb"\\(.)|''", re.DOTALL)
 _SIMPLE = {
     b"0": b"\x00", b"b": b"\x08", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"Z": b"\x1a",

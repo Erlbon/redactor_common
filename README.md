@@ -56,7 +56,21 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#02` (review of 2026-11-27, batch 2, release and update: `publish` stops when an existing
+Currently: `2026-11-27#03` (review of 2026-11-27, batch 3, crashes and wrong results: an error before the
+QApplication exists is printed instead of a silent abort; one natural sort key (`core/path_column.natural_sort_key`,
+`isdecimal`) so "Track 10²" sorts; Search & Replace catches a missing `\g<name>`, waits 250 ms after typing and
+stops a regex pass that runs over a second; series numbers take a decimal comma and refuse exponents, Infinity and
+NaN (`series_numbering.parse_series_value`), and the quick prompt asks again; PageCount counts tif/avif/jxl and is
+never written as 0; the overwrite review keeps same-named files apart; local database names keep combining marks
+and NFC-match, and a UNC database opens (`local_db.sqlite_ro_uri`); MySQL `_binary '...'` is one value; unclosed
+links in notes are linear; an odd journal line is skipped and journaling never blocks a save; dump reading errors
+(zlib too) are "Couldn't read" and the caller's own errors keep their message; MusicBrainz, Wikipedia and Discogs
+answers of the wrong shape are their module's error; identical subtitle cues count as translated; deep JSON in a
+settings file is refused; the settings export drops more secret names at every depth and the import keeps value
+types; a keyring entry that cannot be replaced no longer hides the fallback copy; pasted keys are stripped; a
+folder is not a tool; ID3 v2.3 takes a year for a year-month date; ComicInfo extras lose a default namespace; Quick
+Pick never returns a hidden row; COM¹-LPT³ are reserved; "Spider-Man" keeps its dash). `2026-11-27#02` (review of
+2026-11-27, batch 2, release and update: `publish` stops when an existing
 tag is not on HEAD, refuses a stale build under `--skip-build`, and builds its notes from every CHANGELOG section
 since the Latest release (`core/release_notes.build_notes`); `gate`/`promote` accept only a release tag; on
 Linux/Mac the gate stops a program's whole process group; a cut-off download is "could not download"; an installer

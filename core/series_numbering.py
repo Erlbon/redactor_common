@@ -23,24 +23,36 @@ error (0.1 + 0.1 + 0.1 != 0.3 in binary floating point).
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 
 DEFAULT_START = "1"
 DEFAULT_STEP = "1"
 
 
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+
+
+def parse_series_value(text: str) -> Decimal | None:
+    """A series number as typed: "3", "3.5" or "3,5" (a decimal comma counts as the point). None for anything else:
+    blank, an exponent ("1e2" was written as "1E+2"), "Infinity", "NaN" (card 32, 2026-11-27)."""
+    text = (text or "").strip().replace(",", ".")
+    if not _PLAIN_NUMBER.fullmatch(text):
+        return None
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() else None
+
+
 def parse_decimal(text: str, default: str) -> Decimal:
-    """Parses text as a Decimal, falling back to `default` (itself
+    """Parses text as a Decimal (parse_series_value), falling back to `default` (itself
     parsed as a Decimal) for blank or unparseable input -- never raises,
     since this is always driven by a live text field the user may be
     mid-edit on."""
-    text = (text or "").strip()
-    if not text:
-        text = default
-    try:
-        return Decimal(text)
-    except InvalidOperation:
-        return Decimal(default)
+    value = parse_series_value(text)
+    return value if value is not None else Decimal(default)
 
 
 def format_series_number(value: Decimal) -> str:

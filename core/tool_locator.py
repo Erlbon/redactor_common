@@ -64,7 +64,7 @@ def find_tool(
     shutil.which still works too."""
     if override:
         overridden = Path(override)
-        return overridden if overridden.exists() else None
+        return overridden if _is_program(overridden) else None
 
     # Apps name their tools the Windows way ("ffmpeg.exe"); on Linux/Mac
     # the same tool is plain "ffmpeg", which PATH lookup must also try
@@ -100,9 +100,17 @@ def find_tool(
 def _first_existing(directory: Path, candidates: list[str]) -> Path | None:
     for candidate in candidates:
         path = directory / candidate
-        if path.exists():
+        if _is_program(path):
             return path
     return None
+
+
+def _is_program(path: Path) -> bool:
+    """A file that can be run: a folder ("C:/Tools/ffmpeg/bin" picked instead of ffmpeg.exe) is not found (card 52,
+    2026-11-27); on Linux/Mac the file must also be executable."""
+    if not path.is_file():
+        return False
+    return sys.platform == "win32" or os.access(path, os.X_OK)
 
 
 def windows_program_dirs(*relative: str) -> list[Path]:

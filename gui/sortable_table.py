@@ -60,6 +60,8 @@ from typing import Callable, Iterator, Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 
+from redactor_common.core.path_column import natural_sort_key
+
 
 class NumericTableWidgetItem(QTableWidgetItem):
     def __init__(self, text: str, sort_value: Optional[float] = None):
@@ -94,9 +96,8 @@ def suspend_sorting(table: QTableWidget) -> Iterator[None]:
 
 def natural_key(text: str) -> tuple:
     """Sort key that reads digit runs as numbers and ignores case: 'Episode 2' < 'Episode 10', 'a' == 'A'. Dates in
-    ISO form (2014-02-17, or a bare 2014) already order correctly this way."""
-    parts = re.split(r"(\d+)", (text or "").casefold())
-    return tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in parts if part != "")
+    ISO form (2014-02-17, or a bare 2014) already order correctly this way. The shared core/path_column one."""
+    return natural_sort_key(text)
 
 
 class NaturalTableWidgetItem(QTableWidgetItem):

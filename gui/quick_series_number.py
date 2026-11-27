@@ -31,9 +31,9 @@ redactor_common.gui.context_menu.show_table_context_menu):
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QInputDialog, QWidget
+from PyQt6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
-from redactor_common.core.series_numbering import DEFAULT_START, generate_series_numbers
+from redactor_common.core.series_numbering import DEFAULT_START, generate_series_numbers, parse_series_value
 
 
 def prompt_and_generate_series_numbers(
@@ -49,12 +49,15 @@ def prompt_and_generate_series_numbers(
     or None if the user cancelled. Caller applies the result to
     whichever field/items it's numbering; this function only ever
     prompts and generates, it never touches app data."""
-    start_text, ok = QInputDialog.getText(
-        parent, title,
-        f"{field_label} for {count} selected item(s) "
-        f"(numbered in their current table order, +{step} per row):",
-        text=default_start,
-    )
-    if not ok:
-        return None
-    return generate_series_numbers(count, start_text, step)
+    start_text = default_start
+    prompt = (f"{field_label} for {count} selected item(s) "
+              f"(numbered in their current table order, +{step} per row):")
+    while True:
+        start_text, ok = QInputDialog.getText(parent, title, prompt, text=start_text)
+        if not ok:
+            return None
+        if parse_series_value(start_text) is not None:
+            return generate_series_numbers(count, start_text, step)
+        # card 32 (2026-11-27): "3,5" or a typo silently became 1 and renumbered every item; ask again instead
+        QMessageBox.warning(parent, title, f"\"{start_text.strip()}\" is not a number. Type a number such as 3 or "
+                                           "3.5.")

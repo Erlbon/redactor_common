@@ -85,7 +85,9 @@ AGE_RATING_VALUES = (
 )
 _ENUMS = {"BlackAndWhite": BLACK_AND_WHITE_VALUES, "Manga": MANGA_VALUES, "AgeRating": AGE_RATING_VALUES}
 
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+# The reader's list (core/meta_comic): the writer counted no tif/tiff/avif/jxl pages and wrote PageCount 0 for a
+# book of .avif pages (card 33, 2026-11-27).
+from redactor_common.core.meta_comic import IMAGE_EXTENSIONS  # noqa: E402
 
 # Characters XML 1.0 cannot hold at all (tab, line feed and carriage return can).
 _XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿\ud800-\udfff]")
@@ -257,6 +259,20 @@ def _root_attributes(root: ET.Element) -> dict:
     return attrib
 
 
+def _without_namespace(element: ET.Element, namespace: str) -> ET.Element:
+    """A copy of `element` and its children with `namespace` taken off their tags and attribute names."""
+    prefix = "{" + namespace + "}"
+
+    def bare(name):
+        return name[len(prefix):] if isinstance(name, str) and name.startswith(prefix) else name
+
+    copy = ET.Element(bare(element.tag), {bare(k): v for k, v in element.attrib.items()})
+    copy.text, copy.tail = element.text, element.tail
+    for child in element:
+        copy.append(_without_namespace(child, namespace))
+    return copy
+
+
 def serialize_comicinfo(root: ET.Element, page_count: Optional[int] = None) -> bytes:
     """ComicInfo.xml bytes for `root`, in the form the module docstring
     describes. `page_count` (when given) replaces PageCount. Raises
@@ -290,8 +306,11 @@ def serialize_comicinfo(root: ET.Element, page_count: Optional[int] = None) -> b
     for tag in FIELDS_BEFORE_EXTRAS:
         if known.get(tag):
             add(tag, known[tag])
+    # A root with a default namespace (xmlns="...") put the extras (<Pages>...) in it: they came out as <ns0:Pages>
+    # beside the bare known fields, and readers lost the page list (card 58, 2026-11-27). Strip that namespace.
+    default_ns = root.tag[1:].split("}", 1)[0] if isinstance(root.tag, str) and root.tag.startswith("{") else ""
     for element in extras:
-        out.append(element)
+        out.append(_without_namespace(element, default_ns) if default_ns else element)
     for tag in FIELDS_AFTER_EXTRAS:
         if known.get(tag):
             add(tag, known[tag])
@@ -384,7 +403,8 @@ def write_comicinfo_into_cbz(
     if root is None:
         root = new_comicinfo()
     apply_comicinfo_edits(root, edits)
-    xml = serialize_comicinfo(root, count_pages(names) if refresh_page_count else None)
+    # no page recognised: keep what PageCount says rather than write 0
+    xml = serialize_comicinfo(root, (count_pages(names) or None) if refresh_page_count else None)
     problem = check_written(xml, edits)
     if problem:
         raise ComicInfoError(problem)

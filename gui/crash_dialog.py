@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -172,6 +173,15 @@ class CrashReporter(QObject):
     # -- GUI thread -------------------------------------------------------------------------------------------------
 
     def _on_incoming(self, signature: str, summary: str, details: str) -> None:
+        if QApplication.instance() is None:
+            # Before the QApplication exists (run_app installs this first): building a dialog would make Qt abort
+            # the process with no word (card 28, 2026-11-27). The log entry is written; print the traceback too.
+            try:
+                sys.stderr.write(details)
+                sys.stderr.flush()
+            except Exception:  # noqa: BLE001 - no console (a windowed exe)
+                pass
+            return
         try:
             if self.dialog is not None:
                 self.dialog.add_error(summary, details)

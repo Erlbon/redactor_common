@@ -190,6 +190,10 @@ def _as_list(value) -> list:
 def _reads_back(key: str, wanted: list, got: list) -> bool:
     if got == wanted or (len(wanted) > 1 and got == ["/".join(wanted)]):  # ID3 v2.3 has one text per frame
         return True
+    if key == "date" and len(got) == len(wanted) and all(
+            g.startswith(w) or (len(g) == 4 and g.isdecimal() and w.startswith(g + "-"))
+            for g, w in zip(got, wanted)):
+        return True     # ID3 v2.3 holds the year only: "2019-05" reads back as "2019" (card 57, 2026-11-27)
     return (key in _PREFIX_FIELDS and len(got) == len(wanted)
             and all(g.startswith(w) for g, w in zip(got, wanted)))
 

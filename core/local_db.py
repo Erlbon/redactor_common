@@ -60,11 +60,23 @@ class LocalDatabaseError(Exception):
     as `error_cls`, so their callers keep catching their own type."""
 
 
+def sqlite_ro_uri(path: str) -> str:
+    """A read-only SQLite URI for `path`. as_uri() percent-encodes it (a raw f"file:{path}" breaks on "#" and "%").
+    A UNC path comes out as file://server/share/..., and SQLite refuses any URI authority ("invalid uri
+    authority"), so a network share gets the empty-authority form file:////server/share/... (card 36,
+    2026-11-27)."""
+    uri = Path(path).resolve().as_uri()
+    if uri.startswith("file://") and not uri.startswith("file:///"):
+        uri = "file:////" + uri[len("file://"):]
+    return uri + "?mode=ro"
+
+
 def normalize_words(name: str) -> str:
     """Lower-case letters and digits only (any script; accents dropped),
     words separated by single spaces; "&" counts as "and". "G.I. Joe - A Real American Hero" and
     "G.I. Joe: A Real American Hero" normalize alike."""
-    text = (name or "").casefold().replace("&", " and ")
+    # NFC first: a decomposed "Amélie" (a macOS file name) is the same name as the composed one (card 35).
+    text = unicodedata.normalize("NFC", (name or "").casefold().replace("&", " and "))
     # Drop accents from Latin letters only ("Amélie" -> "amelie"): NFKD on
     # Cyrillic "й" or Hangul would change the letter itself.
     text = "".join(
@@ -72,7 +84,10 @@ def normalize_words(name: str) -> str:
         if "LATIN" in unicodedata.name(ch, "") else ch
         for ch in text
     )
-    return re.sub(r"[\W_]+", " ", text).strip()  # \W is Unicode-aware: CJK/Cyrillic words survive
+    # Letters, digits and combining marks are word characters. \W alone counts a mark as a break, so Hindi
+    # "हिन्दी" fell apart into "ह न द" (card 35, 2026-11-27); CJK/Cyrillic words survive either way.
+    text = "".join(ch if ch.isalnum() or unicodedata.category(ch) in ("Mn", "Mc", "Me") else " " for ch in text)
+    return " ".join(text.split())
 
 
 def year_gap(a, b) -> int:
@@ -134,7 +149,7 @@ class LocalDatabase:
         self.path = path
         # as_uri() percent-encodes the path; a raw f"file:{path}" breaks
         # on "#" (starts a fragment) and "%" (an escape) in folder names.
-        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        uri = sqlite_ro_uri(path)
         con = None
         try:
             con = sqlite3.connect(uri, uri=True, check_same_thread=False)

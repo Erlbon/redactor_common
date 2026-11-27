@@ -154,9 +154,17 @@ class Journal:
             line["truncated"] = truncated
         if note:
             line["note"] = note
+        # Journaling never blocks the file operation (card 40, 2026-11-27): a prune or an append that fails leaves
+        # this change unrecorded (None) instead of raising into every Save and Redact.
         with self._lock:
-            self._maybe_prune()
-            self._append(line)
+            try:
+                self._maybe_prune()
+            except Exception:  # noqa: BLE001 - pruning is housekeeping; it is tried again later
+                pass
+            try:
+                self._append(line)
+            except OSError:
+                return None
         return entry_id
 
     def finish(self, entry_id: str | None, ok: bool = True, error: str = "") -> None:
@@ -237,35 +245,42 @@ class Journal:
                     continue  # a half-written last line after a crash: skip it, keep the rest
                 if not isinstance(line, dict):
                     continue
-                kind = line.get("t")
-                if kind == "op":
-                    entry = Entry(
-                        id=str(line.get("id", "")), ts=float(line.get("ts", 0)), path=str(line.get("path", "")),
-                        kind=str(line.get("kind", "")),
-                        changes={k: (str(v[0]), str(v[1])) for k, v in (line.get("changes") or {}).items()},
-                        cover_changed=bool(line.get("cover")), truncated=list(line.get("truncated") or []),
-                        note=str(line.get("note", "")),
-                    )
-                    entry.original_path = entry.path
-                    by_id[entry.id] = entry
-                    by_path.setdefault(_path_key(entry.path), []).append(entry)
-                    order.append(entry)
-                elif kind == "moved":
-                    moved = by_path.pop(_path_key(str(line.get("from", ""))), [])
-                    if moved:
-                        target = str(line.get("to", ""))
-                        for entry in moved:
-                            entry.path = target
-                        by_path.setdefault(_path_key(target), []).extend(moved)
-                elif kind == "done" and line.get("id") in by_id:
-                    target = by_id[line["id"]]
-                    target.status = STATUS_OK if line.get("ok") else STATUS_FAILED
-                    target.error = str(line.get("err", ""))
-                elif kind == "restored" and line.get("id") in by_id:
-                    target = by_id[line["id"]]
-                    target.status = STATUS_RESTORED
-                    target.restored_by = str(line.get("by", ""))
+                try:
+                    self._apply_line(line, by_id, by_path, order)
+                except (TypeError, ValueError, AttributeError, IndexError, KeyError):
+                    continue    # a valid line with an odd field ("ts": null): skipped, never raised (card 40)
         return order
+
+    @staticmethod
+    def _apply_line(line: dict, by_id: dict, by_path: dict, order: list) -> None:
+        kind = line.get("t")
+        if kind == "op":
+            entry = Entry(
+                id=str(line.get("id", "")), ts=float(line.get("ts", 0)), path=str(line.get("path", "")),
+                kind=str(line.get("kind", "")),
+                changes={k: (str(v[0]), str(v[1])) for k, v in (line.get("changes") or {}).items()},
+                cover_changed=bool(line.get("cover")), truncated=list(line.get("truncated") or []),
+                note=str(line.get("note", "")),
+            )
+            entry.original_path = entry.path
+            by_id[entry.id] = entry
+            by_path.setdefault(_path_key(entry.path), []).append(entry)
+            order.append(entry)
+        elif kind == "moved":
+            moved = by_path.pop(_path_key(str(line.get("from", ""))), [])
+            if moved:
+                target = str(line.get("to", ""))
+                for entry in moved:
+                    entry.path = target
+                by_path.setdefault(_path_key(target), []).extend(moved)
+        elif kind == "done" and line.get("id") in by_id:
+            target = by_id[line["id"]]
+            target.status = STATUS_OK if line.get("ok") else STATUS_FAILED
+            target.error = str(line.get("err", ""))
+        elif kind == "restored" and line.get("id") in by_id:
+            target = by_id[line["id"]]
+            target.status = STATUS_RESTORED
+            target.restored_by = str(line.get("by", ""))
 
     # -- restoring --------------------------------------------------------------------------------
 
@@ -313,7 +328,10 @@ class Journal:
                     if not isinstance(line, dict):
                         continue
                     # A move older than the cutoff can only concern entries older than it, which are dropped.
-                    keep_move = line.get("t") == "moved" and float(line.get("ts", 0)) >= cutoff
+                    try:
+                        keep_move = line.get("t") == "moved" and float(line.get("ts", 0)) >= cutoff
+                    except (TypeError, ValueError):
+                        keep_move = False
                     if line.get("id") in keep_ids or keep_move:
                         out.write(raw if raw.endswith("\n") else raw + "\n")
                 out.flush()

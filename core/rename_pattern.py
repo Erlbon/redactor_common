@@ -37,6 +37,8 @@ _RESERVED_NAMES = {
     "CON", "PRN", "AUX", "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
+    # Windows reserves the superscript forms too (card 62, 2026-11-27)
+    *(f"{name}{digit}" for name in ("COM", "LPT") for digit in "¹²³"),
 }
 
 MAX_FILENAME_LENGTH = 150  # stem only, conservative vs. Windows' ~255 path limit

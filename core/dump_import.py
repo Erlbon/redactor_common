@@ -52,7 +52,7 @@ import sqlite3
 import tarfile
 import zipfile
 import zlib
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from xml.etree import ElementTree as ET
@@ -119,35 +119,61 @@ def open_dump(path: str, member_suffix: str = "") -> Iterator[DumpStream]:
     if not path or not os.path.isfile(path):
         raise DumpImportError(f"File not found: {path or '(not set)'}")
     lower = path.lower()
-    try:
-        if lower.endswith(".zip"):
-            with zipfile.ZipFile(path) as archive:
+    name = os.path.basename(path)
+    # Only opening and READING the dump are "Couldn't read": the try no longer wraps the yield, so an error in
+    # the caller's own body (its output folder read-only, a full disk) keeps its own message (card 44,
+    # 2026-11-27). Reading errors are converted where they happen, by _GuardedReader.
+    with ExitStack() as stack:
+        try:
+            if lower.endswith(".zip"):
+                archive = stack.enter_context(zipfile.ZipFile(path))
                 members = [m for m in archive.infolist() if not m.is_dir()]
                 if member_suffix:
                     members = [m for m in members if m.filename.lower().endswith(member_suffix.lower())]
                 if len(members) != 1:
                     raise DumpImportError(
                         f"Expected one{' ' + member_suffix if member_suffix else ''} file inside "
-                        f"{os.path.basename(path)}, found {len(members)}."
+                        f"{name}, found {len(members)}."
                     )
-                with archive.open(members[0]) as raw:
-                    counter = _CountingReader(raw)
-                    yield DumpStream(io.BufferedReader(counter, 1 << 20), counter, members[0].file_size)
-            return
-        with open(path, "rb") as raw:
-            counter = _CountingReader(raw)
-            buffered = io.BufferedReader(counter, 1 << 20)
-            total = os.path.getsize(path)
-            if lower.endswith(".gz"):
-                yield DumpStream(gzip.GzipFile(fileobj=buffered), counter, total)
-            elif lower.endswith(".bz2"):
-                yield DumpStream(bz2.BZ2File(buffered), counter, total)
-            elif lower.endswith(".xz"):
-                yield DumpStream(lzma.LZMAFile(buffered), counter, total)
+                counter = _CountingReader(stack.enter_context(archive.open(members[0])))
+                inner, total = io.BufferedReader(counter, 1 << 20), members[0].file_size
             else:
-                yield DumpStream(buffered, counter, total)
-    except (OSError, zipfile.BadZipFile, EOFError, lzma.LZMAError) as exc:
-        raise DumpImportError(f"Couldn't read {os.path.basename(path)}: {exc}") from exc
+                counter = _CountingReader(stack.enter_context(open(path, "rb")))
+                buffered = io.BufferedReader(counter, 1 << 20)
+                total = os.path.getsize(path)
+                if lower.endswith(".gz"):
+                    inner = gzip.GzipFile(fileobj=buffered)
+                elif lower.endswith(".bz2"):
+                    inner = bz2.BZ2File(buffered)
+                elif lower.endswith(".xz"):
+                    inner = lzma.LZMAFile(buffered)
+                else:
+                    inner = buffered
+            stream = io.BufferedReader(_GuardedReader(inner, name), 1 << 20)
+        except _READ_ERRORS as exc:
+            raise DumpImportError(f"Couldn't read {name}: {exc}") from exc
+        yield DumpStream(stream, counter, total)
+
+
+# What a damaged or unreadable dump raises while it is read: zlib.error is no OSError (card 85).
+_READ_ERRORS = (OSError, zipfile.BadZipFile, EOFError, lzma.LZMAError, zlib.error)
+
+
+class _GuardedReader(io.RawIOBase):
+    """The decompressed dump as a raw stream whose reading errors are DumpImportError("Couldn't read ..."), so
+    they are told apart from the caller's own errors."""
+
+    def __init__(self, inner, name: str):
+        self._inner, self._name = inner, name
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        try:
+            return self._inner.readinto(buffer)
+        except _READ_ERRORS as exc:
+            raise DumpImportError(f"Couldn't read {self._name}: {exc}") from exc
 
 
 def iter_xml_records(

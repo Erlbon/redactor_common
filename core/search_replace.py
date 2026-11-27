@@ -40,7 +40,7 @@ def apply_replace(
     replacement = replace if use_regex else replace.replace("\\", "\\\\")
     try:
         return pattern.sub(replacement, value)
-    except re.error as exc:
+    except (re.error, IndexError) as exc:      # IndexError: \g<name> with no such group (card 30)
         raise SearchReplaceError(f"Invalid replacement: {exc}") from exc
 
 
