@@ -143,6 +143,7 @@ class UpdateController(QObject):
         self._quit_app = quit_app or self._close_and_quit
         self._launch = launch or _launch_detached
         self._pending_command: list[str] | None = None
+        self._pending_check: tuple[Path, Release] | None = None     # the installer re-hashed at launch (card 19)
         self._auto = _AutoResult(self)
         self._auto.found.connect(self._on_auto_found)
         self._restart_connected = False
@@ -274,12 +275,20 @@ class UpdateController(QObject):
             except OSError:
                 pass
             return False
+        try:
+            selfupdate.verify_download(got, release)
+        except UpdateError as exc:
+            QMessageBox.warning(self.window, "Update", str(exc))
+            return False
+        self._pending_check = (got, release)
         return self.restart(selfupdate.installer_command(got))
 
     def restart(self, command: list[str] | None = None) -> bool:
         """Quits the app the normal way (it may ask about unsaved changes and stay open) and, once it has quit,
         starts the new exe (or `command`: the new installer of an installed copy). False when the app stayed open."""
         self._pending_command = command
+        if command is None:
+            self._pending_check = None
         app = QApplication.instance()
         if not self._restart_connected:
             app.aboutToQuit.connect(self._start_new_exe)
@@ -301,6 +310,12 @@ class UpdateController(QObject):
         argv, env = selfupdate.restart_command(self._exe)
         if self._pending_command:
             argv = self._pending_command
+        if self._pending_check is not None:
+            try:
+                selfupdate.verify_download(*self._pending_check)
+            except UpdateError as exc:          # changed while the app quit: never run it
+                print(f"Update not started: {exc}", file=sys.stderr)
+                return
         try:
             self._launch(argv, env=env, cwd=str(self._exe.parent))
         except OSError:

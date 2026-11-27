@@ -35,7 +35,9 @@ Nothing is sent except the HTTPS GETs themselves (GitHub sees the address they c
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
+import shutil
 import os
 import re
 import sys
@@ -414,18 +416,56 @@ def _download_from(request: urllib.request.Request, release: Release, dest: Path
         return dest
     except UpdateError:
         raise
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:     # IncompleteRead is no OSError (card 18)
         raise _Unreachable(UpdateError(f"Could not download the update: {lookup_client.redact_text(exc)}")) from exc
     finally:
         if not ok:
             _remove_quietly(part)
 
 
-def installer_download_path(release: Release) -> Path:
-    """Where an installer update is downloaded: its own folder in the temp folder, under the manifest's file name."""
-    folder = Path(tempfile.gettempdir()) / "redactor-updates"
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / release.asset_name
+INSTALLER_FOLDER = "redactor-updates"
+OLD_INSTALLER_AGE = 24 * 3600       # an installer folder this old is left over from an earlier update
+
+
+def installer_download_path(release: Release, root: Path | None = None) -> Path:
+    """Where an installer update is downloaded: a new folder of its own (mkdtemp: only this user can write it, and
+    no earlier file can be waiting under the name) under `<temp>/redactor-updates`, with the manifest's file name."""
+    parent = Path(root or tempfile.gettempdir()) / INSTALLER_FOLDER
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="update-", dir=parent)) / release.asset_name
+
+
+def verify_download(path: Path, release: Release) -> None:
+    """Checks the file once more just before it is run (card 19, 2026-11-27): it waited on disk through the "Update
+    now?" question and the quit. UpdateError when its size or SHA-256 no longer match the release."""
+    try:
+        size = Path(path).stat().st_size
+        digest = update_manifest.file_sha256(Path(path)) if size == release.asset_size else ""
+    except OSError as exc:
+        raise UpdateError(f"The downloaded update cannot be read any more: {exc}") from exc
+    if size != release.asset_size or digest != release.sha256:
+        raise UpdateError("The downloaded update changed on disk after it was checked; it was not run.")
+
+
+def remove_old_installers(root: Path | None = None, now: float | None = None) -> None:
+    """At startup: deletes installer folders from earlier updates (a day old or more, so an installer that is still
+    running, or a log the release gate still reads, is left alone). Quiet when something is locked."""
+    parent = Path(root or tempfile.gettempdir()) / INSTALLER_FOLDER
+    now = time.time() if now is None else now
+    try:
+        entries = list(parent.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if now - entry.stat().st_mtime < OLD_INSTALLER_AGE:
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink()
+        except OSError:
+            pass
 
 
 def install(new_file: Path, exe: Path | None = None) -> Path:
@@ -459,6 +499,7 @@ def remove_leftovers(exe: Path | None = None, frozen: bool | None = None) -> Non
     exe = Path(exe or running_exe())
     for suffix in (OLD_SUFFIX, PART_SUFFIX, NEW_SUFFIX):
         _remove_quietly(exe.with_name(exe.name + suffix))
+    remove_old_installers()
 
 
 def restart_command(exe: Path | None = None, environ: Mapping[str, str] | None = None) -> tuple[list[str], dict]:
@@ -502,10 +543,18 @@ class UpdateSettings:
         tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
         os.replace(tmp, self.path)
 
-    def update(self, **values) -> None:
-        data = self._load()
-        data.update(values)
-        self._save(data)
+    _lock = threading.Lock()        # the background check and the GUI both write (card 26)
+
+    def update(self, **values) -> bool:
+        """Saves `values`. False, never an exception, when the file cannot be written: the caller goes on."""
+        with self._lock:
+            data = self._load()
+            data.update(values)
+            try:
+                self._save(data)
+            except OSError:
+                return False
+        return True
 
     @property
     def enabled(self) -> bool:

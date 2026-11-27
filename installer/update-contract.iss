@@ -33,7 +33,7 @@
 #endif
 
 [Run]
-Filename: "{app}\{#UpdateExe}"; Flags: nowait; Check: UpdateContractRelaunch
+Filename: "{app}\{#UpdateExe}"; Flags: nowait runasoriginaluser; Check: UpdateContractRelaunch
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-channel"

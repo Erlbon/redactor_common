@@ -95,7 +95,7 @@ def test_the_manifest_lists_the_configured_packages(tmp_path):
 
 def test_the_notes_are_this_versions_changelog_section(tmp_path):
     cfg = repo(tmp_path)
-    assert release.release_notes(cfg) == "- one\n- two"
+    assert release.release_notes(cfg, "v2026-11-07-01") == "- one\n- two"
     assert cfg.release_title == "The App 2026-11-07#02"
 
 
@@ -295,6 +295,7 @@ def test_publish_can_leave_the_gated_release_a_pre_release(tmp_path, monkeypatch
         monkeypatch.setattr(release, name, lambda *a, _n=name, **k: steps.append(_n))
     monkeypatch.setattr(release, "assets_of", lambda cfg: [])
     monkeypatch.setattr(release, "release_exists", lambda *a: {"prerelease": True})
+    monkeypatch.setattr(release, "check_built_after_version", lambda cfg: None)
     (tmp_path / "dist").mkdir()
     runner = FakeRunner()
     release.publish(cfg, skip_build=True, first=True, runner=runner, promote_after=False)

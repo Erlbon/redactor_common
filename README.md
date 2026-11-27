@@ -56,7 +56,15 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#01` (review of 2026-11-27, batch 1, files at risk: a cross-volume move compares every byte
+Currently: `2026-11-27#02` (review of 2026-11-27, batch 2, release and update: `publish` stops when an existing
+tag is not on HEAD, refuses a stale build under `--skip-build`, and builds its notes from every CHANGELOG section
+since the Latest release (`core/release_notes.build_notes`); `gate`/`promote` accept only a release tag; on
+Linux/Mac the gate stops a program's whole process group; a cut-off download is "could not download"; an installer
+update downloads into a `mkdtemp` folder, is hashed again right before it runs (`selfupdate.verify_download`) and
+day-old installer folders are cleared at start-up; `UpdateSettings.update` is locked and returns False instead of
+raising; the release notes browser opens only https links and loads no outside image; the post-update relaunch
+runs as the original user (`runasoriginaluser`); `bump_version.py` never moves the version backwards; the
+pre-commit hook checks the staged blobs). `2026-11-27#01` (review of 2026-11-27, batch 1, files at risk: a cross-volume move compares every byte
 of the copy before the original goes to the Recycle Bin, and can be cancelled mid-file (`move_plan.MoveCancelled`);
 Move into Folders runs on a worker thread and logs each move for Undo as it happens (`RenameLog.open_batch`);
 `RenameLog.record` returns False and never writes over a log it could not read; the "not duplicates" store and the

@@ -310,11 +310,30 @@ def test_an_installed_copy_downloads_the_named_installer_and_runs_it_at_quit(tmp
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
     dialogs.answer = uc.UPDATE
     c.check_now()
-    setup = tmp_path / "redactor-updates" / NAMES[WINDOWS_INSTALLER]
+    setup, = (tmp_path / "redactor-updates").glob("update-*/" + NAMES[WINDOWS_INSTALLER])     # its mkdtemp folder
     assert setup.read_bytes() == SETUP
     assert (tmp_path / "cbzredactor.exe").read_bytes() == b"old exe"       # the exe is the installer's to replace
     assert quits == [1]
     assert started == [[str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/relaunch=yes"]]
+
+
+def test_an_installer_changed_before_launch_is_not_run(tmp_path, boxes, dialogs, monkeypatch):
+    """Card 19 (2026-11-27): the installer is hashed again right before it is started at quit."""
+    monkeypatch.setattr(selfupdate.tempfile, "gettempdir", lambda: str(tmp_path))
+    started = []
+
+    def quit_app():
+        setup, = (tmp_path / "redactor-updates").glob("update-*/" + NAMES[WINDOWS_INSTALLER])
+        setup.write_bytes(b"swapped")       # another process swaps it while the app quits
+        c._start_new_exe()
+        return True
+
+    c = controller(tmp_path, channel=WINDOWS_INSTALLER, quit_app=quit_app,
+                   launch=lambda argv, **kw: started.append(argv))
+    monkeypatch.setattr(selfupdate.urllib.request, "build_opener", lambda *_a: _Opener(SETUP))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    assert c.update_to(c.decide()) is True
+    assert started == []
 
 
 def test_an_installed_copy_that_stays_open_starts_no_installer(tmp_path, boxes, dialogs, monkeypatch):

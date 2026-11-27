@@ -94,7 +94,7 @@ def test_update_starts_the_installer_without_relaunch_and_reports_it(tmp_path, m
     code, text = run(["--update", "--release-tag", TAG], tmp_path,
                      launch=lambda argv: started.append(argv) or Process())
     data = json.loads(text)
-    setup = tmp_path / "temp" / "redactor-updates" / "App-2026-11-07-02-setup.exe"
+    setup, = (tmp_path / "temp" / "redactor-updates").glob("update-*/App-2026-11-07-02-setup.exe")    # mkdtemp
     assert code == 0 and data["action"] == "started" and data["pid"] == 4321
     assert setup.read_bytes() == NEW
     log = str(setup) + ".log"                               # the release gate reads it for forced closes

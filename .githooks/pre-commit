@@ -3,23 +3,26 @@
 # Added after a patch script turned a backslash-n into a real line break and a broken file was committed and released.
 # A staged Python file must parse, and no staged .py/.md/.txt file may contain a stray control character
 # (an escape lost in a heredoc once left a \x01 byte in a source file).
+# It checks what is STAGED (the index), not the working copy, and reads the names NUL-separated, so a name with a
+# space or a non-ASCII letter is one name (card 27, 2026-11-27: `git add -p` could commit a broken half-edit while
+# the working copy parsed).
 # The test suite is NOT run here: gate commits on pytest's real exit code yourself, never on `pytest | tail`.
-fail=0
-for f in $(git diff --cached --name-only --diff-filter=ACM); do
-  case "$f" in
-    *.py)
-      python -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())" "$f" || { echo "pre-commit: syntax error in $f" >&2; fail=1; } ;;
-  esac
-  case "$f" in
-    *.py|*.md|*.txt)
-      python -c "
-import sys
-data = open(sys.argv[1], 'rb').read()
-bad = [i for i, b in enumerate(data) if b < 32 and b not in (9, 10, 12, 13)]
-if bad:
-    print('pre-commit: control character 0x%02x at byte %d in %s' % (data[bad[0]], bad[0], sys.argv[1]), file=sys.stderr)
-    sys.exit(1)
-" "$f" || fail=1 ;;
-  esac
-done
-exit $fail
+git diff --cached --name-only --diff-filter=ACM -z | python -c "
+import subprocess, sys, ast
+fail = 0
+for name in sys.stdin.buffer.read().decode('utf-8', 'surrogateescape').split(chr(0)):
+    if not name.endswith(('.py', '.md', '.txt')):
+        continue
+    data = subprocess.run(['git', 'show', ':' + name], capture_output=True).stdout
+    if name.endswith('.py'):
+        try:
+            ast.parse(data.decode('utf-8'), name)
+        except (SyntaxError, ValueError, UnicodeDecodeError) as exc:
+            print('pre-commit: syntax error in %s: %s' % (name, exc), file=sys.stderr)
+            fail = 1
+    bad = [i for i, b in enumerate(data) if b < 32 and b not in (9, 10, 12, 13)]
+    if bad:
+        print('pre-commit: control character 0x%02x at byte %d in %s' % (data[bad[0]], bad[0], name), file=sys.stderr)
+        fail = 1
+sys.exit(fail)
+"

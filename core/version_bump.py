@@ -21,8 +21,13 @@ from pathlib import Path
 
 
 def next_version(stored_date: str, stored_counter: int, today: datetime.date | None = None) -> str:
-    """The version string that follows (stored_date, stored_counter)."""
+    """The version string that follows (stored_date, stored_counter). Never an older one: when the stored date is
+    later than today (the clock is behind, or the last bump was on a machine in a later time zone), the stored date
+    is kept and its counter goes up (card 25, 2026-11-27: `today#01` was older than the stored version, and
+    installed copies never saw it as newer)."""
     today_str = (today or datetime.date.today()).isoformat()
+    if stored_date > today_str:
+        today_str = stored_date
     counter = stored_counter + 1 if stored_date == today_str else 1
     return f"{today_str}#{counter:02d}"
 

@@ -56,6 +56,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -66,6 +67,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from redactor_common.core import crash_log, selfupdate, update_manifest, zip_rewrite
+from redactor_common.core import release_notes as release_notes_module
 from redactor_common.core.update_manifest import MANIFEST_NAME, WINDOWS_EXE, WINDOWS_INSTALLER, WINDOWS_ZIP
 
 DEFAULT_GATE_DIR = r"C:\Temp\Claude\release-gate"
@@ -280,29 +282,85 @@ def write_manifest(cfg: Config) -> Path:
     return update_manifest.write(target, data)
 
 
-def release_notes(cfg: Config) -> str:
-    """The `notes` file when the app names one (it must exist), else this version's section of CHANGELOG.md (its
-    "## <version>" heading up to the next "## ")."""
+def release_notes(cfg: Config, previous: str = "") -> str:
+    """The `notes` file when the app names one (it must exist), else every CHANGELOG.md section after the `previous`
+    published release up to this version (core/release_notes.build_notes; card 21, 2026-11-27: only this version's
+    own section was taken, so earlier unreleased check-ins went unannounced). A missing CHANGELOG, or no section for
+    this version, stops the release."""
     if cfg.notes:
         path = cfg.root / cfg.fill(cfg.notes)
         try:
             return path.read_text(encoding="utf-8").strip()
         except OSError:
             raise ReleaseError(f"There are no release notes: write {path} first.") from None
+    path = cfg.root / "CHANGELOG.md"
     try:
-        lines = (cfg.root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        changelog = path.read_text(encoding="utf-8")
     except OSError:
+        raise ReleaseError(f"There are no release notes: {path} cannot be read.") from None
+    try:
+        return release_notes_module.build_notes(changelog, cfg.tag, previous or None).strip()
+    except ValueError as exc:
+        raise ReleaseError(f"{exc}: add one first.") from None
+
+
+def latest_published(cfg: Config, tag: str, runner: Runner = run) -> str:
+    """The Latest release's tag when it is an older one than `tag` (the floor of the notes), else ""."""
+    done = runner(["gh", "api", f"repos/{cfg.repo}/releases/latest"], cwd=cfg.root, check=False)
+    try:
+        latest = json.loads(done.stdout).get("tag_name", "") if done.returncode == 0 and done.stdout.strip() else ""
+    except (ValueError, AttributeError):
         return ""
-    out, inside = [], False
-    for line in lines:
-        if line.startswith("## "):
-            if inside:
-                break
-            inside = line[3:].split(" ", 1)[0] == cfg.version
-            continue
-        if inside:
-            out.append(line)
-    return "\n".join(out).strip()
+    return latest if isinstance(latest, str) and latest != tag else ""
+
+
+def check_tag_is_head(cfg: Config, tag: str, runner: Runner = run) -> None:
+    """An existing tag, here or on origin, must point at HEAD (card 16, 2026-11-27): a publish run again after a
+    fix without a version bump would otherwise ship B's build under a tag that names A."""
+    head = runner(["git", "rev-parse", "HEAD"], cwd=cfg.root).stdout.strip()
+    targets = []
+    if runner(["git", "tag", "-l", tag], cwd=cfg.root).stdout.strip():
+        targets.append(("here", runner(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], cwd=cfg.root)
+                        .stdout.strip()))
+    remote = runner(["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+                    cwd=cfg.root).stdout
+    refs = {}
+    for line in remote.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref:
+            refs[ref.strip()] = sha.strip()
+    peeled = refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}")     # ^{}: an annotated tag's commit
+    if peeled:
+        targets.append(("on origin", peeled))
+    for where, commit in targets:
+        if commit != head:
+            raise ReleaseError(f"Tag {tag} {where} points at {commit[:8]}, not at HEAD ({head[:8]}). Bump the version, "
+                               f"or delete the pre-release and the tag {tag} first.")
+
+
+def check_built_after_version(cfg: Config) -> None:
+    """--skip-build (card 20): every package, and the folder build's exe, must be newer than the version file;
+    older ones are a stale build that would ship under the new tag."""
+    stamp = cfg.version_file.stat().st_mtime
+    made = {cfg.path(cfg.zip_file)} if cfg.zip_file else set()
+    built = [path for path in cfg.package_paths().values() if path not in made]
+    if cfg.zip_folder:
+        built.append(cfg.path(cfg.zip_folder) / cfg.exe)
+    for path in built:
+        try:
+            when = path.stat().st_mtime
+        except OSError:
+            raise ReleaseError(f"Missing release file: {path}") from None
+        if when < stamp:
+            raise ReleaseError(f"{path} is older than {cfg.version_file.name} ({cfg.version}): it was built before "
+                               "the version was bumped. Build again, or publish without --skip-build.")
+
+
+def check_tag_text(tag: str) -> str:
+    """--tag and --previous become folder names that are deleted; only a release tag passes (card 22)."""
+    if not selfupdate._TAG.fullmatch(tag or ""):
+        raise ReleaseError(f"{tag!r} is not a release tag like v2026-11-27-01.")
+    return tag
 
 
 def assets_of(cfg: Config) -> list[Path]:
@@ -537,7 +595,9 @@ class Gate:
         """The program started the way a user runs it ([gate] run), in the scratch profile; None when not set."""
         if not self.cfg.gate_run:
             return None
-        process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env)
+        # POSIX: a session (process group) of its own, so stop_started can stop the programs it starts too (card 17)
+        extra = {} if sys.platform == "win32" else {"start_new_session": True}
+        process = subprocess.Popen([str(exe), *self.cfg.gate_run], cwd=exe.parent, env=self.env, **extra)
         self.started.append(process)
         time.sleep(RUN_SETTLE)
         if process.poll() is not None:
@@ -555,7 +615,10 @@ class Gate:
             if sys.platform == "win32":
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
             else:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)      # the whole group: the program and its helpers
+                except OSError:
+                    process.kill()
             try:
                 process.wait(10)
             except subprocess.TimeoutExpired:
@@ -682,6 +745,9 @@ def remove_leftover_install(cfg: Config, location: Path, uninstall: Callable[[Pa
 
 
 def gate(cfg: Config, tag: str, previous: str = "", first: bool = False, runner: Runner = run) -> None:
+    check_tag_text(tag)                             # it names a folder that is deleted below
+    if previous:
+        check_tag_text(previous)
     scratch_root = Path(os.environ.get("REDACTOR_GATE_DIR") or DEFAULT_GATE_DIR)
     scratch = scratch_root / f"{cfg.app}-{tag}"
     leftover = installed_location(cfg.installer_app_id) if cfg.installer_app_id else None
@@ -735,6 +801,7 @@ def gate(cfg: Config, tag: str, previous: str = "", first: bool = False, runner:
 
 
 def promote(cfg: Config, tag: str, runner: Runner = run) -> None:
+    check_tag_text(tag)
     runner(["gh", "release", "edit", tag, "--repo", cfg.repo, "--prerelease=false", "--latest"], cwd=cfg.root)
     say(f"{tag} is now the Latest release.")
 
@@ -745,17 +812,24 @@ def publish(cfg: Config, skip_build: bool = False, previous: str = "", first: bo
     from, such as an app's first framework release)."""
     preflight(cfg, runner)
     tag = cfg.tag
-    notes_text = release_notes(cfg)                 # a missing notes file stops here, before anything is built or tagged
+    if previous:
+        check_tag_text(previous)
+    check_tag_is_head(cfg, tag, runner)             # before anything is built
+    # missing notes stop here, before anything is built or tagged
+    notes_text = release_notes(cfg, previous or latest_published(cfg, tag, runner))
     say(f"Releasing {cfg.release_title} as {tag}")
     if not skip_build:
         say("Building...")
         runner(build_command(cfg), cwd=cfg.root, capture=False, env=build_env(cfg))
+    else:
+        check_built_after_version(cfg)
     make_zip(cfg)
     write_manifest(cfg)
     assets = assets_of(cfg)
     for path in assets:
         if not path.is_file():
             raise ReleaseError(f"Missing release file: {path}")
+    check_tag_is_head(cfg, tag, runner)             # again: the build took a while
     if not runner(["git", "tag", "-l", tag], cwd=cfg.root).stdout.strip():
         runner(["git", "tag", tag], cwd=cfg.root)
     if runner(["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"], cwd=cfg.root).stdout.strip() == "":

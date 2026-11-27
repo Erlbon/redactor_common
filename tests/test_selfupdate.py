@@ -264,7 +264,8 @@ def test_install_puts_the_old_exe_back_when_the_new_one_cannot_be_moved(tmp_path
     assert exe.read_bytes() == b"old" and not (tmp_path / "cbzredactor.exe.old").exists()
 
 
-def test_remove_leftovers_only_when_frozen(tmp_path):
+def test_remove_leftovers_only_when_frozen(tmp_path, monkeypatch):
+    monkeypatch.setattr(selfupdate.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
     exe = tmp_path / "app.exe"
     exe.write_bytes(b"x")
     for suffix in (".old", ".new", ".new.part"):

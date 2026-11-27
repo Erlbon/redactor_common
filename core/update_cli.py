@@ -96,6 +96,7 @@ def handle(argv: list[str], app_name: str, app_version: str, repo_url: str, *, e
             setup = selfupdate.download(release, selfupdate.installer_download_path(release), opener=opener)
             log = setup.with_name(setup.name + ".log")          # the release gate reads it (forced closes)
             command = selfupdate.installer_command(setup, visible=False, relaunch=False) + [f"/LOG={log}"]
+            selfupdate.verify_download(setup, release)              # card 19: checked again right before it runs
             process = (launch or _start_detached)(command)
             return say(dict(data, action="started", pid=int(getattr(process, "pid", 0) or 0), installer=str(setup),
                             log=str(log)), 0)
