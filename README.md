@@ -56,7 +56,9 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#04` (review of 2026-11-27, batch 4, the checks found real: on Windows `move_to_trash`
+Currently: `2026-11-27#05` (tests only, CI green again: the fake tools in the tests are executable, as `find_tool`
+now wants on Linux/Mac, and the trash test stubs the pywin32 check; no library change from #04). `2026-11-27#04`
+(review of 2026-11-27, batch 4, the checks found real: on Windows `move_to_trash`
 refuses (or uses the fallback folder) when send2trash's modern back-end cannot load, because the legacy one deletes
 a file too big for the Recycle Bin without a word (`trash.windows_bin_is_safe`; apps need pywin32); the media
 preview lets go of its file on Esc and `media_preview.release_previews_of(paths)` frees it before a rename; the icon

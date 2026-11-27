@@ -20,6 +20,7 @@ _app = QApplication.instance() or QApplication([])
 def exe(tmp_path):
     path = tmp_path / "tool.exe"
     path.write_text("x")
+    path.chmod(0o755)                                   # POSIX: a tool must be executable (card 52)
     return str(path)
 
 

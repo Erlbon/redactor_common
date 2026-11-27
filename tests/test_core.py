@@ -141,6 +141,7 @@ def test_tool_locator():
         tools_dir.mkdir()
         bundled_exe = tools_dir / "mp3val.exe"
         bundled_exe.write_bytes(b"")
+        bundled_exe.chmod(0o755)        # POSIX: a tool must be executable (card 52)
 
         # bundled dir wins when no override
         assert tool_locator.find_tool("mp3val.exe", tools_dir=tools_dir) == bundled_exe
@@ -148,6 +149,7 @@ def test_tool_locator():
         # a real, existing override wins even with a bundled copy present
         override_exe = d / "custom_mp3val.exe"
         override_exe.write_bytes(b"")
+        override_exe.chmod(0o755)
         result = tool_locator.find_tool("mp3val.exe", tools_dir=tools_dir, override=str(override_exe))
         assert result == override_exe
 
@@ -241,4 +243,5 @@ def test_find_tool_bundled_plain_name_for_a_windows_name(tmp_path):
     from redactor_common.core import tool_locator
 
     (tmp_path / "keyfinder-cli").write_bytes(b"")
+    (tmp_path / "keyfinder-cli").chmod(0o755)          # POSIX: a tool must be executable (card 52)
     assert tool_locator.find_tool("keyfinder-cli.exe", tools_dir=tmp_path, which={}.get) == tmp_path / "keyfinder-cli"

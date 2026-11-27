@@ -308,6 +308,7 @@ def test_find_tool_install_dirs_after_path(tmp_path):
     install.mkdir()
     exe = install / "ebook-convert.exe"
     exe.write_text("")
+    exe.chmod(0o755)                                    # POSIX: a tool must be executable (card 52)
     found = tool_locator.find_tool("ebook-convert", install_dirs=[tmp_path / "missing", install],
                                    which=lambda _n: None)
     assert found == exe
