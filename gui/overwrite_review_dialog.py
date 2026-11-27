@@ -37,6 +37,7 @@ what's about to happen to a file, not a partial view.
 from __future__ import annotations
 
 import os
+from enum import Enum
 from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt
@@ -53,11 +54,14 @@ from redactor_common.gui.owned_dialog import OwnedDialog
 
 def _text(value) -> str:
     """A field value as stripped text: None is "", a list is joined, a number is its text (an int episode number
-    crashed .strip(); card 75, 2026-11-27)."""
+    crashed .strip(); card 75, 2026-11-27), an enum is its value (str() of a str-mixin enum gives "Type.MEMBER",
+    so an unset video Content Type looked like a value to overwrite and opened the review for nothing; 2026-11-27)."""
     if value is None:
         return ""
     if isinstance(value, (list, tuple)):
-        return "; ".join(str(v) for v in value if v is not None).strip()
+        return "; ".join(_text(v) for v in value if v is not None).strip()
+    if isinstance(value, Enum):
+        return _text(value.value)
     return str(value).strip()
 
 
