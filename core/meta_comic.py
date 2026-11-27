@@ -34,13 +34,10 @@ SNIPPET = 300
 
 
 def _find_member(names: list) -> str:
-    best, depth = "", 1 << 30
-    for name in names:
-        if name.replace("\\", "/").rsplit("/", 1)[-1].lower() == "comicinfo.xml":
-            d = name.replace("\\", "/").count("/")
-            if d < depth:
-                best, depth = name, d
-    return best
+    """The ComicInfo.xml entry the writer rewrites (comicinfo_write.find_comicinfo_member): with two nested copies
+    this module showed one and Save rewrote the other (card 77, 2026-11-27)."""
+    from redactor_common.core.comicinfo_write import find_comicinfo_member     # lazy: that module imports this one
+    return find_comicinfo_member(names) or ""
 
 
 def _text(root, tag: str) -> str:

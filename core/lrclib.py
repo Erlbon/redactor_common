@@ -59,6 +59,7 @@ BASE_URL = "https://lrclib.net/api"
 DEFAULT_USER_AGENT = "RedactorCommon (https://github.com/Erlbon)"
 # About one request per second, as the service asks of polite clients.
 DEFAULT_INTERVAL = 1.1
+_SHARED_THROTTLE = Throttle(DEFAULT_INTERVAL)     # every default client in the process paces together (card 82)
 # LRCLIB answers 429 to shared addresses even on a first request, and 503 "ServerOverloaded" when it is busy
 # (2026-10-17: /api/get was overloaded for hours while /api/search answered in 0.1 s). A short wait and retry
 # (1.5 s, then 4 s), never more than DEFAULT_MAX_WAIT seconds of waiting in one call, and never silent:
@@ -217,7 +218,10 @@ class LrclibClient:
     ):
         self.user_agent = user_agent
         if fetch is None:
-            fetch = throttled(make_default_fetch(user_agent, timeout=timeout), throttle or Throttle(interval))
+            # one pace for every client in the process at the default interval: each client with its own Throttle
+            # let several clients together go past one request a second (card 82, 2026-11-27)
+            shared = _SHARED_THROTTLE if interval == DEFAULT_INTERVAL else Throttle(interval)
+            fetch = throttled(make_default_fetch(user_agent, timeout=timeout), throttle or shared)
         self._fetch = fetch
         self.retry_429 = tuple(retry_429)
         self.max_wait = float(max_wait)

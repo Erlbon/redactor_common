@@ -285,7 +285,9 @@ D = TypeVar("D", bound=LocalDatabase)
 def open_cached(path: str, factory: Callable[[str], D]) -> D:
     """One opened database per (factory, file) for the whole session, so
     a name index is only built once. `factory(path)` opens it (e.g. the
-    app's LocalDatabase subclass)."""
+    app's LocalDatabase subclass). Pass the class (or one module-level
+    function), never a new lambda per call: the cache is keyed on the factory
+    object, so a fresh lambda opens the database again every time (card 91)."""
     key = (factory, os.path.normcase(os.path.abspath(path)) if path else "")
     with _open_lock:
         db = _open.get(key)

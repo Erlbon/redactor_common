@@ -196,6 +196,7 @@ def translate_cues(
             for index, piece in zip(group, parts):
                 store(index, piece)
             done += len(group)
+            consecutive_single_failures = 0     # a group that worked breaks a run of failures too (card 84)
         else:
             for index, text in zip(group, texts):
                 if _is_cancelled(cancel):

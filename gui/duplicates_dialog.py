@@ -56,7 +56,7 @@ from redactor_common.core.duplicates import (
 from redactor_common.core.os_utils import open_with_default_app, reveal_in_file_manager
 from redactor_common.core.trash import TrashError, move_to_trash
 from redactor_common.gui.background_call import BackgroundCancelled, call_in_background
-from redactor_common.gui.progress import ProgressReporter
+from redactor_common.gui.progress import ProgressReporter, run_with_progress
 from redactor_common.gui.owned_dialog import OwnedDialog
 
 DEFAULT_TITLE = "Find Duplicates"
@@ -350,13 +350,18 @@ class DuplicatesDialog(OwnedDialog):
             return
         failures: list[str] = []
         moved: list = []
-        for member in members:
+
+        def step(member, _index: int) -> None:
             try:
                 self._trash(str(member.path))
             except (TrashError, OSError) as exc:
                 failures.append(f"{member.path}: {exc}")
-                continue
+                return
             moved.append(member)
+
+        # with a progress dialog and Cancel: 200 large files on a slow drive froze the dialog (card 71, 2026-11-27)
+        run_with_progress(self, members, step, "Moving files to the Recycle Bin...", cancellable=True,
+                          label_for=lambda member: os.path.basename(str(member.path)))
         if moved:
             gone = {_file_key(m.path) for m in moved}
             self.trashed.extend(m.item for m in moved)

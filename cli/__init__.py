@@ -190,11 +190,36 @@ class Output:
             print(self._document(summary, key), file=self.out)
 
 
+def _refuse_output_onto_an_input(target: str, args: argparse.Namespace) -> None:
+    """--output names a file that is opened for writing (emptied) before the command runs: one that is also an
+    input path would be lost, even in a dry run (card 102, 2026-11-27)."""
+    def key(path) -> str:
+        return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+    out_key = key(target)
+    for name, value in vars(args).items():
+        if name == "output":
+            continue
+        values = value if isinstance(value, (list, tuple)) else [value]
+        for item in values:
+            if not isinstance(item, (str, os.PathLike)) or not os.fspath(item):
+                continue
+            same = key(item) == out_key
+            if not same and os.path.exists(target) and os.path.exists(item):
+                try:
+                    same = os.path.samefile(target, item)
+                except OSError:
+                    same = False
+            if same:
+                raise CliError(f"--output {target} is also an input ({name}); choose another output file")
+
+
 def make_output(args: argparse.Namespace) -> Output:
     """The Output for parsed common options (--json, --quiet, --output FILE). Close it when the command ends."""
     target = getattr(args, "output", None)
     handle = None
     if target:
+        _refuse_output_onto_an_input(target, args)
         try:
             handle = open(target, "w", encoding="utf-8", newline="\n")
         except OSError as exc:

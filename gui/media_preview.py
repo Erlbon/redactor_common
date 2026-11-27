@@ -367,10 +367,29 @@ class MediaPreviewDialog(OwnedDialog):
 
     # --- life cycle ------------------------------------------------------------------------------
 
-    def closeEvent(self, event) -> None:
+    def release_file(self) -> None:
+        """Stops playing and lets go of the file, so it can be renamed, saved or trashed."""
         self.player.stop()
         self.player.setSource(QUrl())
+
+    def closeEvent(self, event) -> None:
+        self.release_file()
         super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        # Esc goes through reject() -> done() and never reaches closeEvent: the file stayed open until the dialog
+        # was deleted later, and a rename right after Esc failed (card 65, 2026-11-27).
+        self.release_file()
+        super().done(result)
+
+
+def release_previews_of(paths) -> None:
+    """Lets go of every open preview of one of `paths` (call before renaming, saving or trashing them): an open
+    preview holds its file, and Windows refuses the rename (card 65)."""
+    wanted = {os.path.normcase(os.path.abspath(p)) for p in paths}
+    for window in list(_open_windows):
+        if os.path.normcase(os.path.abspath(getattr(window, "_path", "") or "")) in wanted:
+            window.release_file()
 
 
 _open_windows: list[MediaPreviewDialog] = []

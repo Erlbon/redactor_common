@@ -182,6 +182,19 @@ def _remove_quietly(path: str) -> None:
         pass
 
 
+def windows_bin_is_safe() -> bool:
+    """False on Windows when send2trash would use its legacy back-end (pywin32 missing): SHFileOperation with
+    FOF_NOCONFIRMATION deletes a file too big for the Recycle Bin outright and reports success (card 64,
+    2026-11-27). The modern back-end (IFileOperation) fails such a file instead. True elsewhere."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import send2trash.win.modern  # noqa: F401 - needs pywin32
+    except ImportError:
+        return False
+    return True
+
+
 def move_to_trash(path: str, fallback_folder: str | None = None) -> None:
     """Send `path` to the Recycle Bin. On a drive where the bin is not
     reliable (see trash_is_reliable) the file is NOT touched and a
@@ -203,6 +216,14 @@ def move_to_trash(path: str, fallback_folder: str | None = None) -> None:
             "the 'send2trash' package isn't installed (pip install send2trash), "
             "so the original was kept"
         ) from exc
+    if not windows_bin_is_safe():
+        if fallback_folder:
+            move_to_fallback_folder(path, fallback_folder)
+            return
+        raise TrashUnavailable(
+            "the Recycle Bin can't be used safely: pywin32 is missing, and without it Windows deletes a file too "
+            "big for the bin without a word, so the original was kept"
+        )
     try:
         send2trash(str(path))
     except OSError as exc:

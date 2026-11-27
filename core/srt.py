@@ -69,9 +69,15 @@ def parse_srt(text: str) -> list[Cue]:
     return cues
 
 
+def _one_block(text: str) -> str:
+    return "\n".join(line for line in text.strip().splitlines() if line.strip())
+
+
 def format_srt(cues: Sequence[Cue]) -> str:
+    # A blank line ends an SRT block: one inside a cue's text (a translator's reply can hold one) split the cue,
+    # and its second half was lost on reading (card 76, 2026-11-27). Blank lines inside a cue are dropped.
     blocks = [
-        f"{n}\n{srt_time(c.start)} --> {srt_time(c.end)}\n{c.text.strip()}\n"
+        f"{n}\n{srt_time(c.start)} --> {srt_time(c.end)}\n{_one_block(c.text)}\n"
         for n, c in enumerate(cues, start=1)
     ]
     return "\n".join(blocks)

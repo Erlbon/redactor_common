@@ -224,6 +224,16 @@ class ColumnFilterHeader(QHeaderView):
         self.setSectionsClickable(True)
         self.setHighlightSections(False)
 
+    def selected_visible_rows(self) -> list[int]:
+        """The selected rows the filter shows, in order. Use it instead of selectionModel().selectedRows(): after
+        Ctrl+A that also returns the rows the filter hides, and an action on "the selection" would reach files
+        the user cannot see (card 100, 2026-11-27)."""
+        model = self._table.selectionModel()
+        if model is None:
+            return []
+        rows = {index.row() for index in model.selectedRows()} | {index.row() for index in model.selectedIndexes()}
+        return sorted(row for row in rows if not self._table.isRowHidden(row))
+
     # -- configuration -------------------------------------------------------
     def configure(self, key_for_column: Callable[[int], Hashable], kinds: Mapping[Hashable, str]) -> None:
         """`key_for_column(logical index)` names a column (an app's field name); `kinds` maps the keys that get

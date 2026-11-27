@@ -51,6 +51,16 @@ from redactor_common.gui.sortable_table import NaturalTableWidgetItem, enable_so
 from redactor_common.gui.owned_dialog import OwnedDialog
 
 
+def _text(value) -> str:
+    """A field value as stripped text: None is "", a list is joined, a number is its text (an int episode number
+    crashed .strip(); card 75, 2026-11-27)."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(v) for v in value if v is not None).strip()
+    return str(value).strip()
+
+
 def _is_overwrite(row: PreviewRow) -> bool:
     old, new = row.old_value.strip(), row.new_value.strip()
     return bool(old) and old != new
@@ -234,7 +244,7 @@ def build_overwrite_review_rows(
         if names.count(display_name) > 1:
             display_name = f"{display_name}  (in {os.path.dirname(item.path) or '.'})"
         for attr, new_value in fields.items():
-            current_value = (getattr(item.metadata, attr, "") or "").strip()
+            current_value = _text(getattr(item.metadata, attr, ""))
             rows.append(
                 PreviewRow(
                     item_index=(index, attr),
@@ -242,7 +252,7 @@ def build_overwrite_review_rows(
                     old_value=current_value,
                     new_value=new_value,
                     group=display_name,
-                    default_checked=not current_value or current_value == new_value,
+                    default_checked=not current_value or current_value == _text(new_value),
                 )
             )
     return rows
@@ -276,7 +286,7 @@ def resolve_overwrite_conflicts(
     is still ticked when Apply is clicked), or None if the user
     cancelled outright."""
     has_conflict = any(
-        (getattr(target_items[index].metadata, attr, "") or "").strip() not in ("", new_value)
+        _text(getattr(target_items[index].metadata, attr, "")) not in ("", _text(new_value))
         for index, fields in metadata_changes.items()
         for attr, new_value in fields.items()
     )

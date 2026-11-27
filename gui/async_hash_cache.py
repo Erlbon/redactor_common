@@ -57,9 +57,9 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-from redactor_common.gui.async_icon_cache import IdentityWeakDict
+from redactor_common.gui.async_icon_cache import IdentityWeakDict, cache_pool
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
 
 
 class _HashSignals(QObject):
@@ -118,7 +118,7 @@ class AsyncHashCache(QObject):
             self._cache[key] = (source, "")
             self.hash_ready.emit(key, "")
             return
-        QThreadPool.globalInstance().start(_HashTask(key, source, data, self._signals))
+        cache_pool().start(_HashTask(key, source, data, self._signals))
 
     def _on_hashed(self, key: object, source: object, digest: str) -> None:
         self._cache[key] = (source, digest)

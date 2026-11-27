@@ -73,6 +73,29 @@ from redactor_common.gui.image_decode import decode_scaled
 
 ImageLoader = Callable[[], "bytes | None"]
 
+_pool: QThreadPool | None = None
+EXIT_WAIT_MS = 3000
+
+
+def cache_pool() -> QThreadPool:
+    """The icon and hash caches' own thread pool. At quit its queued decodes are dropped and the running ones
+    waited for (at most EXIT_WAIT_MS): with the global pool, never drained, quitting while covers loaded could hang
+    or end with exit code 127 (card 67, 2026-11-27)."""
+    global _pool
+    if _pool is None:
+        from PyQt6.QtWidgets import QApplication
+        _pool = QThreadPool()
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(drain_cache_pool)
+    return _pool
+
+
+def drain_cache_pool() -> None:
+    if _pool is not None:
+        _pool.clear()
+        _pool.waitForDone(EXIT_WAIT_MS)
+
 
 class IdentityWeakDict:
     """A weak-keyed dict keyed by object IDENTITY, not hash/equality --
@@ -235,7 +258,7 @@ class AsyncIconCache(QObject):
         if self.is_pending(key, source):
             return
         self._in_flight[key] = (source,)
-        QThreadPool.globalInstance().start(
+        cache_pool().start(
             _DecodeTask(key, source, image_bytes or None, loader, self._icon_size, self._signals)
         )
 

@@ -56,7 +56,16 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#03` (review of 2026-11-27, batch 3, crashes and wrong results: an error before the
+Currently: `2026-11-27#04` (review of 2026-11-27, batch 4, the checks found real: on Windows `move_to_trash`
+refuses (or uses the fallback folder) when send2trash's modern back-end cannot load, because the legacy one deletes
+a file too big for the Recycle Bin without a word (`trash.windows_bin_is_safe`; apps need pywin32); the media
+preview lets go of its file on Esc and `media_preview.release_previews_of(paths)` frees it before a rename; the icon
+and hash caches use their own pool, drained at quit (`async_icon_cache.cache_pool`); the duplicates dialog trashes
+with progress and Cancel; the overwrite review reads numbers and compares stripped values; a blank line inside a
+subtitle cue no longer splits it; the ComicInfo reader picks the entry the writer rewrites; default LRCLIB clients
+share one pace; a working translation group resets the failure run; MusicBrainz busy waits watch the fetch's
+`should_cancel`; `ColumnFilterHeader.selected_visible_rows()`; the CLI refuses an `--output` that is also an input).
+`2026-11-27#03` (review of 2026-11-27, batch 3, crashes and wrong results: an error before the
 QApplication exists is printed instead of a silent abort; one natural sort key (`core/path_column.natural_sort_key`,
 `isdecimal`) so "Track 10²" sorts; Search & Replace catches a missing `\g<name>`, waits 250 ms after typing and
 stops a regex pass that runs over a second; series numbers take a decimal comma and refuse exponents, Infinity and

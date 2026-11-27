@@ -96,8 +96,24 @@ def _get_retrying(path: str, fetch: Callable, **params) -> dict:
             hook = getattr(fetch, "on_busy", None)
             if hook is not None:
                 hook(delay)
-            _sleep(delay)
+            _wait(delay, getattr(fetch, "should_cancel", None))
     return {}
+
+
+def _wait(delay: float, should_cancel) -> None:
+    """The pause between busy retries, in short slices that watch the fetch's `should_cancel()`: a cancelled
+    lookup kept asking a busy service for up to 17 s (card 86, 2026-11-27)."""
+    if should_cancel is None:
+        _sleep(delay)
+        return
+    end = time.monotonic() + delay
+    while True:
+        if should_cancel():
+            raise MusicBrainzError("Cancelled.")
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        _sleep(min(0.25, left))
 
 
 # What people tag a compilation's album artist with; Discogs says "Various", MusicBrainz "Various Artists".
