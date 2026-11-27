@@ -59,9 +59,9 @@ from redactor_common.core.pipeline import (
     ordered_keys,
     run_recipe_on_item,
 )
-from redactor_common.gui.background_call import call_in_background
 from redactor_common.gui.menu_builder import MenuAction
 from redactor_common.gui.progress import run_with_progress
+from redactor_common.gui.work_progress import WorkProgress, run_work_with_progress
 from redactor_common.gui.standard_shortcuts import REDACT
 from redactor_common.gui.owned_dialog import OwnedDialog
 
@@ -218,23 +218,36 @@ def run_redact(
 
     def do_one(item: Any, _index: int) -> None:
         args = (item, resolved, recipe.confidence_threshold, make_context, describe, finalize, finalize_label)
-        if threaded:
-            # No cancel_signal: Cancel must never abandon a file that is being written.
-            entry = call_in_background(run_recipe_on_item, *args, run=run)
-        else:
-            entry = run_recipe_on_item(*args, run=run)
-        report.entries.append(entry)
+        report.entries.append(run_recipe_on_item(*args, run=run))
 
-    finished = run_with_progress(
-        parent,
-        items,
-        do_one,
-        label=f"{title}...",
-        threshold=1,
-        cancellable=True,
-        label_for=lambda item: f"{title}: {_safe_describe(describe, item)}",
-        on_cancel=on_cancel,
-    )
+    if threaded:
+        # 2026-11-27 (review card 3): the threaded run used run_with_progress around call_in_background. Cancel
+        # made the QProgressDialog hide itself, which gave the window back while the current file was still being
+        # written. run_work_with_progress keeps the window blocked and the dialog up ("Cancelling...") until the
+        # file in progress has returned; the whole loop runs on one worker and stops BETWEEN files.
+        def work(progress: WorkProgress) -> None:
+            for index, item in enumerate(items):
+                if progress.should_cancel():
+                    return
+                progress.set_label(f"{title}: {_safe_describe(describe, item)}")
+                do_one(item, index)
+                progress.set_value(index + 1)
+
+        _result, cancelled = run_work_with_progress(
+            parent, len(items), f"{title}...", work, cancellable=True, show_after_ms=0, on_cancel=on_cancel,
+        )
+        finished = not cancelled or len(report.entries) == len(items)
+    else:
+        finished = run_with_progress(
+            parent,
+            items,
+            do_one,
+            label=f"{title}...",
+            threshold=1,
+            cancellable=True,
+            label_for=lambda item: f"{title}: {_safe_describe(describe, item)}",
+            on_cancel=on_cancel,
+        )
     report.duration = time.monotonic() - started
     if not finished:
         report.cancelled = True

@@ -57,6 +57,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from xml.etree import ElementTree as ET
 
+from redactor_common.core.os_utils import replace_with_retry
+
 ProgressFn = Callable[[float], None]
 CancelledFn = Callable[[], bool]
 
@@ -843,17 +845,21 @@ class SqliteBuilder:
         os.makedirs(folder, exist_ok=True)
         if os.path.exists(self.partial):
             os.remove(self.partial)
-        self._con = sqlite3.connect(self.partial)
-        # Bulk-load settings: a crash mid-build just means rebuilding,
-        # and the file isn't under its real name until finish().
-        # (page_size must come before the first table is created.)
-        for pragma in (
-            f"page_size = {self._page_size}", "journal_mode = OFF", "synchronous = OFF",
-            "locking_mode = EXCLUSIVE", f"cache_size = -{self._cache_mb * 1024}",
-        ):
-            self._con.execute(f"pragma {pragma}")
-        for name, columns in self._tables.items():
-            self._con.execute(f"create table {name} ({', '.join(columns)})")
+        try:
+            self._con = sqlite3.connect(self.partial)
+            # Bulk-load settings: a crash mid-build just means rebuilding,
+            # and the file isn't under its real name until finish().
+            # (page_size must come before the first table is created.)
+            for pragma in (
+                f"page_size = {self._page_size}", "journal_mode = OFF", "synchronous = OFF",
+                "locking_mode = EXCLUSIVE", f"cache_size = -{self._cache_mb * 1024}",
+            ):
+                self._con.execute(f"pragma {pragma}")
+            for name, columns in self._tables.items():
+                self._con.execute(f"create table {name} ({', '.join(columns)})")
+        except BaseException:
+            self.__exit__(None, None, None)  # __exit__ does not run when __enter__ raises: close and remove here
+            raise
         return self
 
     def add(self, table: str, row: tuple) -> None:
@@ -965,11 +971,19 @@ class SqliteBuilder:
         self._con.close()
         self._con = None
         self.sizes = self._measure()
+        # The build ran with synchronous=OFF: make it durable before it replaces a good database.
+        with open(self.partial, "rb+") as handle:
+            os.fsync(handle.fileno())
         try:
-            os.replace(self.partial, self.dest)
+            replace_with_retry(self.partial, self.dest)
         except OSError as exc:
+            # 2026-11-27 (review card 13): the finished build used to be deleted here by __exit__, so a long import
+            # was lost because the old database was still open. It is kept under its .partial name instead.
+            self._finished = True
             raise DumpImportError(
-                f"Couldn't replace {os.path.basename(self.dest)} -- is it open in another program? ({exc})"
+                f"Couldn't replace {os.path.basename(self.dest)} -- is it open in another program? ({exc}) "
+                f"The new database is kept as {self.partial}: close the program that uses the old one, then "
+                f"rename it to {os.path.basename(self.dest)}, or import again."
             ) from exc
         self._finished = True
         return dict(self.counts)

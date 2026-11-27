@@ -56,7 +56,18 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-26#02` (the Delete key in an app with Delete Files asks "Remove from List / Delete Files
+Currently: `2026-11-27#01` (review of 2026-11-27, batch 1, files at risk: a cross-volume move compares every byte
+of the copy before the original goes to the Recycle Bin, and can be cancelled mid-file (`move_plan.MoveCancelled`);
+Move into Folders runs on a worker thread and logs each move for Undo as it happens (`RenameLog.open_batch`);
+`RenameLog.record` returns False and never writes over a log it could not read; the "not duplicates" store and the
+undo log set a damaged file aside as `.damaged`; Cancel in a threaded Redact keeps the window blocked until the
+file in hand is done (`work_progress.run_work_with_progress(on_cancel=)`); the quarantine-folder fallback leaves
+no copies behind on a locked file; notes undo works in folders ending in a dot; the duplicates guard compares
+physical files; `.redactor-*` audio temp files are hidden; `rewrite_archive` refuses an existing other target
+unless `overwrite=True` (cbzredactor's Save As must pass it); saves keep the read-only flag and creation time
+(`os_utils.apply_file_attributes`); a database build that cannot replace the old one is kept as `.partial`; a busy
+notes cache is no longer deleted; the Redact report lists a skipped file's changes under NOT SAVED; a case-only
+change in Move into Folders is done). `2026-11-26#02`: the Delete key in an app with Delete Files asks "Remove from List / Delete Files
 (Recycle Bin) / Cancel", with Remove from List as the default button: `gui/remove_or_delete.py`
 (`ask_remove_or_delete`) and `standard_menus.remove_or_delete_action(slot)` for the app's hidden list. In such an
 app Remove from List has no shortcut; Shift+Delete stays Delete Files. Apps without Delete Files keep

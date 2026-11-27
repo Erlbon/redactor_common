@@ -28,6 +28,7 @@ from typing import Callable, Optional
 import inspect
 import time
 
+from redactor_common.core.long_paths import literal
 from redactor_common.core.notes import (
     STATUS_WRITTEN, NoteState, NoteWriteResult, _link_or_reserve, _temp_path, find_note, normalize_note_text, note_path, replace_note, write_note,
 )
@@ -238,7 +239,7 @@ def write_proposal(
             old_path = find_note(proposal.folder, proposal.note_kind)
             if old_path:
                 try:
-                    with open(old_path, "rb") as handle:
+                    with open(literal(old_path), "rb") as handle:  # also in 'R.E.M.' (review card 5)
                         data = handle.read(MAX_BACKUP_BYTES + 1)
                     old_bytes = data if len(data) <= MAX_BACKUP_BYTES else None
                 except OSError:
@@ -352,10 +353,12 @@ def undo_note_entry(entry, journal, trash: Optional[Callable[[str], None]] = Non
     if not match:
         return "the entry has no checksum, so the file cannot be checked"
     path = entry.path
-    if not os.path.isfile(path):
+    # literal(): a folder whose name ends in a dot or a space ('R.E.M.') is otherwise not found on Windows, or a
+    # sibling without the dot is used instead (2026-11-27, review card 5; core/notes.py does the same)
+    if not os.path.isfile(literal(path)):
         return "the note is no longer there"
     try:
-        with open(path, "rb") as handle:
+        with open(literal(path), "rb") as handle:
             current = hashlib.sha256(handle.read()).hexdigest()
     except OSError as exc:
         return f"the note could not be read ({exc})"
@@ -374,7 +377,7 @@ def undo_note_entry(entry, journal, trash: Optional[Callable[[str], None]] = Non
     temp = ""
     try:
         if older is not None:  # stage the older text first: a failure here leaves the refreshed note alone
-            temp = _temp_path(os.path.dirname(path), os.path.basename(path))
+            temp = literal(_temp_path(os.path.dirname(path), os.path.basename(path)))
             try:
                 fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
                 with os.fdopen(fd, "wb") as handle:
@@ -392,7 +395,7 @@ def undo_note_entry(entry, journal, trash: Optional[Callable[[str], None]] = Non
                     + (NETWORK_HINT if isinstance(exc, TrashUnavailable) else ""))
         if older is not None:
             try:
-                _link_or_reserve(temp, path)
+                _link_or_reserve(temp, literal(path))
             except OSError as exc:
                 return (f"the refreshed note is in the Recycle Bin but the older text could not be put back ({exc}); "
                         f"it is kept in {backup_folder(backup_base)}")

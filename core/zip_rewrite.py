@@ -50,7 +50,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Union
 
-from redactor_common.core.os_utils import replace_with_retry, retry_on_lock
+from redactor_common.core.os_utils import apply_file_attributes, file_attributes, replace_with_retry, retry_on_lock
 from redactor_common.core.save_errors import describe_save_error
 from redactor_common.core.zip_names import RawNameInfo, legacy_raw_name, open_zip, raw_names_supported
 
@@ -150,8 +150,12 @@ def swap_in(
     A dispose that returns but leaves the sibling behind (a bin that did not
     take it) keeps it: a doubtful trash never becomes a delete. Without
     `dispose_original` the original is simply replaced."""
+    # The original's read-only flag, mode and creation time go onto the new file once it is in place and the old
+    # one is gone, never before: a read-only new file would block the rollbacks below (review card 12).
+    attributes = file_attributes(path)
     if dispose_original is None or not os.path.exists(path):
         _replace(tmp_path, path)
+        apply_file_attributes(path, attributes)
         return
     backup = namer(path)
     _rename(path, backup)
@@ -164,9 +168,11 @@ def swap_in(
         dispose_original(backup)
     except BaseException as exc:
         if keep_new_if_dispose_fails and isinstance(exc, OSError):
+            apply_file_attributes(path, attributes)
             return
         _restore(backup, path, exc, replace=True)
         raise
+    apply_file_attributes(path, attributes)
 
 
 def _restore(backup: str, path: str, cause: BaseException, replace: bool = False) -> None:
@@ -475,9 +481,14 @@ def rewrite_archive(
     should_cancel: Optional[Callable[[], bool]] = None,
     namer: Callable[[str], str] = backup_name,
     keep_new_if_dispose_fails: bool = False,
+    overwrite: bool = False,
 ) -> RewriteResult:
     """Writes `src_path` rewritten as `plan` says to `dst_path` (the same
     path for an in-place rewrite) and returns what was done.
+
+    A `dst_path` that is NOT the source and already exists is refused with RewriteError before anything is written,
+    unless `overwrite` is True (a Save As the user confirmed): 2026-11-27, review card 11, an unrelated "a.cbz"
+    used to be replaced silently when "a.cbr" was converted.
 
     The output is built at `dst_path + temp_suffix`, checked (entry count,
     CRCs unless the plan turns that off, plus whatever the plan asks for),
@@ -490,6 +501,9 @@ def rewrite_archive(
     Raises RewriteError (message starting with `error_prefix`) for any
     zip-level failure, RewriteCancelled on cancel; any other exception
     propagates -- the temp file is removed in every case."""
+    if not overwrite and os.path.lexists(dst_path) and (
+            os.path.normcase(os.path.abspath(dst_path)) != os.path.normcase(os.path.abspath(src_path))):
+        raise RewriteError(f"{error_prefix}: {os.path.basename(dst_path)} already exists", "the target already exists")
     tmp_path = dst_path + temp_suffix
     try:
         result = _write_temp(src_path, tmp_path, plan, progress, byte_progress, should_cancel)

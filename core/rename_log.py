@@ -36,9 +36,18 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from redactor_common.core.os_utils import rename_no_clobber, replace_with_retry
+from redactor_common.core.os_utils import rename_no_clobber, replace_with_retry, retry_on_lock
 
 MAX_BATCHES = 50
+
+
+class RenameLogUnreadable(OSError):
+    """The log file exists but could not be read: it must not be written over."""
+
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
 
 
 @dataclass
@@ -49,6 +58,7 @@ class RenameBatch:
     created_dirs: list[str] = field(default_factory=list)  # folders a move batch made, outermost first
     trashed: list[tuple[str, str]] = field(default_factory=list)  # (old, new) moves whose original is in the Recycle Bin
     root: str = ""  # library root of a move batch
+    batch_id: str = ""  # set on a batch saved while it grows (RenameLog.open_batch), so each save replaces it
 
     def describe(self) -> str:
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(self.when))
@@ -83,10 +93,25 @@ class RenameLog:
                 pass
 
     def _read(self) -> list[RenameBatch]:
+        """The batches in the log; [] when there is no log yet. Raises RenameLogUnreadable when the file exists but
+        cannot be read (still locked after retries): the caller must then not write over it (2026-11-27, review
+        card 8: a brief lock used to read as "empty" and the next record() wiped up to 49 older undo batches). A
+        file that is not valid JSON is set aside as "<log>.damaged" and counts as empty."""
         try:
-            with open(self.path, encoding="utf-8") as handle:
-                raw = json.load(handle)
-        except (OSError, ValueError):
+            text = retry_on_lock(_read_text, self.path, attempts=6, delay=0.1)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise RenameLogUnreadable(f"the undo log {self.path} could not be read ({exc})") from exc
+        except ValueError:  # not UTF-8 text: damaged, set aside below
+            text = ""
+        try:
+            raw = json.loads(text)
+        except ValueError:
+            try:
+                os.replace(self.path, self.path + ".damaged")
+            except OSError:
+                raise RenameLogUnreadable(f"the undo log {self.path} is damaged and could not be set aside") from None
             return []
         batches = []
         for entry in raw if isinstance(raw, list) else []:
@@ -97,15 +122,19 @@ class RenameLog:
                     created_dirs=[str(d) for d in entry.get("created_dirs", [])],
                     trashed=[(str(old), str(new)) for old, new in entry.get("trashed", [])],
                     root=str(entry.get("root", "")),
+                    batch_id=str(entry.get("id", "")),
                 ))
             except (KeyError, TypeError, ValueError):
                 continue
         return batches
 
-    def _write(self, batches: list[RenameBatch]) -> None:
+    def _write(self, batches: list[RenameBatch]) -> bool:
+        """Writes the log; False when it could not be written (the rename itself already happened)."""
         data = []
         for b in batches[-self.max_batches:]:
             entry: dict = {"label": b.label, "when": b.when, "renames": [list(pair) for pair in b.renames]}
+            if b.batch_id:
+                entry["id"] = b.batch_id
             if b.created_dirs:
                 entry["created_dirs"] = b.created_dirs
             if b.trashed:
@@ -121,43 +150,80 @@ class RenameLog:
                 json.dump(data, handle, ensure_ascii=False, indent=1)
             # Windows: a virus scanner or indexer can briefly hold the file
             replace_with_retry(tmp, self.path, attempts=5, delay=0.05)
+            return True
         except OSError:
-            # best effort, like the apps' other settings: the rename itself already happened
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+            return False
 
     def record(
         self, label: str, renames: list[tuple[str, str]],
         created_dirs: list[str] | None = None, trashed: list[tuple[str, str]] | None = None, root: str = "",
-    ) -> None:
+    ) -> bool:
         """One rename action. Pairs whose old and new path are identical
         (nothing renamed; a case-only change still counts) are left out; an empty batch isn't recorded.
-        `created_dirs`, `trashed`, `root`: see the module docstring (move batches)."""
+        `created_dirs`, `trashed`, `root`: see the module docstring (move batches).
+
+        Returns False when the batch could not be saved (the log is locked or the disk refused the write), so the
+        caller can tell the user the renames cannot be undone; True otherwise (also when there was nothing to
+        record). The existing log is never overwritten when it could not be read."""
         pairs = [(str(old), str(new)) for old, new in renames if str(old) != str(new)]
         if not pairs:
-            return
-        batches = self._read()
+            return True
+        try:
+            batches = self._read()
+        except RenameLogUnreadable:
+            return False
         batches.append(RenameBatch(
             label=label, when=time.time(), renames=pairs,
             created_dirs=[str(d) for d in created_dirs or []],
             trashed=[(str(old), str(new)) for old, new in trashed or []], root=root,
         ))
-        self._write(batches)
+        saved = self._write(batches)
         self._notify(pairs)
+        return saved
+
+    def open_batch(self, label: str, root: str = "", flush_every: float = 1.0) -> "BatchRecorder":
+        """A batch that is saved while it grows, for a long move run (2026-11-27, review card 7: the moves used to
+        be logged once at the end, so a crash or a kill mid-run left every file already moved with no undo
+        record). add() each move as it happens; the batch is written at most every `flush_every` seconds and on
+        close(). It is Qt-free and may be fed from a worker thread; `on_move` is called only by close(), on the
+        caller's thread."""
+        return BatchRecorder(self, label, root, flush_every)
+
+    def _save_batch(self, batch: RenameBatch) -> bool:
+        """Adds `batch` to the log, or replaces the entry with the same batch_id (a growing batch)."""
+        try:
+            batches = self._read()
+        except RenameLogUnreadable:
+            return False
+        for index, existing in enumerate(batches):
+            if existing.batch_id and existing.batch_id == batch.batch_id:
+                batches[index] = batch
+                break
+        else:
+            batches.append(batch)
+        return self._write(batches)
 
     def last_batch(self) -> Optional[RenameBatch]:
-        batches = self._read()
+        batches = self.batches()
         return batches[-1] if batches else None
 
     def batches(self) -> list[RenameBatch]:
-        return self._read()
+        try:
+            return self._read()
+        except RenameLogUnreadable:
+            return []
 
     def undo_last(self) -> Optional[UndoResult]:
         """Renames the newest batch back (see the module docstring);
-        None when there's nothing to undo."""
-        batches = self._read()
+        None when there's nothing to undo. A log that cannot be read gives a result whose problem says so."""
+        try:
+            batches = self._read()
+        except RenameLogUnreadable as exc:
+            return UndoResult(problems=[f"{exc}; try again in a moment"])
         if not batches:
             return None
         batch = batches.pop()
@@ -190,10 +256,65 @@ class RenameLog:
                 result.problems.append(f"{name}: {exc}")
                 continue
             result.restored.append((new, old))
-        self._write(batches)
+        if not self._write(batches):
+            result.problems.append(f"the undo log {self.path} could not be updated, so this batch is still listed")
         self._notify([(new, old) for new, old in result.restored])
         result.created_dirs = [d for d in reversed(batch.created_dirs) if os.path.isdir(d)]
         return result
+
+
+class BatchRecorder:
+    """One growing batch (RenameLog.open_batch). add() is cheap; the log file is rewritten at most every
+    `flush_every` seconds, and by close(). `saved` is False once a save failed (the log locked or the disk full)."""
+
+    def __init__(self, log: RenameLog, label: str, root: str, flush_every: float):
+        import threading
+        import uuid
+
+        self._log = log
+        self._lock = threading.Lock()
+        self._batch = RenameBatch(label=label, when=time.time(), renames=[], root=root, batch_id=uuid.uuid4().hex)
+        self._flush_every = flush_every
+        self._last_flush = 0.0
+        self._dirty = False
+        self.saved = True
+
+    def add(self, old: str, new: str, trashed: bool = False, created_dirs: list[str] | None = None) -> None:
+        if str(old) == str(new):
+            return
+        with self._lock:
+            self._batch.renames.append((str(old), str(new)))
+            if trashed:
+                self._batch.trashed.append((str(old), str(new)))
+            for folder in created_dirs or []:
+                if str(folder) not in self._batch.created_dirs:
+                    self._batch.created_dirs.append(str(folder))
+            self._dirty = True
+            if time.monotonic() - self._last_flush >= self._flush_every:
+                self._flush()
+
+    def _flush(self) -> None:
+        if not self._dirty or not self._batch.renames:
+            return
+        self._last_flush = time.monotonic()
+        self._dirty = False
+        # each save writes the whole batch, so the last save decides whether the log holds all of it
+        self.saved = self._log._save_batch(self._batch)
+        if not self.saved:
+            self._dirty = True  # try again at the next add() or at close()
+
+    def close(self) -> bool:
+        """Saves what is left and calls the log's on_move hook with every pair; returns `saved`."""
+        with self._lock:
+            self._flush()
+            pairs = list(self._batch.renames)
+        self._log._notify(pairs)
+        return self.saved
+
+    @property
+    def renames(self) -> list[tuple[str, str]]:
+        with self._lock:
+            return list(self._batch.renames)
 
 
 def _key(path: str) -> str:

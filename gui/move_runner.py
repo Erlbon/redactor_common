@@ -17,10 +17,10 @@ from typing import Any, Callable
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from redactor_common.core.error_summary import summarize_errors
-from redactor_common.core.move_plan import PlannedMove, execute_move, prune_empty_dirs
+from redactor_common.core.move_plan import MoveCancelled, PlannedMove, execute_move, prune_empty_dirs
 from redactor_common.core.rename_log import RenameLog
 from redactor_common.core.trash import move_to_trash
-from redactor_common.gui.progress import run_with_progress
+from redactor_common.gui.work_progress import WorkProgress, run_work_with_progress
 
 TITLE = "Move into Folders"
 
@@ -58,32 +58,47 @@ def run_planned_moves(
             summary.failed.append(f"{os.path.basename(move.old_path)}: {move.warning}")
     todo = [m for m in todo if not m.blocking]
     pairs: list[tuple[str, str]] = []
-    trashed: list[tuple[str, str]] = []
-
-    def step(move: PlannedMove, _index: int) -> None:
-        name = os.path.basename(move.old_path)
-        try:
-            result = execute_move(move.old_path, move.new_path, copy=copy, trash=trash)
-        except Exception as exc:  # noqa: BLE001 -- one bad file must not stop the batch
-            summary.failed.append(f"{name}: {exc}")
-            return
-        summary.created_dirs.extend(result.created_dirs)
-        summary.done.append((move.item, move.old_path, result.new_path))
-        if result.warning:
-            summary.warnings.append(f"{name}: {result.warning}")
-        if not copy and not result.original_kept:
-            pairs.append((move.old_path, result.new_path))
-            if result.original_trashed:
-                trashed.append((move.old_path, result.new_path))
-
-    finished = run_with_progress(
-        parent, todo, step, label, cancellable=True,
-        label_for=lambda m: f"{label}: {os.path.basename(m.old_path)}",
-    )
-    summary.cancelled = not finished
     root = planned[0].root if planned else ""
-    if rename_log is not None and pairs:
-        rename_log.record(label, pairs, created_dirs=summary.created_dirs, trashed=trashed, root=root)
+    # Each move is logged as it happens (2026-11-27, review card 7), so a crash mid-run still leaves an undo record.
+    recorder = rename_log.open_batch(label, root=root) if rename_log is not None and not copy else None
+
+    def work(progress: WorkProgress) -> None:
+        """Runs on a worker thread (2026-11-27, review card 4): a cross-volume move copies and compares whole files,
+        which froze the window and could not be cancelled while it ran on the GUI thread. No widgets here."""
+        for index, move in enumerate(todo):
+            if progress.should_cancel():
+                summary.cancelled = True
+                return
+            name = os.path.basename(move.old_path)
+            progress.set_label(f"{label}: {name}")
+            try:
+                result = execute_move(move.old_path, move.new_path, copy=copy, trash=trash,
+                                      should_cancel=progress.should_cancel)
+            except MoveCancelled:
+                summary.cancelled = True
+                return
+            except Exception as exc:  # noqa: BLE001 -- one bad file must not stop the batch
+                summary.failed.append(f"{name}: {exc}")
+                progress.set_value(index + 1)
+                continue
+            summary.created_dirs.extend(result.created_dirs)
+            summary.done.append((move.item, move.old_path, result.new_path))
+            if result.warning:
+                summary.warnings.append(f"{name}: {result.warning}")
+            if not copy and not result.original_kept:
+                pairs.append((move.old_path, result.new_path))
+                if recorder is not None:
+                    recorder.add(move.old_path, result.new_path, trashed=result.original_trashed,
+                                 created_dirs=result.created_dirs)
+            progress.set_value(index + 1)
+
+    try:
+        _result, cancelled = run_work_with_progress(parent, len(todo), label, work, cancellable=True, title=TITLE)
+        summary.cancelled = summary.cancelled or cancelled
+    finally:
+        if recorder is not None and not recorder.close() and recorder.renames:
+            summary.warnings.insert(0, "The undo log could not be saved, so Undo Last Rename cannot take these "
+                                       "moves back.")
 
     problems = list(summary.failed) + list(summary.warnings)
     if summary.cancelled:

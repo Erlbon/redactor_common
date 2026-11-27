@@ -36,7 +36,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
-from redactor_common.core.os_utils import replace_with_retry
+from redactor_common.core.os_utils import replace_with_retry, retry_on_lock
+
+
+def _read_text(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
 
 # --- Tiers --------------------------------------------------------------
 
@@ -189,7 +194,9 @@ class InMemoryDismissStore(DismissStore):
 class JsonDismissStore(DismissStore):
     """Dismissals kept in a small JSON file (`{"version": 1, "dismissed":
     [key, ...]}`, oldest first). The file is read lazily and tolerantly
-    (missing, unreadable or malformed -> empty, never an exception) and
+    (missing or malformed -> empty, never an exception; a malformed file is
+    set aside as "<file>.damaged"; a locked one is read again before the
+    next write, so it is never written over unread) and
     rewritten atomically (temp file in the same folder, then
     os.replace via replace_with_retry). At most `max_entries` keys are
     kept -- the oldest are dropped first -- so the file can't grow
@@ -204,21 +211,43 @@ class JsonDismissStore(DismissStore):
         self.max_entries = max(1, max_entries)
         self.last_error: Optional[str] = None
         self._keys: Optional[dict[str, None]] = None
+        self._unread = False
+
+    def _read_file(self) -> Optional[dict[str, None]]:
+        """The stored keys; {} when there is no file (or a damaged one, which is set aside as "<file>.damaged");
+        None when the file exists but cannot be read (locked even after retries)."""
+        try:
+            text = retry_on_lock(_read_text, self.path, attempts=6, delay=0.1)
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            return None
+        except ValueError:  # not UTF-8 text: damaged
+            text = ""
+        keys: dict[str, None] = {}
+        try:
+            data = json.loads(text)
+        except ValueError:
+            try:
+                os.replace(self.path, self.path + ".damaged")
+            except OSError:
+                pass
+            return keys
+        raw = data.get("dismissed", []) if isinstance(data, dict) else []
+        if isinstance(raw, list):
+            for key in raw:
+                if isinstance(key, str) and key:
+                    keys[key] = None
+        return keys
 
     def _load(self) -> dict[str, None]:
         if self._keys is None:
-            keys: dict[str, None] = {}
-            try:
-                with open(self.path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                raw = data.get("dismissed", []) if isinstance(data, dict) else []
-                if isinstance(raw, list):
-                    for key in raw:
-                        if isinstance(key, str) and key:
-                            keys[key] = None
-            except (OSError, ValueError):
-                keys = {}
-            self._keys = keys
+            keys = self._read_file()
+            # 2026-11-27 (review card 9): an unreadable file (a lock from a virus scanner or sync client) used to
+            # count as empty, and the next dismiss saved only its own key over every earlier decision. Now it is
+            # remembered as unread, and _save() reads it again and merges before writing.
+            self._unread = keys is None
+            self._keys = keys if keys is not None else {}
             self._trim()
         return self._keys
 
@@ -229,6 +258,17 @@ class JsonDismissStore(DismissStore):
 
     def _save(self) -> None:
         keys = self._load()
+        if self._unread:
+            stored = self._read_file()
+            if stored is None:
+                self.last_error = f"{self.path} could not be read, so it was not written over"
+                return
+            for key in keys:  # this session's dismissals win (newest last); undismiss in an unread state is lost
+                stored.pop(key, None)
+                stored[key] = None
+            self._keys = keys = stored
+            self._unread = False
+            self._trim()
         tmp_path = ""
         try:
             folder = os.path.dirname(os.path.abspath(self.path))

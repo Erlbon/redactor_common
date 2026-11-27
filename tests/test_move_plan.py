@@ -225,9 +225,8 @@ def test_cross_volume_verification_failure_changes_nothing(tmp_path, monkeypatch
     src.write_bytes(b"data")
     dst = tmp_path / "x" / "a.bin"
     _force_cross_volume(monkeypatch)
-    import redactor_common.core.scan_stamp as stamp
-    calls = iter(["1-aaa", "1-bbb"])
-    monkeypatch.setattr(stamp, "content_fingerprint", lambda p: next(calls))
+    import redactor_common.core.move_plan as move_plan
+    monkeypatch.setattr(move_plan, "files_identical", lambda a, b, should_cancel=None: False)
     with pytest.raises(OSError):
         execute_move(str(src), str(dst), trash=lambda p: pytest.fail("must not trash"))
     assert src.exists() and not dst.exists() and os.listdir(dst.parent) == []

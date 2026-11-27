@@ -51,7 +51,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterable, Sequence
 
-from redactor_common.core.os_utils import LOCK_HINT, is_lock_error, rename_with_retry, retry_on_lock
+from redactor_common.core.os_utils import (
+    LOCK_HINT, apply_file_attributes, file_attributes, is_lock_error, rename_with_retry, retry_on_lock,
+)
 from redactor_common.core.trash import move_to_trash
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.9
@@ -716,6 +718,11 @@ def run_recipe_on_item(
             if save_bad and entry.applied:
                 entry.not_saved += entry.applied
                 entry.applied = []
+        elif finalize is not None and (aborted or skipped) and entry.applied:
+            # 2026-11-27 (review card 39): a step skipped or a required step failed, so the save never ran; the
+            # changes earlier steps made in memory were not written and belong under NOT SAVED, not CHANGES.
+            entry.not_saved += entry.applied
+            entry.applied = []
         if after_save:
             _run_after_save(after_save, threshold, ctx, entry, run, aborted, skipped, save_bad)
     finally:
@@ -1086,8 +1093,11 @@ def commit_in_place(
     except Exception as exc:
         raise CommitError(f"couldn't verify the new file ({exc}); original left untouched", str(exc)) from exc
 
+    attributes = file_attributes(original_path)  # read-only flag, mode, creation time: put back on the new file
     if moving:
-        return _commit_to_new_path(original_path, temp, target, trash)
+        result = _commit_to_new_path(original_path, temp, target, trash)
+        apply_file_attributes(target, attributes)
+        return result
 
     backup = _backup_path(original_path)
     try:
@@ -1109,7 +1119,9 @@ def commit_in_place(
             ) from exc
         raise CommitError(f"couldn't put the new file in place ({exc}){_lock_note(exc)}; original restored") from exc
 
-    return _trash_backup(original_path, backup, trash, None)
+    result = _trash_backup(original_path, backup, trash, None)
+    apply_file_attributes(original_path, attributes)  # last: a read-only new file must not block the rollback above
+    return result
 
 
 def _trash_backup(original_path: str, backup: str, trash: Callable[[str], None], new_path: str | None) -> CommitResult:

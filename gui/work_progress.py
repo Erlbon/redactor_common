@@ -112,6 +112,7 @@ def run_work_with_progress(
     cancelling_text: str = CANCELLING_TEXT,
     dynamic_total: bool = False,
     refresh_ms: int = REFRESH_MS,
+    on_cancel: Callable[[], None] | None = None,
 ) -> tuple[T, bool]:
     """Runs `work(progress)` on a worker thread under a counted, window-modal
     progress dialog. Returns (work's result, whether Cancel was pressed). An
@@ -121,8 +122,10 @@ def run_work_with_progress(
     (parent, label, work(progress, cancel), total) -> T is a thin adapter over it). The parent's window is disabled
     for the whole call (progress._InputBlock), the dialog appears after `show_after_ms` (0: at once), Cancel keeps
     it on screen reading `cancelling_text` until the work has returned, and `dynamic_total` lets the worker move
-    the maximum through WorkProgress.report()."""
+    the maximum through WorkProgress.report(). `on_cancel` runs on the GUI thread the moment Cancel is clicked (a
+    step's long external process can hand its cancel event's `set` here, as with run_with_progress)."""
     progress = WorkProgress(total)
+    cancel_hook = on_cancel  # the inner on_cancel() below shadows the parameter's name
     with _InputBlock(parent) as block:
         dialog = QProgressDialog(label, "Cancel" if cancellable else None, 0, max(total, 0) // int_scale(total), parent)
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
@@ -145,6 +148,11 @@ def run_work_with_progress(
             if not running[0]:
                 return
             progress.cancelled.set()
+            if cancel_hook is not None:
+                try:
+                    cancel_hook()
+                except Exception:  # noqa: BLE001 - the work is still waited for; a failing hook must not hide that
+                    pass
             dialog.setLabelText(cancelling_text)
             # QProgressDialog hides itself on Cancel (its canceled signal is wired to cancel()/reset()); it stays up
             # (modal) until the work has stopped, so the window cannot be used under work that is still running.

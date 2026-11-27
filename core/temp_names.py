@@ -42,7 +42,8 @@ _FLAGS = re.IGNORECASE
 FAMILY_PATTERNS: tuple[Pattern[str], ...] = (
     re.compile(r"^.+\.redact-orig\d*\.[^.]+$", _FLAGS),
     re.compile(r"^\..+\.redact-[0-9a-f]{8}\.[^.]+$", _FLAGS),
-    re.compile(r"^\.(?:mp3|epub|video|cbz)redactor-.+$", _FLAGS),
+    # any app's prefix, and the bare ".redactor-" audio_write uses by default (2026-11-27, review card 10)
+    re.compile(r"^\.[a-z0-9]*redactor-.+$", _FLAGS),
     re.compile(r"^\.[0-9a-f]{8}\.part$", _FLAGS),
     re.compile(r"^.+\.(?:repairing|partial)\.[^.]+$", _FLAGS),
     re.compile(r"^.+\.redact-(?:part|resize)\.[^.]+$", _FLAGS),

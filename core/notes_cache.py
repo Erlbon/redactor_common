@@ -89,6 +89,18 @@ def storable(body: bytes, expect_json: bool = True) -> bool:
     return True
 
 
+_SQLITE_CORRUPT, _SQLITE_NOTADB = 11, 26
+
+
+def _is_damaged(exc: sqlite3.Error) -> bool:
+    """True when the error says the file itself is bad (not merely busy or locked by another process)."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xFF) in (_SQLITE_CORRUPT, _SQLITE_NOTADB)
+    text = str(exc).lower()
+    return any(word in text for word in ("malformed", "not a database", "file is encrypted"))
+
+
 class ResponseCache:
     """The persistent store. All methods are safe to call from several threads and never raise."""
 
@@ -126,12 +138,14 @@ class ResponseCache:
                 db.execute("SELECT COUNT(*) FROM cache").fetchone()  # a damaged file fails here
                 self._db = db
                 return db
-            except (sqlite3.Error, OSError):
+            except (sqlite3.Error, OSError) as exc:
                 if db is not None:
                     try:
                         db.close()  # an open handle would keep the damaged file from being deleted (Windows)
                     except sqlite3.Error:
                         pass
+                if isinstance(exc, sqlite3.Error) and not _is_damaged(exc):
+                    return None  # busy (another process is writing): no cache this time, the file is kept
                 self._drop_file()
         self._broken = True  # cannot even create one: run without a cache
         return None
@@ -157,8 +171,13 @@ class ResponseCache:
                 return default
             try:
                 return work(db)
-            except sqlite3.DatabaseError:
-                self._drop_file()
+            except sqlite3.OperationalError:
+                # "database is locked" / a passing I/O error: the file is busy, not damaged (2026-11-27, review
+                # card 14: this used to fall into the branch below and delete hours of throttled answers)
+                return default
+            except sqlite3.DatabaseError as exc:
+                if _is_damaged(exc):
+                    self._drop_file()
                 return default
             except sqlite3.Error:
                 return default

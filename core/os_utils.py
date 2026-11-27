@@ -10,6 +10,7 @@ modules, not gui/.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -84,6 +85,58 @@ def rename_with_retry(src: str, dst: str, **retry: Any) -> None:
     """rename_no_clobber() that rides out a transient lock: still refuses
     (FileExistsError, never retried) to overwrite an existing `dst`."""
     retry_on_lock(rename_no_clobber, src, dst, **retry)
+
+
+def file_attributes(path: str) -> "os.stat_result | None":
+    """The original's stat, taken before a save replaces it (see apply_file_attributes); None if it can't be read."""
+    try:
+        return os.stat(path)
+    except OSError:
+        return None
+
+
+def apply_file_attributes(path: str, original: "os.stat_result | None") -> None:
+    """Gives a file that replaced another the original's permission bits (on Windows: the read-only flag) and, on
+    Windows, its creation time. Best effort, never raises: the save has already happened. Called after the new file
+    is in place and the old one is gone, so a read-only result never blocks a rollback (2026-11-27, review card 12:
+    a save used to leave a read-only file writable and "created" today)."""
+    if original is None:
+        return
+    try:
+        os.chmod(path, stat.S_IMODE(original.st_mode))
+    except OSError:
+        pass
+    if sys.platform == "win32":
+        created = getattr(original, "st_birthtime", None) or original.st_ctime  # Windows' st_ctime was creation
+        _set_creation_time_windows(path, created)
+
+
+def _set_creation_time_windows(path: str, created: float) -> None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                         wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        kernel32.SetFileTime.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                         ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME))
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        FILE_WRITE_ATTRIBUTES, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS = 0x100, 3, 0x02000000
+        share = 0x1 | 0x2 | 0x4
+        handle = kernel32.CreateFileW(path, FILE_WRITE_ATTRIBUTES, share, None, OPEN_EXISTING,
+                                      FILE_FLAG_BACKUP_SEMANTICS, None)
+        if handle in (None, wintypes.HANDLE(-1).value):
+            return
+        try:
+            ticks = int(created * 10_000_000) + 116444736000000000  # 100 ns since 1601-01-01
+            stamp = wintypes.FILETIME(ticks & 0xFFFFFFFF, ticks >> 32)
+            kernel32.SetFileTime(handle, ctypes.byref(stamp), None, None)
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 -- cosmetic, never worth failing a save over
+        pass
 
 
 def open_with_default_app(path: str) -> bool:

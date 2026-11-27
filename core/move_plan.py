@@ -167,7 +167,9 @@ class PlannedMove:
 
     @property
     def is_noop(self) -> bool:
-        return _same_path(self.old_path, self.new_path)
+        """Nothing to do: the very same path. A change of capitals only ("the beatles" -> "The Beatles") is NOT a
+        no-op even where the filesystem ignores case: the preview shows it, so it must be done (2026-11-27)."""
+        return os.path.abspath(self.old_path) == os.path.abspath(self.new_path)
 
     def relative_path(self) -> str:
         """new_path relative to the root, with "/" separators."""
@@ -282,19 +284,53 @@ def _is_cross_device(exc: OSError) -> bool:
     return exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17  # ERROR_NOT_SAME_DEVICE
 
 
-def _copy_verified(old_path: str, new_path: str) -> None:
-    """Copy to a temp name beside the destination, verify size and content
-    fingerprint, then rename into place without clobbering. The temp file
-    is removed on any failure."""
-    from redactor_common.core.scan_stamp import content_fingerprint
+class MoveCancelled(Exception):
+    """Cancel was pressed while a file was being copied: the partial copy was removed, the original is untouched."""
 
+
+COPY_CHUNK = 1024 * 1024
+
+
+def _copy_chunked(src: str, dst: str, should_cancel: Callable[[], bool] | None) -> None:
+    with open(src, "rb") as reader, open(dst, "xb") as writer:
+        while True:
+            if should_cancel is not None and should_cancel():
+                raise MoveCancelled()
+            chunk = reader.read(COPY_CHUNK)
+            if not chunk:
+                break
+            writer.write(chunk)
+        writer.flush()
+        os.fsync(writer.fileno())
+    shutil.copystat(src, dst)
+
+
+def files_identical(a: str, b: str, should_cancel: Callable[[], bool] | None = None) -> bool:
+    """True when the two files hold exactly the same bytes (a full read of both, in chunks)."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as first, open(b, "rb") as second:
+        while True:
+            if should_cancel is not None and should_cancel():
+                raise MoveCancelled()
+            left = first.read(COPY_CHUNK)
+            if left != second.read(COPY_CHUNK):
+                return False
+            if not left:
+                return True
+
+
+def _copy_verified(old_path: str, new_path: str, should_cancel: Callable[[], bool] | None = None) -> None:
+    """Copy to a temp name beside the destination, compare every byte of the copy with the original, then rename
+    into place without clobbering. The temp file is removed on any failure, and on Cancel (MoveCancelled).
+
+    2026-11-27 (review card 1): this used to compare size plus content_fingerprint(), three 64 KB samples, which is
+    a change detector and not a checksum: a copy damaged anywhere else passed, and the caller then sent the
+    original to the Recycle Bin."""
     temp = os.path.join(os.path.dirname(new_path), f".{uuid.uuid4().hex[:8]}.part")
     try:
-        shutil.copy2(old_path, temp)
-        if os.path.getsize(temp) != os.path.getsize(old_path):
-            raise OSError("the copy's size doesn't match the original")
-        source_print = content_fingerprint(old_path)
-        if not source_print or source_print != content_fingerprint(temp):
+        _copy_chunked(old_path, temp, should_cancel)
+        if not files_identical(old_path, temp, should_cancel):
             raise OSError("the copy didn't verify against the original")
         rename_no_clobber(temp, new_path)
     except BaseException:
@@ -328,12 +364,27 @@ def _make_dirs(directory: str, on_created_dir: Callable[[str], None] | None) -> 
     return created
 
 
+def _case_only_rename(old_path: str, new_path: str) -> MoveResult:
+    """`new_path` is the same file as `old_path` with other capitals (a case-insensitive filesystem). The file name
+    is renamed in place; folders keep their spelling (renaming a folder would move every other file in it)."""
+    old_dir, new_dir = os.path.dirname(os.path.abspath(old_path)), os.path.dirname(os.path.abspath(new_path))
+    target = os.path.join(old_dir, os.path.basename(new_path))
+    if os.path.basename(old_path) != os.path.basename(new_path):
+        os.rename(old_path, target)  # the same file: a rename, not a collision
+    result = MoveResult(new_path=target)
+    if old_dir != new_dir:
+        result.warning = (f"the folder is still spelled {os.path.basename(old_dir)!r}, not "
+                          f"{os.path.basename(new_dir)!r}: rename the folder itself to change its capitals")
+    return result
+
+
 def execute_move(
     old_path: str,
     new_path: str,
     copy: bool = False,
     trash: Callable[[str], None] = move_to_trash,
     on_created_dir: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> MoveResult:
     """Moves (or, with `copy`, copies) one file. Raises FileNotFoundError
     if the source is gone, FileExistsError if the destination exists --
@@ -346,16 +397,22 @@ def execute_move(
     verify, rename into place, then `trash(old_path)`. If trashing fails
     the original is kept and the result says so (`original_kept`); if the
     copy fails to verify nothing is changed and OSError is raised. Copy
-    mode only ever copies (verified the same way) and leaves the original."""
+    mode only ever copies (verified the same way) and leaves the original.
+
+    A change of capitals only, on a filesystem that ignores case, renames the file in place; a folder whose
+    capitals differ keeps its old spelling and the result's `warning` says so. `should_cancel` is polled during a
+    cross-volume copy (MoveCancelled: the partial copy is removed, the original untouched)."""
     if not os.path.exists(old_path):
         raise FileNotFoundError(old_path)
+    if os.path.lexists(new_path) and _same_path(old_path, new_path) and not copy:
+        return _case_only_rename(old_path, new_path)
     if os.path.lexists(new_path):
         raise FileExistsError(new_path)
     result = MoveResult(new_path=new_path)
     result.created_dirs = _make_dirs(os.path.dirname(new_path), on_created_dir)
 
     if copy:
-        _copy_verified(old_path, new_path)
+        _copy_verified(old_path, new_path, should_cancel)
         return result
     try:
         rename_no_clobber(old_path, new_path)
@@ -366,7 +423,7 @@ def execute_move(
         if not _is_cross_device(exc):
             raise
     result.cross_volume = True
-    _copy_verified(old_path, new_path)
+    _copy_verified(old_path, new_path, should_cancel)
     try:
         trash(old_path)
         result.original_trashed = True

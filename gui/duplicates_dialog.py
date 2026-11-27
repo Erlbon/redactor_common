@@ -26,6 +26,7 @@ worker thread under a cancellable progress dialog, then open this dialog.
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any, Callable, Optional, Sequence
 
@@ -69,6 +70,16 @@ POLICY_TEXT = (
 )
 EMPTY_TEXT = "No groups of possible duplicates to review."
 _MAX_LISTED = 10   # files named in the confirm / failure messages
+
+
+def _file_key(path: Any) -> str:
+    """One key per physical file: a symlink and its target, or two spellings of one path on a filesystem that
+    ignores case, are the same file (2026-11-27, review card 6: the keep-one-per-group guard compared path strings,
+    so trashing the real file of a file+symlink group was allowed and left only a dangling link)."""
+    try:
+        return os.path.normcase(os.path.realpath(str(path)))
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.abspath(str(path)))
 
 
 def _count(n: int, noun: str) -> str:
@@ -235,8 +246,8 @@ class DuplicatesDialog(OwnedDialog):
         for item in self.tree.selectedItems():
             member = item.data(0, MEMBER_ROLE)
             # The same file can sit in two groups: act on it once.
-            if member is not None and str(member.path) not in seen:
-                seen.add(str(member.path))
+            if member is not None and _file_key(member.path) not in seen:
+                seen.add(_file_key(member.path))
                 out.append(member)
         return out
 
@@ -306,7 +317,7 @@ class DuplicatesDialog(OwnedDialog):
     def _whole_group_problem(self, doomed_paths: set[str]) -> Optional[DuplicateGroup]:
         """The first group that would be left with no member at all."""
         for group in self._groups:
-            if group.members and all(str(m.path) in doomed_paths for m in group.members):
+            if group.members and all(_file_key(m.path) in doomed_paths for m in group.members):
                 return group
         return None
 
@@ -316,7 +327,7 @@ class DuplicatesDialog(OwnedDialog):
         members = self.selected_members()
         if not members:
             return
-        doomed = {str(m.path) for m in members}
+        doomed = {_file_key(m.path) for m in members}
         stuck = self._whole_group_problem(doomed)
         if stuck is not None:
             QMessageBox.warning(
@@ -347,10 +358,10 @@ class DuplicatesDialog(OwnedDialog):
                 continue
             moved.append(member)
         if moved:
-            gone = {str(m.path) for m in moved}
+            gone = {_file_key(m.path) for m in moved}
             self.trashed.extend(m.item for m in moved)
             for group in self._groups:
-                group.members = [m for m in group.members if str(m.path) not in gone]
+                group.members = [m for m in group.members if _file_key(m.path) not in gone]
             # A lone file is no longer a duplicate candidate.
             self._groups = [g for g in self._groups if len(g.members) >= 2]
             self._rebuild()

@@ -14,10 +14,12 @@ kept") instead of an ImportError at startup.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import sys
 import time
+import uuid
 from typing import Callable
 
 
@@ -133,10 +135,51 @@ def move_to_fallback_folder(path: str, folder: str) -> str:
             n += 1
         if os.path.lexists(target):
             raise FileExistsError(target)
-        shutil.move(path, target)
+        _move_whole(path, target)
     except OSError as exc:
         raise TrashError(f"couldn't move it to the fallback folder {folder}: {exc}") from exc
     return target
+
+
+def _move_whole(path: str, target: str) -> None:
+    """Moves `path` to `target` so that a failed attempt leaves nothing behind (2026-11-27, review card 2).
+    shutil.move turned a locked file into copy + failed delete, and every retry then made one more full copy
+    ("a (2).mkv", "a (3).mkv"...). Same drive: one rename (a lock fails it cleanly, the retry tries again). Another
+    drive: copy to a hidden temp name, rename it into place, then delete the original; if that delete fails, the
+    copy is removed again and the error raised, so the retry starts from the same state."""
+    try:
+        _rename_no_clobber(path, target)
+        return
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno != errno.EXDEV and getattr(exc, "winerror", None) != 17:  # 17: ERROR_NOT_SAME_DEVICE
+            raise
+    temp = os.path.join(os.path.dirname(target), f".{uuid.uuid4().hex[:8]}.part")
+    try:
+        shutil.copy2(path, temp)
+        _rename_no_clobber(temp, target)
+    except BaseException:
+        _remove_quietly(temp)
+        raise
+    try:
+        os.unlink(path)
+    except BaseException:
+        _remove_quietly(target)
+        raise
+
+
+def _rename_no_clobber(src: str, dst: str) -> None:
+    from redactor_common.core.os_utils import rename_no_clobber
+
+    rename_no_clobber(src, dst)
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def move_to_trash(path: str, fallback_folder: str | None = None) -> None:

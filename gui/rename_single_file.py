@@ -88,6 +88,7 @@ def rename_single_file(
         return False
 
     set_path(new_path)
-    if log is not None:
-        log.record("Rename File", [(current_path, new_path)])
+    if log is not None and not log.record("Rename File", [(current_path, new_path)]):
+        QMessageBox.warning(parent, "Rename File", "The file was renamed, but the undo log could not be saved, "
+                                                   "so Undo Last Rename cannot take this one back.")
     return True
