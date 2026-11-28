@@ -56,7 +56,10 @@ shows under its own version line, via `component_versions`) and
 `pyproject.toml`'s `version` (the same date, PEP 440-formatted for pip:
 `YYYY.M.D.NN`).
 
-Currently: `2026-11-27#08` (the shared lookup dialog catches an exception from a search per row: the row shows "(error)"
+Currently: `2026-11-28#01` (videoredactor review cards 82 and 83: the Identical duplicate tier is described as
+"The contents were checked and match." and is only for a full hash or full compare, not a sampled fingerprint;
+`AsyncPreviewLoader.cancel()` says plainly that it does not stop or wait for a running load, and `shutdown()` is the
+call to make before a file operation). `2026-11-27#08` (the shared lookup dialog catches an exception from a search per row: the row shows "(error)"
 with the message and the status line counts it, instead of the exception escaping and losing every result of the batch;
 "Search This Item" is guarded the same way; cbzredactor review card 63). `2026-11-27#07` (the overwrite review reads an enum field by its value: `str()` of a text-based enum
 gives "ContentType.UNSET", so videoredactor's unset Content Type looked like a value to overwrite and every scene

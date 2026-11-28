@@ -145,17 +145,22 @@ class AsyncPreviewLoader(QObject):
         self._timer.start()
 
     def cancel(self) -> None:
-        """Drops the pending request and any load already running (its
-        result is ignored when it finishes)."""
+        """Drops the pending request and ignores the result of a load
+        already running. It does NOT stop or wait for that load: the
+        worker may still be reading the file when this returns. Before
+        saving, renaming or moving the file, call shutdown() instead."""
         self._generation += 1
         self._pending = None
         self._timer.stop()
 
     def shutdown(self, msecs: int = -1) -> bool:
         """Cancels (see cancel()), drops loads not yet started, and waits
-        for the one already running. Never needed for correctness --
-        a loader can be deleted at any time -- but lets a window or a
-        test fixture finish its background work at a known point."""
+        for the one already running. Use it before a file operation on
+        the previewed file (save, rename, move), so no worker is still
+        reading it; the loader stays usable and request() works again
+        afterwards. A loader can be deleted at any time without it; it
+        also lets a window or a test fixture finish its background work
+        at a known point."""
         self.cancel()
         self._pool.clear()
         return self._pool.waitForDone(msecs)

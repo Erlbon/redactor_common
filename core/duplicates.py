@@ -45,7 +45,8 @@ def _read_text(path: str) -> str:
 
 # --- Tiers --------------------------------------------------------------
 
-TIER_IDENTICAL = "identical"   # byte-for-byte / content-hash equal
+TIER_IDENTICAL = "identical"   # the app confirmed equal content (a full hash or a full compare);
+                               # a sampled fingerprint alone is not enough: use TIER_STRONG for that
 TIER_STRONG = "strong"         # a unique identifier or near-certain match agrees
 TIER_POSSIBLE = "possible"     # several descriptive fields agree
 TIER_WEAK = "weak"             # only something loose agrees (a similar title)
@@ -61,7 +62,7 @@ TIER_LABELS = {
 }
 
 TIER_DESCRIPTIONS = {
-    TIER_IDENTICAL: "The contents are exactly the same.",
+    TIER_IDENTICAL: "The contents were checked and match.",
     TIER_STRONG: "A unique identifier or near-certain evidence agrees.",
     TIER_POSSIBLE: "Several details agree, but they may still be different things.",
     TIER_WEAK: "Only something loose agrees; most of these will be false alarms.",

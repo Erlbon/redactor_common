@@ -226,6 +226,17 @@ def test_preview_loader_shutdown_drops_pending_and_waits_for_running():
     _pump_until(lambda: False, timeout=0.3)
     assert results == []  # and neither result is delivered
 
+
+def test_preview_loader_works_again_after_shutdown():
+    loader = AsyncPreviewLoader(debounce_ms=0)
+    results = []
+    loader.image_ready.connect(lambda token, image: results.append(token))
+    loader.shutdown()
+    loader.request("again", lambda: None)
+    loader.wait_for_done()
+    _pump_until(lambda: results, timeout=2)
+    assert results == ["again"]
+
 # -- VisibleRowsWatcher ------------------------------------------------------------------
 
 def test_visible_rows_watcher_reports_viewport_plus_buffer():
